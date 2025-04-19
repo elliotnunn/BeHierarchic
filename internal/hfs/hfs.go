@@ -117,7 +117,7 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 		switch val[0] { // so-called "thread" records ignored
 		case 1: // dir
 			parent := binary.BigEndian.Uint32(rec[2:])
-			name := strings.ReplaceAll(string(rec[7:][:rec[6]]), "/", ":")
+			name := strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":")
 			cnid := binary.BigEndian.Uint32(val[6:])
 
 			e := entry{
@@ -139,7 +139,7 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 
 		case 2: // file
 			parent := binary.BigEndian.Uint32(rec[2:])
-			name := strings.ReplaceAll(string(rec[7:][:rec[6]]), "/", ":")
+			name := strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":")
 			cnid := binary.BigEndian.Uint32(val[0x14:])
 
 			dfork := entry{
