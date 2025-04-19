@@ -203,12 +203,8 @@ type extKey struct {
 type blockExtents []uint16 // alternating (firstblock, blockcount)
 type byteExtents []int64   // alternating (firstbyte, bytecount)
 
-func (x byteExtents) makeReader(fs io.ReaderAt) io.Reader {
-	readers := make([]io.Reader, 0, len(x)/2)
-	for i := 0; i < len(x); i += 2 {
-		readers = append(readers, io.NewSectionReader(fs, x[i], x[i+1]))
-	}
-	return io.MultiReader(readers...)
+func (x byteExtents) makeReader(fs io.ReaderAt) *multiReaderAt {
+	return &multiReaderAt{backing: fs, extents: x}
 }
 
 func mustReadAll(r io.Reader) []byte {
@@ -401,9 +397,9 @@ func (f *entry) Type() fs.FileMode {
 }
 
 type openfile struct {
-	entry      *entry
-	io.Reader      // To satisfy fs.File
-	listOffset int // for listing directory
+	entry          *entry
+	*multiReaderAt     // To satisfy fs.File (and io.ReaderAt/ReadSeeker as a bonus)
+	listOffset     int // for listing directory
 }
 
 // To satisfy fs.FS
@@ -437,7 +433,7 @@ func (fsys FS) Open(name string) (fs.File, error) {
 	if e.isdir {
 		return &openfile{entry: e}, nil
 	} else {
-		return &openfile{entry: e, Reader: e.extents.makeReader(e.disk)}, nil
+		return &openfile{entry: e, multiReaderAt: e.extents.makeReader(e.disk)}, nil
 	}
 }
 
