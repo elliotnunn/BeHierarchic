@@ -23,13 +23,14 @@ func (r *multiReaderAt) ReadAt(p []byte, off int64) (int, error) {
 
 	// Skip uninvolved extents
 	for len(extents) > 0 && seek+extents[1] <= off {
-		seek += seek + extents[1]
+		seek += extents[1]
 		extents = extents[2:]
 	}
 	if len(extents) == 0 {
 		return 0, io.EOF
 	}
 
+	usedEntireExtent := false
 	for n < lenbuf && len(extents) > 0 {
 		disx, disn := extents[0], extents[1]
 		if seek < off {
@@ -38,16 +39,17 @@ func (r *multiReaderAt) ReadAt(p []byte, off int64) (int, error) {
 			seek = off
 		}
 		disn = min(disn, off+lenbuf-seek)
-		_, err := r.backing.ReadAt(p[seek-off:], disx)
-		if err != nil {
-			panic("could not read the bytes I expected!")
+		nread, err := r.backing.ReadAt(p[seek-off:][:disn], disx)
+		seek += int64(nread)
+		n += int64(nread)
+		if int64(nread) != disn { // only happens if the extents are wrong
+			return int(n), err
 		}
-		seek += disn
-		n += disn
+		usedEntireExtent = disx+disn == extents[0]+extents[1]
 		extents = extents[2:]
 	}
 
-	if n < lenbuf {
+	if n < lenbuf || (len(extents) == 0 && usedEntireExtent) {
 		return int(n), io.EOF
 	} else {
 		return int(n), nil
