@@ -5,17 +5,24 @@ import (
 )
 
 // a wrapper for *any directory at all* that makes sub-files more like sub-directories
-type fsFileThatConvertsSomeSubfilesToDirectories struct {
+type fileWithReadDirFilter struct {
 	fs.ReadDirFile
-	shouldBeADirectory func(s string) bool
+	filter func(*fs.DirEntry)
 }
 
-func (f fsFileThatConvertsSomeSubfilesToDirectories) ReadDir(n int) ([]fs.DirEntry, error) {
+func (f fileWithReadDirFilter) ReadDir(n int) ([]fs.DirEntry, error) {
 	list, err := f.ReadDirFile.ReadDir(n)
 	for i := range list {
-		if !list[i].IsDir() && f.shouldBeADirectory(list[i].Name()) {
-			list[i] = dirEntryThatLooksLikeAFolder{list[i]}
-		}
+		f.filter(&list[i])
 	}
 	return list, err
+}
+
+type fileWithFileInfoOverride struct {
+	fs.ReadDirFile
+	stat fs.FileInfo
+}
+
+func (f fileWithFileInfoOverride) Stat() (fs.FileInfo, error) {
+	return f.stat, nil
 }

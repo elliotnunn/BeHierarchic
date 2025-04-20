@@ -46,13 +46,46 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 	// We need these ReadDir calls to know when a child file is a disk image,
 	// and make it look like a directory.
 	if _, mightBeDir := o.(fs.ReadDirFile); mightBeDir {
-		o = fsFileThatConvertsSomeSubfilesToDirectories{
+		o = fileWithReadDirFilter{
 			ReadDirFile: o.(fs.ReadDirFile),
-			shouldBeADirectory: func(s string) bool {
-				s = path.Join(name, s)
-				pathlen := plen(s)
-				pathcut, _ := w.resolve(s)
-				return pathcut == pathlen
+			filter: func(e *fs.DirEntry) {
+				if (*e).IsDir() {
+					return
+				}
+				path := path.Join(name, (*e).Name())
+				pathlen := plen(path)
+				pathcut, _ := w.resolve(path)
+				if pathcut < pathlen {
+					return
+				}
+				stat, err := fs.Stat(w, path)
+				if err != nil {
+					return
+				}
+				*e = mountPointEntry{
+					diskImageStat: stat,
+				}
+			},
+		}
+	}
+
+	// If the returned File object is the root of a disk image,
+	// then its Stat should return info about the file EXCEPT pretend to be a directory
+	if pathcut > 0 && pathcut == plen(name) {
+		parentcut, err := w.resolve(pleft(name, pathcut-1))
+		if err != nil {
+			panic("inconsistency in the burrow list")
+		}
+		left, right := pcut(name, parentcut)
+		stat, err := fs.Stat(w.burrows[left], right)
+		if err != nil {
+			panic("unable to stat a file that certainly exists")
+		}
+
+		o = fileWithFileInfoOverride{
+			ReadDirFile: o.(fs.ReadDirFile),
+			stat: mountPointEntry{
+				diskImageStat: stat,
 			},
 		}
 	}

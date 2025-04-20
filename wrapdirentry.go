@@ -1,19 +1,47 @@
 package main
 
-import "io/fs"
+import (
+	"io/fs"
+	"time"
+)
 
-// In the world of the io/fs package, when listing a directory with ReadDir,
-// you get a slice of DirEntry.
-// This wrapper struct is our way of making these look like directories rather than files.
-
-type dirEntryThatLooksLikeAFolder struct {
-	fs.DirEntry
+type mountPointEntry struct {
+	diskImageStat fs.FileInfo
 }
 
-func (e dirEntryThatLooksLikeAFolder) IsDir() bool {
+func (mp mountPointEntry) Name() string { // FileInfo + DirEntry
+	return mp.diskImageStat.Name()
+}
+
+func (mp mountPointEntry) IsDir() bool { // FileInfo + DirEntry
 	return true
 }
 
-func (e dirEntryThatLooksLikeAFolder) Type() fs.FileMode {
+func (mp mountPointEntry) Type() fs.FileMode { // DirEntry
 	return fs.ModeDir
+}
+
+func (mp mountPointEntry) Info() (fs.FileInfo, error) { // DirEntry
+	return mp, nil
+}
+
+func (mp mountPointEntry) Size() int64 { // FileInfo
+	return 0 // meaningless for a directory
+}
+
+func (mp mountPointEntry) Mode() fs.FileMode { // FileInfo
+	m := mp.diskImageStat.Mode()
+	m = (m &^ fs.ModeType) | fs.ModeDir
+	readbits := m & 0o444
+	execbits := readbits >> 2
+	m |= execbits
+	return m
+}
+
+func (mp mountPointEntry) ModTime() time.Time { // FileInfo
+	return mp.diskImageStat.ModTime()
+}
+
+func (mp mountPointEntry) Sys() any { // FileInfo
+	return mp.diskImageStat.Sys()
 }
