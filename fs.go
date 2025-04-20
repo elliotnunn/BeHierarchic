@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"path"
 
+	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
 )
 
@@ -163,7 +164,17 @@ func try1(fsys fs.FS, name string) (fs.FS, error) {
 
 func couldItBe(file io.ReaderAt) (fs.FS, string) {
 	var magic [2]byte
-	if _, err := file.ReadAt(magic[:], 1024); err == nil && string(magic[:]) == "BD" {
+	if n, _ := file.ReadAt(magic[:], 0); n == 2 {
+		switch {
+		case string(magic[:]) == "ER": // Apple Partition Map
+			fsys, err := apm.New(file)
+			if err == nil {
+				return fsys, "Apple Partition Map"
+			}
+		}
+	}
+
+	if n, _ := file.ReadAt(magic[:], 1024); n == 2 && string(magic[:]) == "BD" {
 		view, err := hfs.New(file)
 		if err == nil {
 			return view, "HFS"
