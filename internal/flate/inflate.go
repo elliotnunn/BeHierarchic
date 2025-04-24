@@ -59,6 +59,38 @@ const (
 	huffmanValueShift = 4
 )
 
+func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (resumePoint, error) {
+	fixedHuffmanDecoderInit()
+
+	if len(rp.big) != 0 && len(rp.big) != maxMatchOffset {
+		panic("this resumepoint is populated, why not just use it?")
+	}
+
+	if (len(rp.big) == 0) != (rp.woffset == 0) || (len(rp.big) == 0) != (rp.roffset == 0 && rp.nb == 0) {
+		panic("discrepancy about whether this is the first block or not")
+	}
+
+	f := decompressor{
+		r:  bufio.NewReader(io.NewSectionReader(zip, rp.roffset, zipsize-rp.roffset)),
+		rp: *rp,
+	}
+	if len(f.rp.big) == 0 {
+		f.rp.big = make([]byte, maxMatchOffset) // zero out the dictionary
+	}
+
+	var err error
+	for err == nil && len(f.rp.big) < maxMatchOffset+minsize {
+		err = f.nextBlock()
+	}
+
+	rp.big = f.rp.big // copy this slice back where it came from
+	nrp := f.rp
+	nrp.big = make([]byte, maxMatchOffset)
+	nrp.woffset += int64(len(f.rp.big) - maxMatchOffset)
+	copy(nrp.big, f.rp.big[len(f.rp.big)-maxMatchOffset:])
+	return nrp, err // which might be quite a serious error
+}
+
 type huffmanDecoder struct {
 	min      int                      // the minimum code length
 	chunks   [huffmanNumChunks]uint32 // chunks as described above
@@ -278,38 +310,6 @@ func (f *decompressor) nextBlock() (ret error) {
 		return io.EOF
 	}
 	return nil
-}
-
-func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (resumePoint, error) {
-	fixedHuffmanDecoderInit()
-
-	if len(rp.big) != 0 && len(rp.big) != maxMatchOffset {
-		panic("this resumepoint is populated, why not just use it?")
-	}
-
-	if (len(rp.big) == 0) != (rp.woffset == 0) || (len(rp.big) == 0) != (rp.roffset == 0 && rp.nb == 0) {
-		panic("discrepancy about whether this is the first block or not")
-	}
-
-	f := decompressor{
-		r:  bufio.NewReader(io.NewSectionReader(zip, rp.roffset, zipsize-rp.roffset)),
-		rp: *rp,
-	}
-	if len(f.rp.big) == 0 {
-		f.rp.big = make([]byte, maxMatchOffset) // zero out the dictionary
-	}
-
-	var err error
-	for err == nil && len(f.rp.big) < maxMatchOffset+minsize {
-		err = f.nextBlock()
-	}
-
-	rp.big = f.rp.big // copy this slice back where it came from
-	nrp := f.rp
-	nrp.big = make([]byte, maxMatchOffset)
-	nrp.woffset += int64(len(f.rp.big) - maxMatchOffset)
-	copy(nrp.big, f.rp.big[len(f.rp.big)-maxMatchOffset:])
-	return nrp, err // which might be quite a serious error
 }
 
 // RFC 1951 section 3.2.7.
