@@ -265,7 +265,7 @@ func (f *decompressor) nextBlock() error {
 		f.huffmanBlock(&h1, &h2)
 	default:
 		// 3 is reserved.
-		panic("bad block code")
+		panic("corrupt DEFLATE")
 	}
 
 	if final {
