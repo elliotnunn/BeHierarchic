@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
-	"strconv"
 	"sync"
 )
 
@@ -31,51 +30,6 @@ const (
 // Initialize the fixedHuffmanDecoder only once upon first use.
 var fixedOnce sync.Once
 var fixedHuffmanDecoder huffmanDecoder
-
-// A CorruptInputError reports the presence of corrupt input at a given offset.
-type CorruptInputError int64
-
-func (e CorruptInputError) Error() string {
-	return "flate: corrupt input before offset " + strconv.FormatInt(int64(e), 10)
-}
-
-// An InternalError reports an error in the flate code itself.
-type InternalError string
-
-func (e InternalError) Error() string { return "flate: internal error: " + string(e) }
-
-// A ReadError reports an error encountered while reading input.
-//
-// Deprecated: No longer returned.
-type ReadError struct {
-	Offset int64 // byte offset where error occurred
-	Err    error // error returned by underlying Read
-}
-
-func (e *ReadError) Error() string {
-	return "flate: read error at offset " + strconv.FormatInt(e.Offset, 10) + ": " + e.Err.Error()
-}
-
-// A WriteError reports an error encountered while writing output.
-//
-// Deprecated: No longer returned.
-type WriteError struct {
-	Offset int64 // byte offset where error occurred
-	Err    error // error returned by underlying Write
-}
-
-func (e *WriteError) Error() string {
-	return "flate: write error at offset " + strconv.FormatInt(e.Offset, 10) + ": " + e.Err.Error()
-}
-
-// Resetter resets a ReadCloser returned by [NewReader] or [NewReaderDict]
-// to switch to a new underlying [Reader]. This permits reusing a ReadCloser
-// instead of allocating a new one.
-type Resetter interface {
-	// Reset discards any buffered data and resets the Resetter as if it was
-	// newly initialized with the given reader.
-	Reset(r io.Reader, dict []byte) error
-}
 
 // The data structure for decoding Huffman tables is based on that of
 // zlib. There is a lookup table of a fixed bit width (huffmanChunkBits),
@@ -315,7 +269,7 @@ func (f *decompressor) nextBlock() error {
 		err = f.huffmanBlock(&h1, &h2)
 	default:
 		// 3 is reserved.
-		err = CorruptInputError(f.rp.roffset)
+		panic("bad block code")
 	}
 
 	if err == nil && final {
@@ -373,12 +327,12 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	}
 	nlit := int(f.rp.b&0x1F) + 257
 	if nlit > maxNumLit {
-		return CorruptInputError(f.rp.roffset)
+		panic("corrupt DEFLATE")
 	}
 	f.rp.b >>= 5
 	ndist := int(f.rp.b&0x1F) + 1
 	if ndist > maxNumDist {
-		return CorruptInputError(f.rp.roffset)
+		panic("corrupt DEFLATE")
 	}
 	f.rp.b >>= 5
 	nclen := int(f.rp.b&0xF) + 4
@@ -401,7 +355,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 		codebits[codeOrder[i]] = 0
 	}
 	if !h1.init(codebits[0:]) {
-		return CorruptInputError(f.rp.roffset)
+		panic("corrupt DEFLATE")
 	}
 
 	// HLIT + 257 code lengths, HDIST + 1 code lengths,
@@ -423,12 +377,12 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 		var b int
 		switch x {
 		default:
-			return InternalError("unexpected length code")
+			panic("unexpected length code")
 		case 16:
 			rep = 3
 			nb = 2
 			if i == 0 {
-				return CorruptInputError(f.rp.roffset)
+				panic("corrupt DEFLATE")
 			}
 			b = bits[i-1]
 		case 17:
@@ -449,7 +403,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 		f.rp.b >>= nb
 		f.rp.nb -= nb
 		if i+rep > n {
-			return CorruptInputError(f.rp.roffset)
+			panic("corrupt DEFLATE")
 		}
 		for j := 0; j < rep; j++ {
 			bits[i] = b
@@ -458,7 +412,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	}
 
 	if !h1.init(bits[0:nlit]) || !h2.init(bits[nlit:nlit+ndist]) {
-		return CorruptInputError(f.rp.roffset)
+		panic("corrupt DEFLATE")
 	}
 
 	// As an optimization, we can initialize the min bits to read at a time
@@ -515,7 +469,7 @@ readLiteral:
 			length = 258
 			n = 0
 		default:
-			return CorruptInputError(f.rp.roffset)
+			panic("corrupt DEFLATE")
 		}
 		if n > 0 {
 			for f.rp.nb < n {
@@ -561,12 +515,12 @@ readLiteral:
 			f.rp.nb -= nb
 			dist = 1<<(nb+1) + 1 + extra
 		default:
-			return CorruptInputError(f.rp.roffset)
+			panic("corrupt DEFLATE")
 		}
 
 		// No check on length; encoding can be prescient.
 		if dist > maxMatchOffset {
-			return CorruptInputError(f.rp.roffset)
+			panic("corrupt DEFLATE")
 		}
 
 		for range length {
@@ -593,7 +547,7 @@ func (f *decompressor) dataBlock() error {
 	n := int(buf[0]) | int(buf[1])<<8
 	nn := int(buf[2]) | int(buf[3])<<8
 	if uint16(nn) != uint16(^n) {
-		return CorruptInputError(f.rp.roffset)
+		panic("corrupt DEFLATE")
 	}
 
 	for range n {
@@ -660,7 +614,7 @@ func (f *decompressor) huffSym(h *huffmanDecoder) (int, error) {
 			if n == 0 {
 				f.rp.b = b
 				f.rp.nb = nb
-				return 0, CorruptInputError(f.rp.roffset)
+				panic("corrupt DEFLATE")
 			}
 			f.rp.b = b >> (n & 31)
 			f.rp.nb = nb - n
