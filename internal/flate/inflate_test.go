@@ -19,6 +19,7 @@ of the desired size plus a bit extra, and extracting that.
 
 type resumePoint struct {
 	data []byte // 32kb of dict +/- a healthy amount of data after that point
+	outputOffset int64
 	blockByte int64
 	blockBit uint8
 }
@@ -49,7 +50,24 @@ func TestFlate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got := NewReader(bytes.NewReader(z)).ReadAll()
+	// got := NewReader(bytes.NewReader(z)).ReadAll()
+
+	var rat io.ReaderAt = bytes.NewReader(z)
+	size := int64(len(z))
+
+	var got []byte
+	rp := resumePoint{}
+	for len(got) < len(expect) {
+		fmt.Println(">>>", rp.String())
+		nrp, err := readAtLeast(rat, size, &rp, 10)
+		fmt.Println("<<<", rp.String())
+		if err != nil {
+			panic(err)
+		}
+		got = append(got, rp.big[maxMatchOffset:]...)
+		rp = nrp
+		fmt.Println("")
+	}
 
 	os.WriteFile("/Users/elliotnunn/Documents/mac/primary/macworks sources.txt.got", got, 0o644)
 
