@@ -82,29 +82,3 @@ func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
 	}
 	return int(cursor - off), nil
 }
-
-func (r *Reader) Read(p []byte) (int, error) {
-	n, err := r.ReadAt(p, r.seek)
-	r.seek += int64(n)
-	return n, err
-}
-
-func (r *Reader) Seek(offset int64, whence int) (int64, error) {
-	switch whence {
-	case io.SeekStart:
-	case io.SeekCurrent:
-		offset += r.seek
-	case io.SeekEnd:
-		offset += r.lg
-	default:
-		return 0, errWhence
-	}
-	if offset < 0 {
-		return 0, errOffset
-	}
-	r.seek = offset
-	return offset, nil
-}
-
-var errWhence = errors.New("Seek: invalid whence")
-var errOffset = errors.New("Seek: invalid offset")

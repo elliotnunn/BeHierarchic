@@ -7,6 +7,7 @@ import (
 
 	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
+	"github.com/elliotnunn/resourceform/internal/zipreaderat"
 )
 
 type w struct {
@@ -171,6 +172,11 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 			if err == nil {
 				return fsys, "Apple Partition Map"
 			}
+		case string(magic[:]) == "PK": // Zip file (kinda, it's complicated)
+			fsys, err := zipreaderat.New(file, size(file))
+			if err == nil {
+				return fsys, "ZIP archive"
+			}
 		}
 	}
 
@@ -181,4 +187,56 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 		}
 	}
 	return nil, ""
+}
+
+func size(f io.ReaderAt) int64 {
+	type sizer interface {
+		Size() int64
+	}
+	switch as := f.(type) {
+	case sizer:
+		return as.Size()
+	case fs.File:
+		stat, err := as.Stat()
+		if err != nil {
+			panic("failed to stat an open file")
+		}
+		return stat.Size()
+	case io.Seeker:
+		prev, err := as.Seek(0, io.SeekCurrent)
+		if err != nil {
+			panic("failed to seek to current seek location")
+		}
+		size, err := as.Seek(0, io.SeekEnd)
+		if err != nil {
+			panic("failed to seek to end")
+		}
+		_, err = as.Seek(prev, io.SeekStart)
+		if err != nil {
+			panic("failed to undo our seeking")
+		}
+		return size
+	default: // binary-search for the size
+		var lbound, ubound int64
+		var buf [1]byte
+		for i := int64(0); ; i = max(i, 1) * 2 {
+			n, _ := f.ReadAt(buf[:], i)
+			if n == 1 {
+				lbound = i + 1
+			} else {
+				ubound = i
+				break
+			}
+		}
+		for lbound != ubound {
+			mid := lbound + (ubound-lbound)/2
+			n, _ := f.ReadAt(buf[:], mid)
+			if n == 1 {
+				lbound = mid + 1
+			} else {
+				ubound = mid
+			}
+		}
+		return lbound
+	}
 }
