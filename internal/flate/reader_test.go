@@ -55,14 +55,12 @@ func mkTestBin() []byte {
 			r = append(r, r[len(r)-rng.IntN(19000)-1000:][:rng.IntN(1000)]...)
 		}
 	}
-	fmt.Println(len(r), "is the size")
 	return r
 }
 
 func stdLibCompress(b []byte) []byte {
 	dest := bytes.NewBuffer(nil)
 	cpr, _ := goflate.NewWriter(dest, 6)
-	fmt.Println("compressing")
 	_, err := cpr.Write(b)
 	if err != nil {
 		panic("could not compress data for tests")
