@@ -322,17 +322,13 @@ func (f *decompressor) nextBlock() {
 		f.dataBlock()
 	case 1:
 		// compressed, fixed Huffman tables
-		f.hl = &fixedHuffmanDecoder
-		f.hd = nil
-		f.huffmanBlock()
+		f.huffmanBlock(&fixedHuffmanDecoder, nil)
 	case 2:
 		// compressed, dynamic Huffman tables
 		if f.err = f.readHuffman(); f.err != nil {
 			break
 		}
-		f.hl = &f.h1
-		f.hd = &f.h2
-		f.huffmanBlock()
+		f.huffmanBlock(&f.h1, &f.h2)
 	default:
 		// 3 is reserved.
 		f.err = CorruptInputError(f.roffset)
@@ -481,11 +477,11 @@ func (f *decompressor) readHuffman() error {
 // hl and hd are the Huffman states for the lit/length values
 // and the distance values, respectively. If hd == nil, using the
 // fixed distance encoding associated with fixed Huffman blocks.
-func (f *decompressor) huffmanBlock() {
+func (f *decompressor) huffmanBlock(hl, hd *huffmanDecoder) {
 readLiteral:
 	// Read literal and/or (length, distance) according to RFC section 3.2.3.
 	{
-		v, err := f.huffSym(f.hl)
+		v, err := f.huffSym(hl)
 		if err != nil {
 			f.err = err
 			return
@@ -543,7 +539,7 @@ readLiteral:
 		}
 
 		var dist int
-		if f.hd == nil {
+		if hd == nil {
 			for f.nb < 5 {
 				if err = f.moreBits(); err != nil {
 					f.err = err
@@ -554,7 +550,7 @@ readLiteral:
 			f.b >>= 5
 			f.nb -= 5
 		} else {
-			if dist, err = f.huffSym(f.hd); err != nil {
+			if dist, err = f.huffSym(hd); err != nil {
 				f.err = err
 				return
 			}
