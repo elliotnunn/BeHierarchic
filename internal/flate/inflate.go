@@ -274,18 +274,19 @@ type resumePoint struct {
 	woffset int64
 }
 
-func (rp *resumePoint) String() string {
-	return fmt.Sprintf("big=%#x bytes, roffset=%#x, b=%#x, nb=%d, woffset=%#x",
-		len(rp.big), rp.roffset, rp.b, rp.nb, rp.woffset)
-}
-
 // Decompress state.
 type decompressor struct {
-	// Input source.
-	r  Reader
+	// Input source (must be seek-ed to "DEFLATE base"+rp.roffset)
+	r Reader
+	// State required for mid-DEFLATE resumption
 	rp resumePoint
 	// Temporary buffer (avoids repeated allocation).
 	buf [4]byte
+}
+
+func (rp *resumePoint) String() string {
+	return fmt.Sprintf("big=%#x bytes, roffset=%#x, b=%#x, nb=%d, woffset=%#x",
+		len(rp.big), rp.roffset, rp.b, rp.nb, rp.woffset)
 }
 
 func (f *decompressor) nextBlock() error {
@@ -326,6 +327,8 @@ func (f *decompressor) nextBlock() error {
 }
 
 func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (resumePoint, error) {
+	fixedHuffmanDecoderInit()
+
 	if len(rp.big) != 0 && len(rp.big) != maxMatchOffset {
 		panic("this resumepoint is populated, why not just use it?")
 	}
