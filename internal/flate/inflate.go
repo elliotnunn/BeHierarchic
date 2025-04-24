@@ -482,20 +482,6 @@ func (f *decompressor) readHuffman() error {
 // and the distance values, respectively. If hd == nil, using the
 // fixed distance encoding associated with fixed Huffman blocks.
 func (f *decompressor) huffmanBlock() {
-repeatHB:
-	fmt.Println("huffmanBlock")
-	const (
-		stateInit = iota // Zero value must be stateInit
-		stateDict
-	)
-
-	switch f.stepState {
-	case stateInit:
-		goto readLiteral
-	case stateDict:
-		goto copyHistory
-	}
-
 readLiteral:
 	// Read literal and/or (length, distance) according to RFC section 3.2.3.
 	{
@@ -512,10 +498,7 @@ readLiteral:
 			if f.dict.availWrite() == 0 {
 				fmt.Println("circling back to stateInit")
 				f.toRead = append(f.toRead, f.dict.readFlush()...)
-				// f.step = (*decompressor).huffmanBlock
-				f.stepState = stateInit
-				goto repeatHB
-				return
+				goto readLiteral
 			}
 			goto readLiteral
 		case v == 256:
@@ -621,10 +604,7 @@ copyHistory:
 		if f.dict.availWrite() == 0 || f.copyLen > 0 {
 			fmt.Println("circling back to stateDict")
 			f.toRead = append(f.toRead, f.dict.readFlush()...)
-			// f.step = (*decompressor).huffmanBlock // We need to continue this work
-			f.stepState = stateDict
-			goto repeatHB
-			return
+			goto copyHistory
 		}
 		goto readLiteral
 	}
