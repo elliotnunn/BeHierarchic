@@ -280,8 +280,6 @@ type decompressor struct {
 	r Reader
 	// State required for mid-DEFLATE resumption
 	rp resumePoint
-	// Temporary buffer (avoids repeated allocation).
-	buf [4]byte
 }
 
 func (rp *resumePoint) String() string {
@@ -586,13 +584,14 @@ func (f *decompressor) dataBlock() error {
 	f.rp.b = 0
 
 	// Length then ones-complement of length.
-	nr, err := io.ReadFull(f.r, f.buf[0:4])
+	var buf [4]byte
+	nr, err := io.ReadFull(f.r, buf[0:4])
 	f.rp.roffset += int64(nr)
 	if err != nil {
 		return noEOF(err)
 	}
-	n := int(f.buf[0]) | int(f.buf[1])<<8
-	nn := int(f.buf[2]) | int(f.buf[3])<<8
+	n := int(buf[0]) | int(buf[1])<<8
+	nn := int(buf[2]) | int(buf[3])<<8
 	if uint16(nn) != uint16(^n) {
 		return CorruptInputError(f.rp.roffset)
 	}
