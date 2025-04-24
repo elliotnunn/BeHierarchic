@@ -277,12 +277,6 @@ type decompressor struct {
 	b  uint32
 	nb uint
 
-	// elliot's concerns
-	inseek int64
-
-	// Huffman decoders for literal/length, distance.
-	h1, h2 huffmanDecoder
-
 	// Length arrays used to define Huffman codes.
 	bits     *[maxNumLit + maxNumDist]int
 	codebits *[numCodes]int
@@ -325,10 +319,11 @@ func (f *decompressor) nextBlock() {
 		f.huffmanBlock(&fixedHuffmanDecoder, nil)
 	case 2:
 		// compressed, dynamic Huffman tables
-		if f.err = f.readHuffman(); f.err != nil {
+		var h1, h2 huffmanDecoder
+		if f.err = f.readHuffman(&h1, &h2); f.err != nil {
 			break
 		}
-		f.huffmanBlock(&f.h1, &f.h2)
+		f.huffmanBlock(&h1, &h2)
 	default:
 		// 3 is reserved.
 		f.err = CorruptInputError(f.roffset)
@@ -365,7 +360,7 @@ func (f *decompressor) Close() error {
 
 var codeOrder = [...]int{16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15}
 
-func (f *decompressor) readHuffman() error {
+func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	// HLIT[5], HDIST[5], HCLEN[4].
 	for f.nb < 5+5+4 {
 		if err := f.moreBits(); err != nil {
@@ -401,14 +396,14 @@ func (f *decompressor) readHuffman() error {
 	for i := nclen; i < len(codeOrder); i++ {
 		f.codebits[codeOrder[i]] = 0
 	}
-	if !f.h1.init(f.codebits[0:]) {
+	if !h1.init(f.codebits[0:]) {
 		return CorruptInputError(f.roffset)
 	}
 
 	// HLIT + 257 code lengths, HDIST + 1 code lengths,
 	// using the code length Huffman code.
 	for i, n := 0, nlit+ndist; i < n; {
-		x, err := f.huffSym(&f.h1)
+		x, err := f.huffSym(h1)
 		if err != nil {
 			return err
 		}
@@ -458,7 +453,7 @@ func (f *decompressor) readHuffman() error {
 		}
 	}
 
-	if !f.h1.init(f.bits[0:nlit]) || !f.h2.init(f.bits[nlit:nlit+ndist]) {
+	if !h1.init(f.bits[0:nlit]) || !h2.init(f.bits[nlit:nlit+ndist]) {
 		return CorruptInputError(f.roffset)
 	}
 
@@ -466,8 +461,8 @@ func (f *decompressor) readHuffman() error {
 	// for the HLIT tree to the length of the EOB marker since we know that
 	// every block must terminate with one. This preserves the property that
 	// we never read any extra bytes after the end of the DEFLATE stream.
-	if f.h1.min < f.bits[endBlockMarker] {
-		f.h1.min = f.bits[endBlockMarker]
+	if h1.min < f.bits[endBlockMarker] {
+		h1.min = f.bits[endBlockMarker]
 	}
 
 	return nil
