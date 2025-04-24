@@ -9,6 +9,7 @@ package flate
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"math/bits"
@@ -241,7 +242,13 @@ func (rp *resumePoint) String() string {
 		len(rp.big), rp.roffset, rp.b, rp.nb, rp.woffset)
 }
 
-func (f *decompressor) nextBlock() error {
+func (f *decompressor) nextBlock() (ret error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ret = errors.New("corrupt DEFLATE")
+		}
+	}()
+
 	for f.rp.nb < 1+2 {
 		f.moreBits()
 	}
@@ -250,7 +257,6 @@ func (f *decompressor) nextBlock() error {
 	typ := f.rp.b & 3
 	f.rp.b >>= 2
 	f.rp.nb -= 1 + 2
-	fmt.Println("   type", typ)
 
 	switch typ {
 	case 0:
@@ -303,7 +309,7 @@ func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (
 	nrp.big = make([]byte, maxMatchOffset)
 	nrp.woffset += int64(len(f.rp.big) - maxMatchOffset)
 	copy(nrp.big, f.rp.big[len(f.rp.big)-maxMatchOffset:])
-	return nrp, nil
+	return nrp, err // which might be quite a serious error
 }
 
 // RFC 1951 section 3.2.7.

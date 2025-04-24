@@ -3,6 +3,7 @@ package flate
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,7 +62,7 @@ func TestFlate(t *testing.T) {
 		fmt.Println(">>>", rp.String())
 		nrp, err := readAtLeast(rat, size, &rp, 10)
 		fmt.Println("<<<", rp.String())
-		if err != nil {
+		if err != nil && !errors.Is(err, io.EOF) {
 			panic(err)
 		}
 		got = append(got, rp.big[maxMatchOffset:]...)
