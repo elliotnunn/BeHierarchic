@@ -283,7 +283,6 @@ type decompressor struct {
 	// Next step in the decompression,
 	// and decompression state.
 	final    bool
-	err      error
 	copyLen  int
 	copyDist int
 
@@ -292,7 +291,7 @@ type decompressor struct {
 
 func (f *decompressor) nextBlock() error {
 	for f.nb < 1+2 {
-		if f.err = f.moreBits(); f.err != nil {
+		if err := f.moreBits(); err != nil {
 			return io.ErrUnexpectedEOF
 		}
 	}
@@ -302,28 +301,29 @@ func (f *decompressor) nextBlock() error {
 	f.b >>= 2
 	f.nb -= 1 + 2
 	fmt.Println("   type", typ)
+	var err error
 	switch typ {
 	case 0:
-		f.dataBlock()
+		err = f.dataBlock()
 	case 1:
 		// compressed, fixed Huffman tables
-		f.huffmanBlock(&fixedHuffmanDecoder, nil)
+		err = f.huffmanBlock(&fixedHuffmanDecoder, nil)
 	case 2:
 		// compressed, dynamic Huffman tables
 		var h1, h2 huffmanDecoder
-		if f.err = f.readHuffman(&h1, &h2); f.err != nil {
+		if err = f.readHuffman(&h1, &h2); err != nil {
 			break
 		}
-		f.huffmanBlock(&h1, &h2)
+		err = f.huffmanBlock(&h1, &h2)
 	default:
 		// 3 is reserved.
-		f.err = CorruptInputError(f.roffset)
+		err = CorruptInputError(f.roffset)
 	}
 
-	if f.err == nil && final {
+	if err == nil && final {
 		return io.EOF
 	}
-	return f.err
+	return err
 }
 
 func (f *decompressor) ReadAll() []byte {
@@ -338,13 +338,6 @@ func (f *decompressor) ReadAll() []byte {
 			panic("unexpected EOF")
 		}
 	}
-}
-
-func (f *decompressor) Close() error {
-	if f.err == io.EOF {
-		return nil
-	}
-	return f.err
 }
 
 // RFC 1951 section 3.2.7.
@@ -467,14 +460,13 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 // hl and hd are the Huffman states for the lit/length values
 // and the distance values, respectively. If hd == nil, using the
 // fixed distance encoding associated with fixed Huffman blocks.
-func (f *decompressor) huffmanBlock(hl, hd *huffmanDecoder) {
+func (f *decompressor) huffmanBlock(hl, hd *huffmanDecoder) error {
 readLiteral:
 	// Read literal and/or (length, distance) according to RFC section 3.2.3.
 	{
 		v, err := f.huffSym(hl)
 		if err != nil {
-			f.err = err
-			return
+			return err
 		}
 		var n uint // number of bits extra
 		var length int
@@ -484,7 +476,7 @@ readLiteral:
 			goto readLiteral
 		case v == 256:
 			f.finishBlock()
-			return
+			return nil
 		// otherwise, reference to older data
 		case v < 265:
 			length = v - (257 - 3)
@@ -508,14 +500,12 @@ readLiteral:
 			length = 258
 			n = 0
 		default:
-			f.err = CorruptInputError(f.roffset)
-			return
+			return CorruptInputError(f.roffset)
 		}
 		if n > 0 {
 			for f.nb < n {
 				if err = f.moreBits(); err != nil {
-					f.err = err
-					return
+					return err
 				}
 			}
 			length += int(f.b & uint32(1<<n-1))
@@ -527,8 +517,7 @@ readLiteral:
 		if hd == nil {
 			for f.nb < 5 {
 				if err = f.moreBits(); err != nil {
-					f.err = err
-					return
+					return err
 				}
 			}
 			dist = int(bits.Reverse8(uint8(f.b & 0x1F << 3)))
@@ -536,8 +525,7 @@ readLiteral:
 			f.nb -= 5
 		} else {
 			if dist, err = f.huffSym(hd); err != nil {
-				f.err = err
-				return
+				return err
 			}
 		}
 
@@ -550,8 +538,7 @@ readLiteral:
 			extra := (dist & 1) << nb
 			for f.nb < nb {
 				if err = f.moreBits(); err != nil {
-					f.err = err
-					return
+					return err
 				}
 			}
 			extra |= int(f.b & uint32(1<<nb-1))
@@ -559,14 +546,12 @@ readLiteral:
 			f.nb -= nb
 			dist = 1<<(nb+1) + 1 + extra
 		default:
-			f.err = CorruptInputError(f.roffset)
-			return
+			return CorruptInputError(f.roffset)
 		}
 
 		// No check on length; encoding can be prescient.
 		if dist > maxMatchOffset {
-			f.err = CorruptInputError(f.roffset)
-			return
+			return CorruptInputError(f.roffset)
 		}
 
 		f.copyLen, f.copyDist = length, dist
@@ -584,7 +569,7 @@ copyHistory:
 }
 
 // Copy a single uncompressed data block from input to output.
-func (f *decompressor) dataBlock() {
+func (f *decompressor) dataBlock() error {
 	// Uncompressed.
 	// Discard current half-byte.
 	f.nb = 0
@@ -594,14 +579,12 @@ func (f *decompressor) dataBlock() {
 	nr, err := io.ReadFull(f.r, f.buf[0:4])
 	f.roffset += int64(nr)
 	if err != nil {
-		f.err = noEOF(err)
-		return
+		return noEOF(err)
 	}
 	n := int(f.buf[0]) | int(f.buf[1])<<8
 	nn := int(f.buf[2]) | int(f.buf[3])<<8
 	if uint16(nn) != uint16(^n) {
-		f.err = CorruptInputError(f.roffset)
-		return
+		return CorruptInputError(f.roffset)
 	}
 
 	for range n {
@@ -614,12 +597,10 @@ func (f *decompressor) dataBlock() {
 	}
 
 	f.finishBlock()
+	return nil
 }
 
 func (f *decompressor) finishBlock() {
-	if f.final {
-		f.err = io.EOF
-	}
 }
 
 // noEOF returns err, unless err == io.EOF, in which case it returns io.ErrUnexpectedEOF.
@@ -674,8 +655,7 @@ func (f *decompressor) huffSym(h *huffmanDecoder) (int, error) {
 			if n == 0 {
 				f.b = b
 				f.nb = nb
-				f.err = CorruptInputError(f.roffset)
-				return 0, f.err
+				return 0, CorruptInputError(f.roffset)
 			}
 			f.b = b >> (n & 31)
 			f.nb = nb - n
