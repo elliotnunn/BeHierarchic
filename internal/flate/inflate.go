@@ -330,7 +330,7 @@ func (f *decompressor) ReadAll() []byte {
 		panic("toread should be empty to start with")
 	}
 	for {
-		f.step(f)
+		f.nextBlock()
 		if f.err != io.EOF && f.err != nil {
 			panic(f.err)
 		}
@@ -632,26 +632,29 @@ func (f *decompressor) dataBlock() {
 // copyData copies f.copyLen bytes from the underlying reader into f.hist.
 // It pauses for reads when f.hist is full.
 func (f *decompressor) copyData() {
-	buf := f.dict.writeSlice()
-	if len(buf) > f.copyLen {
-		buf = buf[:f.copyLen]
-	}
+	for {
+		buf := f.dict.writeSlice()
+		if len(buf) > f.copyLen {
+			buf = buf[:f.copyLen]
+		}
 
-	cnt, err := io.ReadFull(f.r, buf)
-	f.roffset += int64(cnt)
-	f.copyLen -= cnt
-	f.dict.writeMark(cnt)
-	if err != nil {
-		f.err = noEOF(err)
+		cnt, err := io.ReadFull(f.r, buf)
+		f.roffset += int64(cnt)
+		f.copyLen -= cnt
+		f.dict.writeMark(cnt)
+		if err != nil {
+			f.err = noEOF(err)
+			return
+		}
+
+		if f.dict.availWrite() == 0 || f.copyLen > 0 {
+			f.toRead = append(f.toRead, f.dict.readFlush()...)
+			// ugly continuation, need to revisit this once I understand the dictionary
+			continue
+		}
+		f.finishBlock()
 		return
 	}
-
-	if f.dict.availWrite() == 0 || f.copyLen > 0 {
-		f.toRead = append(f.toRead, f.dict.readFlush()...)
-		f.step = (*decompressor).copyData
-		return
-	}
-	f.finishBlock()
 }
 
 func (f *decompressor) finishBlock() {
@@ -661,7 +664,6 @@ func (f *decompressor) finishBlock() {
 		}
 		f.err = io.EOF
 	}
-	f.step = (*decompressor).nextBlock
 }
 
 // noEOF returns err, unless err == io.EOF, in which case it returns io.ErrUnexpectedEOF.
@@ -775,7 +777,6 @@ func NewReader(r io.Reader) *decompressor {
 
 	var f decompressor
 	f.makeReader(r)
-	f.step = (*decompressor).nextBlock
 	f.dict.init(maxMatchOffset, nil)
 	return &f
 }
