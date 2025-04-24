@@ -277,10 +277,6 @@ type decompressor struct {
 	b  uint32
 	nb uint
 
-	// Length arrays used to define Huffman codes.
-	bits     *[maxNumLit + maxNumDist]int
-	codebits *[numCodes]int
-
 	// Output history, buffer.
 	dict dictDecoder
 
@@ -359,6 +355,9 @@ func (f *decompressor) Close() error {
 var codeOrder = [...]int{16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15}
 
 func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
+	var bits [maxNumLit + maxNumDist]int
+	var codebits [numCodes]int
+
 	// HLIT[5], HDIST[5], HCLEN[4].
 	for f.nb < 5+5+4 {
 		if err := f.moreBits(); err != nil {
@@ -387,14 +386,14 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 				return err
 			}
 		}
-		f.codebits[codeOrder[i]] = int(f.b & 0x7)
+		codebits[codeOrder[i]] = int(f.b & 0x7)
 		f.b >>= 3
 		f.nb -= 3
 	}
 	for i := nclen; i < len(codeOrder); i++ {
-		f.codebits[codeOrder[i]] = 0
+		codebits[codeOrder[i]] = 0
 	}
-	if !h1.init(f.codebits[0:]) {
+	if !h1.init(codebits[0:]) {
 		return CorruptInputError(f.roffset)
 	}
 
@@ -407,7 +406,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 		}
 		if x < 16 {
 			// Actual length.
-			f.bits[i] = x
+			bits[i] = x
 			i++
 			continue
 		}
@@ -424,7 +423,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 			if i == 0 {
 				return CorruptInputError(f.roffset)
 			}
-			b = f.bits[i-1]
+			b = bits[i-1]
 		case 17:
 			rep = 3
 			nb = 3
@@ -446,12 +445,12 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 			return CorruptInputError(f.roffset)
 		}
 		for j := 0; j < rep; j++ {
-			f.bits[i] = b
+			bits[i] = b
 			i++
 		}
 	}
 
-	if !h1.init(f.bits[0:nlit]) || !h2.init(f.bits[nlit:nlit+ndist]) {
+	if !h1.init(bits[0:nlit]) || !h2.init(bits[nlit:nlit+ndist]) {
 		return CorruptInputError(f.roffset)
 	}
 
@@ -459,8 +458,8 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	// for the HLIT tree to the length of the EOB marker since we know that
 	// every block must terminate with one. This preserves the property that
 	// we never read any extra bytes after the end of the DEFLATE stream.
-	if h1.min < f.bits[endBlockMarker] {
-		h1.min = f.bits[endBlockMarker]
+	if h1.min < bits[endBlockMarker] {
+		h1.min = bits[endBlockMarker]
 	}
 
 	return nil
@@ -776,8 +775,6 @@ func NewReader(r io.Reader) *decompressor {
 
 	var f decompressor
 	f.makeReader(r)
-	f.bits = new([maxNumLit + maxNumDist]int)
-	f.codebits = new([numCodes]int)
 	f.step = (*decompressor).nextBlock
 	f.dict.init(maxMatchOffset, nil)
 	return &f
