@@ -243,9 +243,7 @@ func (rp *resumePoint) String() string {
 
 func (f *decompressor) nextBlock() error {
 	for f.rp.nb < 1+2 {
-		if err := f.moreBits(); err != nil {
-			return io.ErrUnexpectedEOF
-		}
+		f.moreBits()
 	}
 	final := f.rp.b&1 == 1
 	f.rp.b >>= 1
@@ -253,29 +251,27 @@ func (f *decompressor) nextBlock() error {
 	f.rp.b >>= 2
 	f.rp.nb -= 1 + 2
 	fmt.Println("   type", typ)
-	var err error
+
 	switch typ {
 	case 0:
-		err = f.dataBlock()
+		f.dataBlock()
 	case 1:
 		// compressed, fixed Huffman tables
-		err = f.huffmanBlock(&fixedHuffmanDecoder, nil)
+		f.huffmanBlock(&fixedHuffmanDecoder, nil)
 	case 2:
 		// compressed, dynamic Huffman tables
 		var h1, h2 huffmanDecoder
-		if err = f.readHuffman(&h1, &h2); err != nil {
-			break
-		}
-		err = f.huffmanBlock(&h1, &h2)
+		f.readHuffman(&h1, &h2)
+		f.huffmanBlock(&h1, &h2)
 	default:
 		// 3 is reserved.
 		panic("bad block code")
 	}
 
-	if err == nil && final {
+	if final {
 		return io.EOF
 	}
-	return err
+	return nil
 }
 
 func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (resumePoint, error) {
@@ -315,15 +311,13 @@ func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (
 
 var codeOrder = [...]int{16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15}
 
-func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
+func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) {
 	var bits [maxNumLit + maxNumDist]int
 	var codebits [numCodes]int
 
 	// HLIT[5], HDIST[5], HCLEN[4].
 	for f.rp.nb < 5+5+4 {
-		if err := f.moreBits(); err != nil {
-			return err
-		}
+		f.moreBits()
 	}
 	nlit := int(f.rp.b&0x1F) + 257
 	if nlit > maxNumLit {
@@ -343,9 +337,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	// (HCLEN+4)*3 bits: code lengths in the magic codeOrder order.
 	for i := 0; i < nclen; i++ {
 		for f.rp.nb < 3 {
-			if err := f.moreBits(); err != nil {
-				return err
-			}
+			f.moreBits()
 		}
 		codebits[codeOrder[i]] = int(f.rp.b & 0x7)
 		f.rp.b >>= 3
@@ -361,10 +353,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	// HLIT + 257 code lengths, HDIST + 1 code lengths,
 	// using the code length Huffman code.
 	for i, n := 0, nlit+ndist; i < n; {
-		x, err := f.huffSym(h1)
-		if err != nil {
-			return err
-		}
+		x := f.huffSym(h1)
 		if x < 16 {
 			// Actual length.
 			bits[i] = x
@@ -395,9 +384,7 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 			b = 0
 		}
 		for f.rp.nb < nb {
-			if err := f.moreBits(); err != nil {
-				return err
-			}
+			f.moreBits()
 		}
 		rep += int(f.rp.b & uint32(1<<nb-1))
 		f.rp.b >>= nb
@@ -422,22 +409,17 @@ func (f *decompressor) readHuffman(h1, h2 *huffmanDecoder) error {
 	if h1.min < bits[endBlockMarker] {
 		h1.min = bits[endBlockMarker]
 	}
-
-	return nil
 }
 
 // Decode a single Huffman block from f.
 // hl and hd are the Huffman states for the lit/length values
 // and the distance values, respectively. If hd == nil, using the
 // fixed distance encoding associated with fixed Huffman blocks.
-func (f *decompressor) huffmanBlock(hl, hd *huffmanDecoder) error {
+func (f *decompressor) huffmanBlock(hl, hd *huffmanDecoder) {
 readLiteral:
 	// Read literal and/or (length, distance) according to RFC section 3.2.3.
 	{
-		v, err := f.huffSym(hl)
-		if err != nil {
-			return err
-		}
+		v := f.huffSym(hl)
 		var n uint // number of bits extra
 		var length int
 		switch {
@@ -445,7 +427,7 @@ readLiteral:
 			f.rp.big = append(f.rp.big, byte(v))
 			goto readLiteral
 		case v == 256:
-			return nil // end of block
+			return // end of block
 		// otherwise, reference to older data
 		case v < 265:
 			length = v - (257 - 3)
@@ -473,9 +455,7 @@ readLiteral:
 		}
 		if n > 0 {
 			for f.rp.nb < n {
-				if err = f.moreBits(); err != nil {
-					return err
-				}
+				f.moreBits()
 			}
 			length += int(f.rp.b & uint32(1<<n-1))
 			f.rp.b >>= n
@@ -485,17 +465,13 @@ readLiteral:
 		var dist int
 		if hd == nil {
 			for f.rp.nb < 5 {
-				if err = f.moreBits(); err != nil {
-					return err
-				}
+				f.moreBits()
 			}
 			dist = int(bits.Reverse8(uint8(f.rp.b & 0x1F << 3)))
 			f.rp.b >>= 5
 			f.rp.nb -= 5
 		} else {
-			if dist, err = f.huffSym(hd); err != nil {
-				return err
-			}
+			dist = f.huffSym(hd)
 		}
 
 		switch {
@@ -506,9 +482,7 @@ readLiteral:
 			// have 1 bit in bottom of dist, need nb more.
 			extra := (dist & 1) << nb
 			for f.rp.nb < nb {
-				if err = f.moreBits(); err != nil {
-					return err
-				}
+				f.moreBits()
 			}
 			extra |= int(f.rp.b & uint32(1<<nb-1))
 			f.rp.b >>= nb
@@ -531,7 +505,7 @@ readLiteral:
 }
 
 // Copy a single uncompressed data block from input to output.
-func (f *decompressor) dataBlock() error {
+func (f *decompressor) dataBlock() {
 	// Uncompressed.
 	// Discard current half-byte.
 	f.rp.nb = 0
@@ -542,7 +516,7 @@ func (f *decompressor) dataBlock() error {
 	nr, err := io.ReadFull(f.r, buf[0:4])
 	f.rp.roffset += int64(nr)
 	if err != nil {
-		return noEOF(err)
+		panic("corrupt DEFLATE")
 	}
 	n := int(buf[0]) | int(buf[1])<<8
 	nn := int(buf[2]) | int(buf[3])<<8
@@ -553,36 +527,25 @@ func (f *decompressor) dataBlock() error {
 	for range n {
 		b, err := f.r.ReadByte()
 		if err != nil {
-			panic("corrupt file")
+			panic("corrupt DEFLATE")
 		}
 		f.rp.roffset++
 		f.rp.big = append(f.rp.big, b)
 	}
-
-	return nil
 }
 
-// noEOF returns err, unless err == io.EOF, in which case it returns io.ErrUnexpectedEOF.
-func noEOF(e error) error {
-	if e == io.EOF {
-		return io.ErrUnexpectedEOF
-	}
-	return e
-}
-
-func (f *decompressor) moreBits() error {
+func (f *decompressor) moreBits() {
 	c, err := f.r.ReadByte()
 	if err != nil {
-		return noEOF(err)
+		panic("corrupt DEFLATE")
 	}
 	f.rp.roffset++
 	f.rp.b |= uint32(c) << f.rp.nb
 	f.rp.nb += 8
-	return nil
 }
 
 // Read the next Huffman-encoded symbol from f according to h.
-func (f *decompressor) huffSym(h *huffmanDecoder) (int, error) {
+func (f *decompressor) huffSym(h *huffmanDecoder) int {
 	// Since a huffmanDecoder can be empty or be composed of a degenerate tree
 	// with single element, huffSym must error on these two edge cases. In both
 	// cases, the chunks slice will be 0 for the invalid sequence, leading it
@@ -598,7 +561,7 @@ func (f *decompressor) huffSym(h *huffmanDecoder) (int, error) {
 			if err != nil {
 				f.rp.b = b
 				f.rp.nb = nb
-				return 0, noEOF(err)
+				panic("corrupt DEFLATE")
 			}
 			f.rp.roffset++
 			b |= uint32(c) << (nb & 31)
@@ -618,7 +581,7 @@ func (f *decompressor) huffSym(h *huffmanDecoder) (int, error) {
 			}
 			f.rp.b = b >> (n & 31)
 			f.rp.nb = nb - n
-			return int(chunk >> huffmanValueShift), nil
+			return int(chunk >> huffmanValueShift)
 		}
 	}
 }
