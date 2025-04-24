@@ -289,14 +289,12 @@ type decompressor struct {
 
 	// Next step in the decompression,
 	// and decompression state.
-	step      func(*decompressor)
-	stepState int
-	final     bool
-	err       error
-	toRead    []byte
-	hl, hd    *huffmanDecoder
-	copyLen   int
-	copyDist  int
+	step     func(*decompressor)
+	final    bool
+	err      error
+	toRead   []byte
+	copyLen  int
+	copyDist int
 }
 
 func (f *decompressor) nextBlock() {
