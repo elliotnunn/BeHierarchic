@@ -475,8 +475,7 @@ readLiteral:
 			f.big = append(f.big, byte(v))
 			goto readLiteral
 		case v == 256:
-			f.finishBlock()
-			return nil
+			return nil // end of block
 		// otherwise, reference to older data
 		case v < 265:
 			length = v - (257 - 3)
@@ -596,11 +595,7 @@ func (f *decompressor) dataBlock() error {
 		f.big = append(f.big, b)
 	}
 
-	f.finishBlock()
 	return nil
-}
-
-func (f *decompressor) finishBlock() {
 }
 
 // noEOF returns err, unless err == io.EOF, in which case it returns io.ErrUnexpectedEOF.
