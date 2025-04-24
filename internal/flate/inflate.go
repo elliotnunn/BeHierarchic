@@ -9,6 +9,7 @@ package flate
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"math/bits"
 	"strconv"
@@ -337,22 +338,21 @@ func (f *decompressor) nextBlock() {
 	}
 }
 
-func (f *decompressor) Read(b []byte) (int, error) {
+func (f *decompressor) ReadAll() []byte {
+	var ret []byte
+	if len(f.toRead) > 0 {
+		panic("toread should be empty to start with")
+	}
 	for {
-		if len(f.toRead) > 0 {
-			n := copy(b, f.toRead)
-			f.toRead = f.toRead[n:]
-			if len(f.toRead) == 0 {
-				return n, f.err
-			}
-			return n, nil
-		}
-		if f.err != nil {
-			return 0, f.err
-		}
 		f.step(f)
-		if f.err != nil && len(f.toRead) == 0 {
-			f.toRead = f.dict.readFlush() // Flush what's left in case of error
+		if f.err != io.EOF && f.err != nil {
+			panic(f.err)
+		}
+		fmt.Println("got block of ", len(f.toRead))
+		ret = append(ret, f.toRead...)
+		f.toRead = f.toRead[:0]
+		if f.err == io.EOF {
+			return ret
 		}
 	}
 }
@@ -796,7 +796,7 @@ func fixedHuffmanDecoderInit() {
 // been encountered. Any trailing data after the final block is ignored.
 //
 // The [io.ReadCloser] returned by NewReader also implements [Resetter].
-func NewReader(r io.Reader) io.ReadCloser {
+func NewReader(r io.Reader) *decompressor {
 	fixedHuffmanDecoderInit()
 
 	var f decompressor

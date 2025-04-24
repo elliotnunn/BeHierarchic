@@ -27,10 +27,9 @@ func TestFlate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := io.ReadAll(NewReader(bytes.NewReader(z)))
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := NewReader(bytes.NewReader(z)).ReadAll()
+
+	os.WriteFile("/Users/elliotnunn/Documents/mac/primary/macworks sources.txt.got", got, 0o644)
 
 	if !bytes.Equal(got, expect) {
 		t.Fatalf("mismatch expect %d got %d bytes", len(expect), len(got))
