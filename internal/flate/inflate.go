@@ -316,6 +316,7 @@ func (f *decompressor) nextBlock() {
 	typ := f.b & 3
 	f.b >>= 2
 	f.nb -= 1 + 2
+	fmt.Println("block type", typ, "dict size", f.dict.histSize())
 	switch typ {
 	case 0:
 		f.dataBlock()
@@ -348,7 +349,6 @@ func (f *decompressor) ReadAll() []byte {
 		if f.err != io.EOF && f.err != nil {
 			panic(f.err)
 		}
-		fmt.Println("got block of ", len(f.toRead))
 		ret = append(ret, f.toRead...)
 		f.toRead = f.toRead[:0]
 		if f.err == io.EOF {
@@ -482,6 +482,8 @@ func (f *decompressor) readHuffman() error {
 // and the distance values, respectively. If hd == nil, using the
 // fixed distance encoding associated with fixed Huffman blocks.
 func (f *decompressor) huffmanBlock() {
+repeatHB:
+	fmt.Println("huffmanBlock")
 	const (
 		stateInit = iota // Zero value must be stateInit
 		stateDict
@@ -508,9 +510,11 @@ readLiteral:
 		case v < 256:
 			f.dict.writeByte(byte(v))
 			if f.dict.availWrite() == 0 {
-				f.toRead = f.dict.readFlush()
-				f.step = (*decompressor).huffmanBlock
+				fmt.Println("circling back to stateInit")
+				f.toRead = append(f.toRead, f.dict.readFlush()...)
+				// f.step = (*decompressor).huffmanBlock
 				f.stepState = stateInit
+				goto repeatHB
 				return
 			}
 			goto readLiteral
@@ -615,9 +619,11 @@ copyHistory:
 		f.copyLen -= cnt
 
 		if f.dict.availWrite() == 0 || f.copyLen > 0 {
-			f.toRead = f.dict.readFlush()
-			f.step = (*decompressor).huffmanBlock // We need to continue this work
+			fmt.Println("circling back to stateDict")
+			f.toRead = append(f.toRead, f.dict.readFlush()...)
+			// f.step = (*decompressor).huffmanBlock // We need to continue this work
 			f.stepState = stateDict
+			goto repeatHB
 			return
 		}
 		goto readLiteral
@@ -646,7 +652,7 @@ func (f *decompressor) dataBlock() {
 	}
 
 	if n == 0 {
-		f.toRead = f.dict.readFlush()
+		f.toRead = append(f.toRead, f.dict.readFlush()...)
 		f.finishBlock()
 		return
 	}
@@ -673,7 +679,7 @@ func (f *decompressor) copyData() {
 	}
 
 	if f.dict.availWrite() == 0 || f.copyLen > 0 {
-		f.toRead = f.dict.readFlush()
+		f.toRead = append(f.toRead, f.dict.readFlush()...)
 		f.step = (*decompressor).copyData
 		return
 	}
@@ -683,7 +689,7 @@ func (f *decompressor) copyData() {
 func (f *decompressor) finishBlock() {
 	if f.final {
 		if f.dict.availRead() > 0 {
-			f.toRead = f.dict.readFlush()
+			f.toRead = append(f.toRead, f.dict.readFlush()...)
 		}
 		f.err = io.EOF
 	}
