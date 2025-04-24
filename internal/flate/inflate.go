@@ -285,7 +285,6 @@ type decompressor struct {
 
 	// Next step in the decompression,
 	// and decompression state.
-	step     func(*decompressor)
 	final    bool
 	err      error
 	toRead   []byte
