@@ -290,13 +290,13 @@ type decompressor struct {
 	big []byte
 }
 
-func (f *decompressor) nextBlock() {
+func (f *decompressor) nextBlock() error {
 	for f.nb < 1+2 {
 		if f.err = f.moreBits(); f.err != nil {
-			return
+			return io.ErrUnexpectedEOF
 		}
 	}
-	f.final = f.b&1 == 1
+	final := f.b&1 == 1
 	f.b >>= 1
 	typ := f.b & 3
 	f.b >>= 2
@@ -319,19 +319,23 @@ func (f *decompressor) nextBlock() {
 		// 3 is reserved.
 		f.err = CorruptInputError(f.roffset)
 	}
+
+	if f.err == nil && final {
+		return io.EOF
+	}
+	return f.err
 }
 
 func (f *decompressor) ReadAll() []byte {
 	for {
 		fmt.Printf("block byte=%#x bit=%d\n", f.roffset-int64((f.nb+7)/8), f.nb%8)
 
-		f.nextBlock()
+		err := f.nextBlock()
 
-		if f.err != io.EOF && f.err != nil {
-			panic(f.err)
-		}
-		if f.err == io.EOF {
+		if err == io.EOF {
 			return f.big[maxMatchOffset:]
+		} else if err != nil {
+			panic("unexpected EOF")
 		}
 	}
 }
