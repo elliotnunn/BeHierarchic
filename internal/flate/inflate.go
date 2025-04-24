@@ -91,6 +91,14 @@ func readAtLeast(zip io.ReaderAt, zipsize int64, rp *resumePoint, minsize int) (
 	return nrp, err // which might be quite a serious error
 }
 
+func (rp *resumePoint) thinOut() { // save the cached space
+	if rp.roffset == 0 {
+		rp.big = nil
+	} else if len(rp.big) > maxMatchOffset {
+		rp.big = append(make([]byte, 0, maxMatchOffset), rp.big[:maxMatchOffset]...)
+	}
+}
+
 type huffmanDecoder struct {
 	min      int                      // the minimum code length
 	chunks   [huffmanNumChunks]uint32 // chunks as described above
@@ -245,14 +253,6 @@ func (h *huffmanDecoder) init(lengths []int) bool {
 	return true
 }
 
-// The actual read interface needed by [NewReader].
-// If the passed in io.Reader does not also have ReadByte,
-// the [NewReader] will introduce its own buffering.
-type Reader interface {
-	io.Reader
-	io.ByteReader
-}
-
 type resumePoint struct {
 	big     []byte
 	roffset int64
@@ -263,8 +263,10 @@ type resumePoint struct {
 
 // Decompress state.
 type decompressor struct {
-	// Input source (must be seek-ed to "DEFLATE base"+rp.roffset)
-	r Reader
+	// Input source
+	// - must be seek-ed to "DEFLATE base"+rp.roffset)
+	// - might as well use concrete type because nothing else will give us Reader+ByteReader
+	r *bufio.Reader
 	// State required for mid-DEFLATE resumption
 	rp resumePoint
 }
