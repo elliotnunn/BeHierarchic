@@ -303,7 +303,7 @@ func (f *decompressor) nextBlock() {
 	typ := f.b & 3
 	f.b >>= 2
 	f.nb -= 1 + 2
-	fmt.Println("block type", typ, "dict size", f.dict.histSize())
+	fmt.Println("   type", typ)
 	switch typ {
 	case 0:
 		f.dataBlock()
@@ -325,11 +325,11 @@ func (f *decompressor) nextBlock() {
 
 func (f *decompressor) ReadAll() []byte {
 	var ret []byte
-	if len(f.toRead) > 0 {
-		panic("toread should be empty to start with")
-	}
 	for {
+		fmt.Printf("block byte=%#x bit=%d\n", f.roffset-int64(f.nb/8), f.nb%8)
+
 		f.nextBlock()
+
 		if f.err != io.EOF && f.err != nil {
 			panic(f.err)
 		}
@@ -483,7 +483,6 @@ readLiteral:
 		case v < 256:
 			f.dict.writeByte(byte(v))
 			if f.dict.availWrite() == 0 {
-				fmt.Println("circling back to stateInit")
 				f.toRead = append(f.toRead, f.dict.readFlush()...)
 				goto readLiteral
 			}
@@ -589,7 +588,6 @@ copyHistory:
 		f.copyLen -= cnt
 
 		if f.dict.availWrite() == 0 || f.copyLen > 0 {
-			fmt.Println("circling back to stateDict")
 			f.toRead = append(f.toRead, f.dict.readFlush()...)
 			goto copyHistory
 		}
