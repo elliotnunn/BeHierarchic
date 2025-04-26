@@ -1,13 +1,10 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"os"
-
-	"github.com/elliotnunn/resourceform/internal/hfs"
 )
 
 func dumpFS(fsys fs.FS) {
@@ -24,17 +21,8 @@ func dumpFS(fsys fs.FS) {
 			panic(err)
 		}
 
-		// idea: make "cnid" more like "inode"?
-		fmt.Printf("    name=%s\n",
-			i.Name())
-		fmt.Printf("    isdir=%v type=%v size=%d mode=%v modtime=%s\n",
-			d.IsDir(), d.Type(), i.Size(), i.Mode(), i.ModTime().Format(tfmt))
-
-		if s, ok := i.Sys().(*hfs.Sys); ok {
-			fmt.Printf("    cnid=%d flags=%#04x crtime=%s bktime=%s\n",
-				s.ID, s.Flags, s.CreationTime.Format(tfmt), s.BackupTime.Format(tfmt))
-			fmt.Printf("    %s\n", hex.EncodeToString(s.FinderInfo[:]))
-		}
+		fmt.Printf("    %v size=%d modtime=%s\n",
+			i.Mode(), i.Size(), i.ModTime().Format(tfmt))
 
 		return nil
 	})

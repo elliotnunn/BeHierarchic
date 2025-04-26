@@ -98,40 +98,35 @@ func TestComplex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+	fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
 		if d.IsDir() {
 			return nil
 		}
 
-		dfork, err := fsys.Open(path)
+		f, err := fsys.Open(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer dfork.Close()
+		defer f.Close()
 
-		rfork, err := fsys.Open(path + ResForkSuffix)
+		stat, err := f.Stat()
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer rfork.Close()
 
-		for i, fork := range []fs.File{dfork, rfork} {
-			stat, err := fork.Stat()
-			if err != nil {
-				t.Fatal(err)
-			}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-			data, err := io.ReadAll(fork)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// The test image zeroes out every fork except the last byte
-			expectLastByte := byte(stat.Sys().(*Sys).ID) ^ byte(-i)
-			if len(data) > 0 && data[len(data)-1] != expectLastByte {
-				t.Errorf("%s: last byte of fork %d expected %#02x got %#02x",
-					path, i, expectLastByte, data[len(data)-1])
-			}
+		// The test image zeroes out every fork except the last byte
+		expectLastByte := byte(stat.Sys().(uint32)) // Last byte of fork = low byte of CNID
+		if strings.Contains("/"+p, "/._") {
+			expectLastByte = ^expectLastByte // But ones-complement for resource forks
+		}
+		if len(data) > 0 && data[len(data)-1] != expectLastByte {
+			t.Errorf("%s: last byte expected %#02x got %#02x",
+				p, expectLastByte, data[len(data)-1])
 		}
 
 		return nil

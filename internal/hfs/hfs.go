@@ -6,6 +6,7 @@
 package hfs
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -13,12 +14,9 @@ import (
 	"io/fs"
 	"strings"
 	"time"
-)
 
-// For accessing Macintosh resource forks:
-// wfahen opening a file with this appended to the path, it will have
-// the same Stat metadata but a different size and different data
-const ResForkSuffix = "//resourcefork"
+	"github.com/elliotnunn/resourceform/internal/multireaderat"
+)
 
 type FS struct {
 	root *entry
@@ -29,33 +27,21 @@ type FS struct {
 // in this implementation it does not cost extra to retrieve the "stat" info.
 type entry struct {
 	name       string
-	size       int64
 	modtime    time.Time
 	isdir      bool
-	disk       io.ReaderAt
-	extents    byteExtents
+	fork       [2]multireaderat.SizeReaderAt // {datafork, appledouble}
 	childSlice []*entry
 	childMap   map[string]*entry
-	resfork    *entry
-	sys        Sys
-}
-
-// HFS specific metadata exposed via fs.FileInfo.Sys().(*Sys)
-type Sys struct {
-	ID           uint32   // catalog node ID (CNID, roughly an inode number)
-	Flags        uint16   // rather obscure except for the lock bit (which is?)
-	FinderInfo   [32]byte // concatenation of FInfo+FXInfo or DInfo+DXInfo
-	CreationTime time.Time
-	BackupTime   time.Time
+	cnid       uint32 // catalog node ID (CNID, roughly an inode number)
 }
 
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (retfs *FS, reterr error) {
-	defer func() {
-		if r := recover(); r != nil {
-			retfs, reterr = nil, fmt.Errorf("%v", r)
-		}
-	}()
+	// defer func() {
+	// 	if r := recover(); r != nil {
+	// 		retfs, reterr = nil, fmt.Errorf("%v", r)
+	// 	}
+	// }()
 
 	var mdb [512]byte
 	_, err := disk.ReadAt(mdb[:], 0x400)
@@ -100,12 +86,9 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 	// These maps are needed because children can come before parents in the catalog
 	entryof := map[uint32]*entry{
 		1: {
-			disk:  disk,
 			name:  ".",
 			isdir: true,
-			sys: Sys{
-				ID: 1,
-			},
+			cnid:  1,
 		},
 	}
 	childrenof := make(map[uint32][]*entry)
@@ -114,69 +97,61 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 		cut := (int(rec[0]) + 2) &^ 1
 		val := rec[cut:]
 
-		switch val[0] { // so-called "thread" records ignored
+		var e entry
+		parent := binary.BigEndian.Uint32(rec[2:])
+		switch val[0] {
+		default: // so-called "thread" records ignored
+			continue
 		case 1: // dir
-			parent := binary.BigEndian.Uint32(rec[2:])
-			name := strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":")
-			cnid := binary.BigEndian.Uint32(val[6:])
-
-			e := entry{
-				disk:    disk,
-				name:    name,
+			e = entry{
+				name:    strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":"),
+				cnid:    binary.BigEndian.Uint32(val[6:]),
 				isdir:   true,
 				modtime: macTime(val[0xe:]),
-				sys: Sys{
-					ID:           cnid,
-					Flags:        binary.BigEndian.Uint16(val[2:]),
-					CreationTime: macTime(val[0xa:]),
-					BackupTime:   macTime(val[0x12:]),
+				fork: [2]multireaderat.SizeReaderAt{
+					nil, // no data fork
+					mkAppleDouble(
+						map[int][]byte{
+							MACINTOSH_FILE_INFO: append(make([]byte, 0, 4), val[2:4]...),
+							FINDER_INFO:         val[0x16:0x36],
+							FILE_DATES_INFO:     append(make([]byte, 0, 16), val[0xa:0x16]...), // cr/md/bk/acc
+						},
+						nil,
+					),
 				},
 			}
-			copy(e.sys.FinderInfo[:], val[0x16:0x36]) // DInfo & DXInfo
-
-			entryof[cnid] = &e
-			childrenof[parent] = append(childrenof[parent], &e)
-
 		case 2: // file
-			parent := binary.BigEndian.Uint32(rec[2:])
-			name := strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":")
 			cnid := binary.BigEndian.Uint32(val[0x14:])
-
-			dfork := entry{
-				disk:    disk,
-				name:    name,
+			e = entry{
+				name:    strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":"),
+				cnid:    cnid,
 				isdir:   false,
 				modtime: macTime(val[0x30:]),
-				sys: Sys{
-					ID:           cnid,
-					Flags:        binary.BigEndian.Uint16(val[2:]),
-					CreationTime: macTime(val[0x2c:]),
-					BackupTime:   macTime(val[0x34:]),
+				fork: [2]multireaderat.SizeReaderAt{
+					parseExtents(val[0x4a:]).
+						chaseOverflow(overflow, cnid, false).
+						toBytes(drAlBlkSiz, drAlBlSt).
+						clipExtents(int64(binary.BigEndian.Uint32(val[0x1a:]))).
+						makeReader(disk),
+					mkAppleDouble(
+						map[int][]byte{
+							MACINTOSH_FILE_INFO: append(make([]byte, 0, 4), val[2:4]...),
+							FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
+							FILE_DATES_INFO:     append(make([]byte, 0, 16), val[0x2c:0x38]...), // cr/md/bk/acc
+						},
+						map[int]multireaderat.SizeReaderAt{
+							RESOURCE_FORK: parseExtents(val[0x56:]).
+								chaseOverflow(overflow, cnid, true).
+								toBytes(drAlBlkSiz, drAlBlSt).
+								clipExtents(int64(binary.BigEndian.Uint32(val[0x24:]))).
+								makeReader(disk),
+						},
+					),
 				},
 			}
-			copy(dfork.sys.FinderInfo[0:0x10], val[0x4:0x14])     // FInfo
-			copy(dfork.sys.FinderInfo[0x10:0x20], val[0x38:0x48]) // FXInfo
-
-			rfork := dfork         // resource fork is near identical
-			dfork.resfork = &rfork // but data fork has a ptr to it
-
-			for _, isResFork := range [...]bool{true, false} {
-				sizeField, extentField, entry := 0x1a, 0x4a, &dfork
-				if isResFork {
-					sizeField, extentField, entry = 0x24, 0x56, &rfork
-				}
-
-				entry.size = int64(binary.BigEndian.Uint32(val[sizeField:]))
-				entry.extents =
-					parseExtents(val[extentField:]).
-						chaseOverflow(overflow, cnid, isResFork).
-						toBytes(drAlBlkSiz, drAlBlSt).
-						clipExtents(entry.size)
-			}
-
-			entryof[cnid] = &dfork
-			childrenof[parent] = append(childrenof[parent], &dfork)
 		}
+		entryof[e.cnid] = &e
+		childrenof[parent] = append(childrenof[parent], &e)
 	}
 
 	// Sew up those two maps
@@ -203,16 +178,22 @@ type extKey struct {
 type blockExtents []uint16 // alternating (firstblock, blockcount)
 type byteExtents []int64   // alternating (firstbyte, bytecount)
 
-func (x byteExtents) makeReader(fs io.ReaderAt) *multiReaderAt {
-	return &multiReaderAt{backing: fs, extents: x}
+func (x byteExtents) makeReader(fs io.ReaderAt) multireaderat.SizeReaderAt {
+	subreaders := make([]multireaderat.SizeReaderAt, 0, len(x)/2)
+	for i := 0; i < len(x); i += 2 {
+		xstart, xlen := x[i], x[i+1]
+		subreaders = append(subreaders, io.NewSectionReader(fs, xstart, xlen))
+	}
+	return multireaderat.New(subreaders...)
 }
 
-func mustReadAll(r io.Reader) []byte {
-	slice, err := io.ReadAll(r)
-	if err != nil {
+func mustReadAll(r multireaderat.SizeReaderAt) []byte {
+	b := make([]byte, r.Size())
+	_, err := r.ReadAt(b, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
 		panic("unable to read a special file")
 	}
-	return slice
+	return b
 }
 
 func parseExtents(record []byte) blockExtents {
@@ -351,66 +332,18 @@ func macTime(field []byte) time.Time {
 	return time.Unix(int64(stamp)-2082844800, 0).UTC()
 }
 
-// To satisfy fs.FileInfo and fs.DirEntry
-func (f *entry) Name() string {
-	return f.name
-}
-
-// To satisfy fs.FileInfo and fs.DirEntry
-func (f *entry) IsDir() bool {
-	return f.isdir
-}
-
-// To satisfy fs.FileInfo
-func (f *entry) Size() int64 {
-	return f.size
-}
-
-// To satisfy fs.FileInfo
-func (f *entry) ModTime() time.Time {
-	return f.modtime
-}
-
-// To satisfy fs.FileInfo
-func (f *entry) Sys() interface{} {
-	return &f.sys
-}
-
-// To satisfy fs.FileInfo
-func (f *entry) Mode() fs.FileMode {
-	if f.isdir {
-		return fs.ModeDir
-	} else {
-		return 0
-	}
-}
-
-// To satisfy fs.DirEntry
-func (f *entry) Info() (fs.FileInfo, error) {
-	return f, nil
-}
-
-// To satisfy fs.DirEntry
-// Supposedly a cheaper subset of "Mode" for listing without statting
-func (f *entry) Type() fs.FileMode {
-	return f.Mode() & fs.ModeType
-}
-
-type openfile struct {
-	entry          *entry
-	*multiReaderAt     // To satisfy fs.File (and io.ReaderAt/ReadSeeker as a bonus)
-	listOffset     int // for listing directory
-}
-
 // To satisfy fs.FS
 func (fsys FS) Open(name string) (fs.File, error) {
-	name, resfork := strings.CutSuffix(name, ResForkSuffix)
-
 	components := strings.Split(name, "/")
 	if name == "." {
 		components = nil
 	} else if name == "" {
 		return nil, fs.ErrNotExist
+	}
+
+	sidecar := false
+	if len(components) > 0 {
+		components[len(components)-1], sidecar = strings.CutPrefix(components[len(components)-1], "._")
 	}
 
 	e := fsys.root
@@ -421,35 +354,75 @@ func (fsys FS) Open(name string) (fs.File, error) {
 		}
 		e = child
 	}
+	return open(e, sidecar), nil
+}
 
-	if resfork {
-		if e.isdir {
-			return nil, fs.ErrNotExist
-		} else {
-			e = e.resfork
-		}
-	}
-
-	if e.isdir {
-		return &openfile{entry: e}, nil
+func open(e *entry, sidecar bool) *openfile {
+	f := openfile{e: e, sidecar: sidecar}
+	if sidecar {
+		f.rsrs = io.NewSectionReader(e.fork[1], 0, e.fork[1].Size())
+	} else if !e.isdir {
+		f.rsrs = io.NewSectionReader(e.fork[0], 0, e.fork[0].Size())
 	} else {
-		return &openfile{entry: e, multiReaderAt: e.extents.makeReader(e.disk)}, nil
+		f.rsrs = bytes.NewReader(nil)
+	}
+	return &f
+}
+
+type openfile struct {
+	rsrs
+	e          *entry // for Name/Mode/Type/ModTime/Sys
+	sidecar    bool   // for IsDir
+	listOffset int    // for ReadDir
+	// also need Info/Stat/Close
+}
+
+type rsrs interface {
+	Read([]byte) (int, error)
+	Seek(offset int64, whence int) (int64, error)
+	ReadAt([]byte, int64) (int, error)
+	Size() int64
+}
+
+func (f *openfile) Name() string { // implements fs.FileInfo and fs.DirEntry
+	if f.sidecar {
+		return "._" + f.e.name
+	} else {
+		return f.e.name
 	}
 }
 
-// To satisfy fs.File
-func (f *openfile) Stat() (fs.FileInfo, error) {
-	return f.entry, nil
+func (f *openfile) Mode() fs.FileMode { // implements fs.FileInfo
+	if f.IsDir() {
+		return fs.ModeDir
+	} else {
+		return 0
+	}
 }
 
-// To satisfy fs.File
-func (f *openfile) Close() error {
-	return nil
+func (f *openfile) Type() fs.FileMode { // implements fs.DirEntry
+	if f.IsDir() {
+		return fs.ModeDir
+	} else {
+		return 0
+	}
+}
+
+func (f *openfile) ModTime() time.Time { // implements fs.FileInfo
+	return f.e.modtime
+}
+
+func (f *openfile) Sys() any { // implements fs.FileInfo
+	return f.e.cnid
+}
+
+func (f *openfile) IsDir() bool { // implements fs.FileInfo and fs.DirEntry
+	return f.e.isdir && !f.sidecar
 }
 
 // To satisfy fs.ReadDirFile, has slightly tricky partial-listing semantics
 func (f *openfile) ReadDir(count int) ([]fs.DirEntry, error) {
-	n := len(f.entry.childSlice) - f.listOffset
+	n := len(f.e.childSlice)*2 - f.listOffset
 	if n == 0 && count > 0 {
 		return nil, io.EOF
 	}
@@ -458,8 +431,22 @@ func (f *openfile) ReadDir(count int) ([]fs.DirEntry, error) {
 	}
 	list := make([]fs.DirEntry, n)
 	for i := range list {
-		list[i] = f.entry.childSlice[f.listOffset+i]
+		actualFile := f.e.childSlice[(f.listOffset+i)/2]
+		isSidecar := (f.listOffset+i)%2 == 1
+		list[i] = open(actualFile, isSidecar)
 	}
 	f.listOffset += n
 	return list, nil
+}
+
+func (f *openfile) Info() (fs.FileInfo, error) { // implements fs.DirEntry
+	return f, nil
+}
+
+func (f *openfile) Stat() (fs.FileInfo, error) { // implements fs.File
+	return f, nil
+}
+
+func (f *openfile) Close() error { // implements fs.File
+	return nil
 }
