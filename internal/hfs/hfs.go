@@ -37,11 +37,11 @@ type entry struct {
 
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (retfs *FS, reterr error) {
-	// defer func() {
-	// 	if r := recover(); r != nil {
-	// 		retfs, reterr = nil, fmt.Errorf("%v", r)
-	// 	}
-	// }()
+	defer func() {
+		if r := recover(); r != nil {
+			retfs, reterr = nil, fmt.Errorf("%v", r)
+		}
+	}()
 
 	var mdb [512]byte
 	_, err := disk.ReadAt(mdb[:], 0x400)
@@ -112,9 +112,9 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 					nil, // no data fork
 					mkAppleDouble(
 						map[int][]byte{
-							MACINTOSH_FILE_INFO: append(make([]byte, 0, 4), val[2:4]...),
+							MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
 							FINDER_INFO:         val[0x16:0x36],
-							FILE_DATES_INFO:     append(make([]byte, 0, 16), val[0xa:0x16]...), // cr/md/bk/acc
+							FILE_DATES_INFO:     append(val[0xa:0x16:0x16], make([]byte, 4)...), // cr/md/bk/acc
 						},
 						nil,
 					),
@@ -135,9 +135,9 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 						makeReader(disk),
 					mkAppleDouble(
 						map[int][]byte{
-							MACINTOSH_FILE_INFO: append(make([]byte, 0, 4), val[2:4]...),
+							MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
 							FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
-							FILE_DATES_INFO:     append(make([]byte, 0, 16), val[0x2c:0x38]...), // cr/md/bk/acc
+							FILE_DATES_INFO:     append(val[0x2c:0x38:0x38], make([]byte, 4)...), // cr/md/bk/acc
 						},
 						map[int]multireaderat.SizeReaderAt{
 							RESOURCE_FORK: parseExtents(val[0x56:]).
@@ -149,6 +149,9 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 					),
 				},
 			}
+		}
+		if strings.HasPrefix(e.name, "._") {
+			continue // very unusual for an HFS volume to contain an AppleDouble file
 		}
 		entryof[e.cnid] = &e
 		childrenof[parent] = append(childrenof[parent], &e)
