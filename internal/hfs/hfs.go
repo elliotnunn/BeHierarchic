@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elliotnunn/resourceform/internal/appledouble"
 	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
 
@@ -107,11 +108,11 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 				modtime: macTime(val[0xe:]),
 				fork: [2]multireaderat.SizeReaderAt{
 					nil, // no data fork
-					mkAppleDouble(
+					appledouble.Make(
 						map[int][]byte{
-							MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
-							FINDER_INFO:         val[0x16:0x36],
-							FILE_DATES_INFO:     append(val[0xa:0x16:0x16], make([]byte, 4)...), // cr/md/bk/acc
+							appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
+							appledouble.FINDER_INFO:         val[0x16:0x36],
+							appledouble.FILE_DATES_INFO:     append(val[0xa:0x16:0x16], make([]byte, 4)...), // cr/md/bk/acc
 						},
 						nil,
 					),
@@ -130,14 +131,14 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 						toBytes(drAlBlkSiz, drAlBlSt).
 						clipExtents(int64(binary.BigEndian.Uint32(val[0x1a:]))).
 						makeReader(disk),
-					mkAppleDouble(
+					appledouble.Make(
 						map[int][]byte{
-							MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
-							FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
-							FILE_DATES_INFO:     append(val[0x2c:0x38:0x38], make([]byte, 4)...), // cr/md/bk/acc
+							appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
+							appledouble.FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
+							appledouble.FILE_DATES_INFO:     append(val[0x2c:0x38:0x38], make([]byte, 4)...), // cr/md/bk/acc
 						},
 						map[int]multireaderat.SizeReaderAt{
-							RESOURCE_FORK: parseExtents(val[0x56:]).
+							appledouble.RESOURCE_FORK: parseExtents(val[0x56:]).
 								chaseOverflow(overflow, cnid, true).
 								toBytes(drAlBlkSiz, drAlBlSt).
 								clipExtents(int64(binary.BigEndian.Uint32(val[0x24:]))).
