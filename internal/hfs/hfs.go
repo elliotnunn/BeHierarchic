@@ -22,9 +22,6 @@ type FS struct {
 	root *entry
 }
 
-// Populated by New, and accessed through the functions & interfaces of io/fs:
-// satisfies both the "directory listing" and "stat" interfaces, because
-// in this implementation it does not cost extra to retrieve the "stat" info.
 type entry struct {
 	name       string
 	modtime    time.Time
