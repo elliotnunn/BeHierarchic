@@ -16,9 +16,7 @@ import (
 var sourcesFS embed.FS
 var sources = fsToMap(sourcesFS)
 
-// //go:embed stuffit-test-files/build
-//
-//go:embed proprietary-test
+//go:embed stuffit-test-files/build
 var archivesFS embed.FS
 var archives = fsToMap(archivesFS)
 
