@@ -3,16 +3,16 @@ package sit
 import (
 	"bytes"
 	"embed"
-	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"path"
 	"strings"
 	"testing"
+
+	"github.com/elliotnunn/resourceform/internal/appledouble"
 )
 
 //go:embed stuffit-test-files/sources
-//go:embed proprietary-test
 var sourcesFS embed.FS
 var sources = fsToMap(sourcesFS)
 
@@ -34,14 +34,19 @@ func fsToMap(fsys fs.FS) map[string][]byte {
 func TestDumpEach(t *testing.T) {
 	for name := range archives {
 		data := archives[name]
+		// if string(data[10:14]) != "rLau" {
+		// 	continue // want only old-school stuffit
+		// }
 		t.Run(name, func(t *testing.T) {
-			fmt.Println("\n", name, hex.EncodeToString(data[:16]))
-			fs, err := New(bytes.NewReader(data))
+			fmt.Println("##", name)
+			fsys, err := New(bytes.NewReader(data))
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
-			dumpFS(fs)
+
+			dumpFS(fsys)
+			fmt.Println("")
 		})
 	}
 }
@@ -70,7 +75,10 @@ func dumpFS(fsys fs.FS) {
 				panic(err)
 			}
 			defer f.Close()
-			// fmt.Println(appledouble.Dump(f))
+			d, _ := appledouble.Dump(f)
+			for _, l := range strings.Split(strings.TrimRight(d, "\n"), "\n") {
+				fmt.Println("    " + l)
+			}
 		}
 
 		return nil

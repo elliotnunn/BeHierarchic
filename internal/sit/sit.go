@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,12 +21,137 @@ type FS struct {
 
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (*FS, error) {
-	var buf [14]byte
-	_, err := disk.ReadAt(buf[:], 0)
-	if err != nil || buf[0] != 'S' || string(buf[10:14]) != "rLau" {
+	var buf [80]byte
+	n, _ := disk.ReadAt(buf[:], 0)
+	if n >= 22 && buf[0] == 'S' && string(buf[10:14]) == "rLau" {
+		return newStuffItClassic(disk)
+	} else if n == 80 &&
+		string(buf[:16]) == "StuffIt (c)1997-" {
+		return newStuffIt5(disk)
+	} else {
 		return nil, errors.New("not a StuffIt file")
 	}
+}
 
+func newStuffIt5(disk io.ReaderAt) (*FS, error) {
+	var buf [6]byte
+	_, err := disk.ReadAt(buf[:], 88)
+	if err != nil {
+		return nil, fmt.Errorf("unreadable StuffIt 5 file: %w", err)
+	}
+
+	root := &entry{
+		name:  ".",
+		isdir: true,
+	}
+	type j struct {
+		next   int64 // offset into the file
+		remain int   // in this directory
+		parent *entry
+	}
+	stack := []j{
+		{
+			next:   int64(binary.BigEndian.Uint32(buf[0:])),
+			remain: int(buf[5]),
+			parent: root,
+		},
+	}
+
+	for len(stack) != 0 {
+		job := &stack[len(stack)-1]
+		if job.remain == 0 {
+			stack = stack[:len(stack)-1]
+			continue
+		}
+
+		var hdr1 [48]byte
+		_, err := disk.ReadAt(hdr1[:], job.next)
+		if err != nil || string(hdr1[:4]) != "\xA5\xA5\xA5\xA5" {
+			return nil, fmt.Errorf("unreadable StuffIt 5 header: %w", err)
+		}
+
+		name := make([]byte, min(63, binary.BigEndian.Uint16(hdr1[30:])))
+		nameLoc := job.next + 48
+		if hdr1[9]&0x40 == 0 {
+			nameLoc += int64(hdr1[47]) // skip over "password information"
+		}
+		_, err = disk.ReadAt(name, nameLoc)
+		if err != nil {
+			return nil, fmt.Errorf("unreadable StuffIt 5 filename: %w", err)
+		}
+
+		hdrsize := int64(binary.BigEndian.Uint16(hdr1[6:]))
+		var hdr2 []byte
+		if hdr1[4] == 1 { // different versions of this struct
+			hdr2 = make([]byte, 49)
+		} else {
+			hdr2 = make([]byte, 45, 49)
+		}
+		_, err = disk.ReadAt(hdr2, job.next+hdrsize)
+		if err != nil {
+			return nil, fmt.Errorf("unreadable StuffIt 5 header2: %w", err)
+		}
+		hdrsize += int64(len(hdr2))
+
+		if len(hdr2) == 45 { // adjust the structure to the longer, older version
+			hdr2 = slices.Insert(hdr2, 32, 0, 0, 0, 0)
+		}
+
+		e := &entry{
+			isdir:   hdr1[9]&0x40 != 0,
+			name:    strings.ReplaceAll(string(name), "/", ":"),
+			modtime: time.Unix(int64(binary.BigEndian.Uint32(hdr1[14:]))-2082844800, 0).UTC(),
+		}
+		job.next = int64(binary.BigEndian.Uint32(hdr1[22:]))
+		job.remain--
+		if job.parent.childMap == nil {
+			job.parent.childMap = make(map[string]*entry)
+		}
+		job.parent.childMap[e.name] = e
+		job.parent.childSlice = append(job.parent.childSlice, e)
+
+		if e.isdir {
+			stack = append(stack, j{
+				next:   int64(binary.BigEndian.Uint32(hdr1[34:])),
+				remain: int(hdr1[47]),
+				parent: e,
+			})
+			e.fork = [2]multireaderat.SizeReaderAt{
+				nil, // no data fork for directories
+				appledouble.Make(
+					map[int][]byte{
+						appledouble.FINDER_INFO:     append(hdr2[4:14:14], make([]byte, 22)...), // location/finderflags
+						appledouble.FILE_DATES_INFO: append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
+					},
+					nil,
+				),
+			}
+		} else {
+			rsize, dsize := int64(binary.BigEndian.Uint32(hdr2[40:])), int64(binary.BigEndian.Uint32(hdr1[38:]))
+			rbig, dbig := int64(binary.BigEndian.Uint32(hdr2[36:])), int64(binary.BigEndian.Uint32(hdr1[34:]))
+			rfmt, dfmt := hdr2[44], hdr1[46]
+			rreader := io.NewSectionReader(disk, job.next+hdrsize, rsize)
+			dreader := io.NewSectionReader(disk, job.next+hdrsize+rsize, dsize)
+			e.fork = [2]multireaderat.SizeReaderAt{
+				readerFor(dfmt, dreader, dbig),
+				appledouble.Make(
+					map[int][]byte{
+						appledouble.MACINTOSH_FILE_INFO: {hdr1[9] & 0x80, 0, 0, 0},                  // lock bit
+						appledouble.FINDER_INFO:         append(hdr2[4:14:14], make([]byte, 22)...), // type/creator/finderflags
+						appledouble.FILE_DATES_INFO:     append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
+					},
+					map[int]multireaderat.SizeReaderAt{
+						appledouble.RESOURCE_FORK: readerFor(rfmt, rreader, rbig),
+					},
+				),
+			}
+		}
+	}
+
+	return &FS{root: root}, nil
+}
+
+func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 	stack := []*entry{{
 		name:  ".",
 		isdir: true,
@@ -70,9 +196,8 @@ func New(disk io.ReaderAt) (*FS, error) {
 				nil, // no data fork for directories
 				appledouble.Make(
 					map[int][]byte{
-						appledouble.MACINTOSH_FILE_INFO: append(hdr[74:76:76], make([]byte, 2)...),
-						appledouble.FINDER_INFO:         make([]byte, 32),
-						appledouble.FILE_DATES_INFO:     append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
+						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
+						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					nil,
 				),
@@ -86,9 +211,8 @@ func New(disk io.ReaderAt) (*FS, error) {
 				readerFor(hdr[1], dreader, int64(binary.BigEndian.Uint32(hdr[88:]))),
 				appledouble.Make(
 					map[int][]byte{
-						appledouble.MACINTOSH_FILE_INFO: append(hdr[74:76:76], make([]byte, 2)...),
-						appledouble.FINDER_INFO:         append(hdr[66:74:74], make([]byte, 24)...),
-						appledouble.FILE_DATES_INFO:     append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
+						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
+						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
 						appledouble.RESOURCE_FORK: readerFor(hdr[0], rreader, int64(binary.BigEndian.Uint32(hdr[84:]))),
