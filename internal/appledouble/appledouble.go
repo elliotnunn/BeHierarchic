@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
@@ -126,14 +128,124 @@ func Dump(r io.Reader) (string, error) {
 			data := buf[offset : offset+size]
 			switch kind {
 			case 8: // FILE_DATES_INFO
-				val = hex.EncodeToString(data)
-			case 9: // FINDER_INFO
-				val = hex.EncodeToString(data)
+				val = formatDates(data)
+			case 9: // FINDER_INFO // differs between files and directories
+				val = formatFinderInfo(data)
 			case 10: // MACINTOSH_FILE_INFO
-				val = hex.EncodeToString(data)
+				val = formatOtherInfo(data)
 			}
 		}
 		s += name + "=" + val + "\n"
 	}
 	return s, nil
+}
+
+func macdate(data []byte) string {
+	t := binary.BigEndian.Uint32(data)
+	if t == 0 {
+		return "zero"
+	} else {
+		return time.Unix(int64(t)-2082844800, 0).UTC().Format("2006-01-02 15:04:05")
+	}
+}
+
+func formatDates(data []byte) string {
+	if len(data) < 16 {
+		return "malformed " + hex.EncodeToString(data)
+	}
+	return fmt.Sprintf("(C=%s,M=%s,B=%s,A=%s)",
+		macdate(data[:]),
+		macdate(data[4:]),
+		macdate(data[8:]),
+		macdate(data[12:]))
+}
+
+func formatFinderInfo(data []byte) string {
+	if len(data) < 32 {
+		return "malformed " + hex.EncodeToString(data)
+	}
+	isDir := string(data[:4]) != "\x00\x00\x00\x00" && (data[0] < 32 || data[2] < 32)
+
+	var bild strings.Builder
+	if isDir {
+		fmt.Fprintf(&bild, "(%d,%d,%d,%d) ",
+			int16(binary.BigEndian.Uint16(data[0:2])),
+			int16(binary.BigEndian.Uint16(data[2:4])),
+			int16(binary.BigEndian.Uint16(data[4:6])),
+			int16(binary.BigEndian.Uint16(data[6:8])))
+	} else {
+		fmt.Fprintf(&bild, "(%q,%q) ", data[:4], data[4:8])
+	}
+
+	bild.WriteByte('(')
+	ff := binary.BigEndian.Uint16(data[8:])
+	if ff&1 != 0 {
+		bild.WriteString("isOnDesk,")
+	}
+	if ff&0xe != 0 {
+		fmt.Fprintf(&bild, "color%d,", ff>>1&7)
+	}
+	if ff&0x10 != 0 {
+		bild.WriteString("unknown0x10,")
+	}
+	if ff&0x20 != 0 {
+		bild.WriteString("requireSwitchLaunch,")
+	}
+	if ff&0x40 != 0 {
+		bild.WriteString("isShared,")
+	}
+	if ff&0x80 != 0 {
+		bild.WriteString("hasNoINITs,")
+	}
+	if ff&0x100 != 0 {
+		bild.WriteString("hasBeenInited,")
+	}
+	if ff&0x200 != 0 {
+		bild.WriteString("aoceLetter,")
+	}
+	if ff&0x400 != 0 {
+		bild.WriteString("hasCustomIcon,")
+	}
+	if ff&0x800 != 0 {
+		bild.WriteString("isStationery,")
+	}
+	if ff&0x1000 != 0 {
+		bild.WriteString("nameLocked,")
+	}
+	if ff&0x2000 != 0 {
+		bild.WriteString("hasBundle,")
+	}
+	if ff&0x4000 != 0 {
+		bild.WriteString("isInvisible,")
+	}
+	if ff&0x8000 != 0 {
+		bild.WriteString("isAlias,")
+	}
+
+	fmt.Fprintf(&bild, ") (%d,%d) ", // location in the window
+		int16(binary.BigEndian.Uint16(data[10:12])),
+		int16(binary.BigEndian.Uint16(data[12:14])))
+
+	rsrv := int16(binary.BigEndian.Uint16(data[14:16]))
+	fmt.Fprintf(&bild, "(rsrv=%#x) ", rsrv)
+
+	if string(data[16:32]) != string(make([]byte, 16)) {
+		fmt.Fprintf(&bild, "(ext=%s) ", hex.EncodeToString(data[16:32]))
+	}
+
+	return strings.TrimSuffix(strings.ReplaceAll(bild.String(), ",)", ")"), " ")
+}
+
+func formatOtherInfo(data []byte) string {
+	if len(data) != 4 || data[0]&0x3f != 0 || (data[1]|data[2]|data[3]) != 0 {
+		return "malformed " + hex.EncodeToString(data)
+	}
+	var v []string
+	if data[0]&0x80 != 0 {
+		v = append(v, "locked")
+	}
+	if data[0]&0x40 != 0 {
+		v = append(v, "protected")
+	}
+	return "(" + strings.Join(v, ",") + ")"
 }
