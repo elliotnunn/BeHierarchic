@@ -1,13 +1,13 @@
 package sit
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"slices"
 	"strings"
 	"time"
 
@@ -64,45 +64,72 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			continue
 		}
 
+		// Progressive disclosure of the header struct
+		r := bufio.NewReaderSize(io.NewSectionReader(disk, job.next, 0x100000000), 512)
 		var hdr1 [48]byte
-		_, err := disk.ReadAt(hdr1[:], job.next)
-		if err != nil || string(hdr1[:4]) != "\xA5\xA5\xA5\xA5" {
-			return nil, fmt.Errorf("unreadable StuffIt 5 header: %w", err)
+		if _, err := io.ReadFull(r, hdr1[:]); err != nil {
+			goto trunc
+		} else if string(hdr1[:4]) != "\xA5\xA5\xA5\xA5" {
+			return nil, errors.New("malformed StuffIt 5 header")
+		}
+		version := hdr1[4]
+		isDir := hdr1[9]&0x40 != 0
+		siblingOffset := int64(binary.BigEndian.Uint32(hdr1[22:]))
+		nameLen := int(binary.BigEndian.Uint16(hdr1[30:]))
+		dChildOffset := int64(binary.BigEndian.Uint32(hdr1[34:]))
+		dCount := int(hdr1[47])
+		fDFUnpacked, fDFPacked := int64(binary.BigEndian.Uint32(hdr1[34:])), int64(binary.BigEndian.Uint32(hdr1[38:]))
+		fDFFmt := hdr1[46]
+
+		ptr := 48
+		if !isDir { // only files have password data
+			discardPassword := int(hdr1[47])
+			if _, err := r.Discard(discardPassword); err != nil {
+				goto trunc
+			}
+			ptr += discardPassword
 		}
 
-		name := make([]byte, min(63, binary.BigEndian.Uint16(hdr1[30:])))
-		nameLoc := job.next + 48
-		if hdr1[9]&0x40 == 0 {
-			nameLoc += int64(hdr1[47]) // skip over "password information"
+		name := make([]byte, nameLen)
+		if _, err := io.ReadFull(r, name); err != nil {
+			goto trunc
 		}
-		_, err = disk.ReadAt(name, nameLoc)
-		if err != nil {
-			return nil, fmt.Errorf("unreadable StuffIt 5 filename: %w", err)
-		}
+		ptr += nameLen
 
-		hdrsize := int64(binary.BigEndian.Uint16(hdr1[6:]))
-		var hdr2 []byte
-		if hdr1[4] == 1 { // different versions of this struct
-			hdr2 = make([]byte, 49)
-		} else {
-			hdr2 = make([]byte, 45, 49)
+		hdr2loc := int(binary.BigEndian.Uint16(hdr1[6:]))
+		if _, err := r.Discard(hdr2loc - ptr); err != nil {
+			goto trunc
 		}
-		_, err = disk.ReadAt(hdr2, job.next+hdrsize)
-		if err != nil {
-			return nil, fmt.Errorf("unreadable StuffIt 5 header2: %w", err)
-		}
-		hdrsize += int64(len(hdr2))
+		ptr = hdr2loc
 
-		if len(hdr2) == 45 { // adjust the structure to the longer, older version
-			hdr2 = slices.Insert(hdr2, 32, 0, 0, 0, 0)
+		var hdr2 [32]byte // for directories this can be right at the end of the file
+		if _, err := io.ReadFull(r, hdr2[:]); err != nil {
+			goto trunc
 		}
+		ptr += 32
+
+		var hdr3 [13]byte             // if no resource fork then this will stay zeroed
+		if !isDir && hdr2[1]&1 != 0 { // has resource fork data
+			if version > 1 { // extra 4 bytes in the structure
+				if _, err := r.Discard(4); err != nil {
+					goto trunc
+				}
+				ptr += 4
+			}
+			if _, err := io.ReadFull(r, hdr3[:]); err != nil {
+				goto trunc
+			}
+			ptr += 13
+		}
+		fRFUnpacked, fRFPacked := int64(binary.BigEndian.Uint32(hdr3[0:])), int64(binary.BigEndian.Uint32(hdr3[4:]))
+		fRFFmt := hdr3[12]
 
 		e := &entry{
-			isdir:   hdr1[9]&0x40 != 0,
+			isdir:   isDir,
 			name:    strings.ReplaceAll(string(name), "/", ":"),
 			modtime: time.Unix(int64(binary.BigEndian.Uint32(hdr1[14:]))-2082844800, 0).UTC(),
 		}
-		job.next = int64(binary.BigEndian.Uint32(hdr1[22:]))
+		job.next = siblingOffset
 		job.remain--
 		if job.parent.childMap == nil {
 			job.parent.childMap = make(map[string]*entry)
@@ -111,11 +138,9 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		job.parent.childSlice = append(job.parent.childSlice, e)
 
 		if e.isdir {
-			stack = append(stack, j{
-				next:   int64(binary.BigEndian.Uint32(hdr1[34:])),
-				remain: int(hdr1[47]),
-				parent: e,
-			})
+			hdr2[12] &^= 0x02 // aoceLetter bit can be falsely set -- why?
+			hdr2[13] &^= 0xe0 // same with requireSwitchLaunch, isShared, hasNoINITs
+			stack = append(stack, j{next: dChildOffset, remain: dCount, parent: e})
 			e.fork = [2]multireaderat.SizeReaderAt{
 				nil, // no data fork for directories
 				appledouble.Make(
@@ -127,13 +152,8 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 				),
 			}
 		} else {
-			rsize, dsize := int64(binary.BigEndian.Uint32(hdr2[40:])), int64(binary.BigEndian.Uint32(hdr1[38:]))
-			rbig, dbig := int64(binary.BigEndian.Uint32(hdr2[36:])), int64(binary.BigEndian.Uint32(hdr1[34:]))
-			rfmt, dfmt := hdr2[44], hdr1[46]
-			rreader := io.NewSectionReader(disk, job.next+hdrsize, rsize)
-			dreader := io.NewSectionReader(disk, job.next+hdrsize+rsize, dsize)
 			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(dfmt, dreader, dbig),
+				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fDFUnpacked),
 				appledouble.Make(
 					map[int][]byte{
 						appledouble.MACINTOSH_FILE_INFO: {hdr1[9] & 0x80, 0, 0, 0},                  // lock bit
@@ -141,7 +161,7 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 						appledouble.FILE_DATES_INFO:     append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(rfmt, rreader, rbig),
+						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fRFUnpacked),
 					},
 				),
 			}
@@ -149,6 +169,8 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 	}
 
 	return &FS{root: root}, nil
+trunc:
+	return nil, fmt.Errorf("truncated StuffIt 5 header")
 }
 
 func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
