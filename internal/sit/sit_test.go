@@ -32,18 +32,17 @@ func fsToMap(fsys fs.FS) map[string][]byte {
 }
 
 func TestDumpEach(t *testing.T) {
-	for name := range archives {
-		data := archives[name]
+	for name, data := range archives {
 		// if string(data[10:14]) == "rLau" {
 		// 	continue
 		// }
+		fmt.Println("##", name)
 		t.Run(name, func(t *testing.T) {
 			fsys, err := New(bytes.NewReader(data))
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			fmt.Println("##", name)
 			dumpFS(fsys)
 			fmt.Println("")
 		})

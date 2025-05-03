@@ -65,13 +65,15 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		}
 
 		// Progressive disclosure of the header struct
-		r := bufio.NewReaderSize(io.NewSectionReader(disk, job.next, 0x100000000), 512)
+		base := job.next
+		r := bufio.NewReaderSize(io.NewSectionReader(disk, base, 0x100000000), 512)
 		var hdr1 [48]byte
 		if _, err := io.ReadFull(r, hdr1[:]); err != nil {
 			goto trunc
 		} else if string(hdr1[:4]) != "\xA5\xA5\xA5\xA5" {
 			return nil, errors.New("malformed StuffIt 5 header")
 		}
+		ptr := len(hdr1)
 		version := hdr1[4]
 		isDir := hdr1[9]&0x40 != 0
 		siblingOffset := int64(binary.BigEndian.Uint32(hdr1[22:]))
@@ -81,7 +83,6 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		fDFUnpacked, fDFPacked := int64(binary.BigEndian.Uint32(hdr1[34:])), int64(binary.BigEndian.Uint32(hdr1[38:]))
 		fDFFmt := hdr1[46]
 
-		ptr := 48
 		if !isDir { // only files have password data
 			discardPassword := int(hdr1[47])
 			if _, err := r.Discard(discardPassword); err != nil {
@@ -106,20 +107,20 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		if _, err := io.ReadFull(r, hdr2[:]); err != nil {
 			goto trunc
 		}
-		ptr += 32
-
-		var hdr3 [13]byte             // if no resource fork then this will stay zeroed
-		if !isDir && hdr2[1]&1 != 0 { // has resource fork data
-			if version > 1 { // extra 4 bytes in the structure
-				if _, err := r.Discard(4); err != nil {
-					goto trunc
-				}
-				ptr += 4
+		ptr += len(hdr2)
+		if version <= 1 { // the Mac structure has 4 bytes more than the Windows one
+			if _, err := r.Discard(4); err != nil {
+				goto trunc
 			}
+			ptr += 4
+		}
+
+		var hdr3 [14]byte             // if no resource fork then this will stay zeroed
+		if !isDir && hdr2[1]&1 != 0 { // has resource fork data
 			if _, err := io.ReadFull(r, hdr3[:]); err != nil {
 				goto trunc
 			}
-			ptr += 13
+			ptr += len(hdr3)
 		}
 		fRFUnpacked, fRFPacked := int64(binary.BigEndian.Uint32(hdr3[0:])), int64(binary.BigEndian.Uint32(hdr3[4:]))
 		fRFFmt := hdr3[12]
