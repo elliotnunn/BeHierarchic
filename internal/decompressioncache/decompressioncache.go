@@ -3,6 +3,7 @@ package decompressioncache
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"sync/atomic"
 
@@ -11,15 +12,29 @@ import (
 
 type Stepper func() (Stepper, []byte, error)
 
-func New(stepper Stepper, debugName string) *ReaderAt {
+func New(stepper Stepper, size int64, debugName string) *ReaderAt {
 	return &ReaderAt{
 		uniq:        atomic.AddUint64(&monotonic, 1),
 		debugName:   debugName,
 		checkpoints: []checkpoint{{stepper: stepper, offset: 0}},
+		size:        size,
 	}
 }
 
+func (r *ReaderAt) Size() int64 {
+	return r.size
+}
+
 func (r *ReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off >= r.size {
+		println("decompressioncache eof")
+		return 0, io.EOF
+	} else if off+int64(len(p)) > r.size {
+		println("decompressioncache near eof")
+		p = p[:r.size-off]
+	}
+
+	println("having a crack at a read")
 	i := sort.Search(len(r.checkpoints), func(i int) bool {
 		return r.checkpoints[i].offset > off
 	}) - 1
@@ -58,6 +73,7 @@ type ReaderAt struct {
 	uniq        uint64
 	debugName   string
 	checkpoints []checkpoint // once there is no more data, nil checkpoint
+	size        int64
 }
 
 type checkpoint struct {

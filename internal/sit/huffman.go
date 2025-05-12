@@ -31,69 +31,180 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 package sit
 
-import "io"
+import (
+	"fmt"
+	"io"
 
-func huffman(o io.ByteWriter, i bitreader) error {
-	numfreetree := 0 /* number of free np.one nodes */
+	"github.com/elliotnunn/resourceform/internal/decompressioncache"
+)
 
-	/* 515 because StuffIt Classic needs more than the needed 511 */
-	type node struct {
-		one, zero int
-		byte      uint8
+type node struct {
+	one, zero int
+	byte      uint8
+}
+
+// Okay, the mission is to convert this into a "stepper" function
+// ... with abstractions like BitReader, which is a bit of a tricky thing...
+
+func printHuffmanTable(nodelist []node) {
+	for i, node := range nodelist {
+		fmt.Printf("NODE % 2d: (0)=(%d) (1)=(%d) (byte)=%02x\n",
+			i, node.zero, node.one, node.byte)
 	}
-	nodelist := make([]node, 515)
-	np, npb := 0, 0
+}
 
+func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
+	byteGetter := NewByteGetter(r)
+	bitReader := NewBitReader(byteGetter)
+
+	var nodelist []node
+	numfreetree := 0
 	for { /* removed recursion, optimized a lot */
+		var np int
 		for {
-			np = npb
-			npb++
-			b, err := i.ReadBits(1)
+			np = len(nodelist)
+			nodelist = append(nodelist, node{})
+			bit, err := bitReader.ReadBits(1)
 			if err != nil {
-				return err
+				panic(err)
 			}
-			if b == 1 {
-				b, err := i.ReadBits(8)
+			if bit == 1 {
+				byt, err := bitReader.ReadBits(8)
 				if err != nil {
-					return err
+					panic(err)
 				}
-				nodelist[np].byte = byte(b)
+				nodelist[np].byte = byte(byt)
 				nodelist[np].zero, nodelist[np].one = -1, -1
 				break
 			} else {
-				nodelist[np].zero = npb
+				nodelist[np].zero = len(nodelist)
 				numfreetree++
 			}
 		}
 		numfreetree--
 		if numfreetree != -1 {
-			for nodelist[np].one != -1 {
+			for nodelist[np].one != 0 {
 				np--
 			}
-			nodelist[np].one = npb
+			nodelist[np].one = len(nodelist)
 		}
-
 		if numfreetree < 0 {
 			break
 		}
 	}
+	printHuffmanTable(nodelist)
+	println("--")
 
-	for {
-		b, err := i.ReadBits(1)
-		if err != nil {
-			return err
-		}
-		np = 0
-		for nodelist[np].one != -1 {
-			if b == 1 {
-				np = nodelist[np].one
-			} else {
-				np = nodelist[np].zero
+	bitReader.SacrificeBuffer()
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return stepHuffman(bitReader, nodelist, size)
+	}
+}
+
+func stepHuffman(br BitReader, huff []node, remain int64) (decompressioncache.Stepper, []byte, error) {
+	accum := make([]byte, 0, min(4096, int(remain)))
+	for range cap(accum) {
+		fmt.Println("huffman search...")
+		node := 0
+		for huff[node].one != -1 {
+			which, err := br.ReadBits(1)
+			if err != nil {
+				return nil, accum, err
 			}
+			if which == 0 {
+				node = huff[node].zero
+			} else {
+				node = huff[node].one
+			}
+			fmt.Printf("   %d -> %d\n", which, node)
 		}
-		err = o.WriteByte(nodelist[np].byte)
-		if err != nil {
-			return err
+		fmt.Printf("      %02x\n", huff[node].byte)
+		accum = append(accum, huff[node].byte)
+	}
+
+	br.SacrificeBuffer()
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return stepHuffman(br, huff, remain-int64(len(accum)))
+	}, accum, nil
+}
+
+/*
+saving the state of a BitReader is quite complex!
+needs to be forkable.
+*/
+
+type ByteGetter interface {
+	GetBytes(offset int64) ([]byte, error)
+}
+
+type MyByteGetter struct {
+	reader io.ReaderAt
+}
+
+func NewByteGetter(from io.ReaderAt) ByteGetter {
+	if already, ok := from.(ByteGetter); ok {
+		return already
+	} else {
+		return MyByteGetter{reader: from}
+	}
+}
+
+func (b MyByteGetter) GetBytes(offset int64) ([]byte, error) {
+	ret := make([]byte, 4096)
+	n, err := b.reader.ReadAt(ret, offset)
+	ret = ret[:n]
+	return ret, err
+}
+
+///////////////////////////////////////////////////////////////
+
+type BitReader struct { // copyable
+	bg      ByteGetter // not at all constant
+	current []byte
+	curbase int64
+	bit     uint8 // mask of the next bit to read
+}
+
+func NewBitReader(bg ByteGetter) BitReader {
+	return BitReader{bg: bg}
+}
+
+func (b *BitReader) SacrificeBuffer() {
+	b.current = nil
+}
+
+func (b *BitReader) ReadBits(n int) (uint32, error) {
+	if len(b.current) == 0 { // is new or has been SacrificeBuffer'd
+		if b.bit == 0 {
+			b.bit = 0x80
+		}
+		var err error
+		b.current, err = b.bg.GetBytes(b.curbase)
+		if len(b.current) == 0 {
+			return 0, err
 		}
 	}
+
+	// might be worth optimising the below loop at some point in future
+	var ret uint32
+	for i := range n {
+		ret <<= 1
+		if b.current[0]&b.bit != 0 {
+			ret |= 1
+		}
+		b.bit >>= 1
+		if b.bit == 0 {
+			b.bit = 0x80
+			b.current = b.current[1:]
+			b.curbase++
+			if i < n-1 && len(b.current) == 0 { // will we need more bits soon?
+				var err error
+				b.current, err = b.bg.GetBytes(b.curbase)
+				if len(b.current) == 0 {
+					return 0, err
+				}
+			}
+		}
+	}
+	return ret, nil
 }

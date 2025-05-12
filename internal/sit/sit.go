@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/resourceform/internal/appledouble"
+	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
 
@@ -154,7 +155,7 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			}
 		} else {
 			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fDFUnpacked),
+				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fDFUnpacked, e.name),
 				appledouble.Make(
 					map[int][]byte{
 						appledouble.MACINTOSH_FILE_INFO: {hdr1[9] & 0x80, 0, 0, 0},                  // lock bit
@@ -162,7 +163,7 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 						appledouble.FILE_DATES_INFO:     append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fRFUnpacked),
+						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fRFUnpacked, e.name),
 					},
 				),
 			}
@@ -231,14 +232,14 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 			dreader := io.NewSectionReader(disk, offset+rsize, dsize)
 			offset += rsize + dsize
 			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(hdr[1], dreader, int64(binary.BigEndian.Uint32(hdr[88:]))),
+				readerFor(hdr[1], dreader, int64(binary.BigEndian.Uint32(hdr[88:])), e.name),
 				appledouble.Make(
 					map[int][]byte{
 						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
 						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(hdr[0], rreader, int64(binary.BigEndian.Uint32(hdr[84:]))),
+						appledouble.RESOURCE_FORK: readerFor(hdr[0], rreader, int64(binary.BigEndian.Uint32(hdr[84:])), e.name),
 					},
 				),
 			}
@@ -374,6 +375,24 @@ func (f *openfile) Close() error { // implements fs.File
 	return nil
 }
 
-func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64) multireaderat.SizeReaderAt {
-	return bytes.NewReader(make([]byte, size))
+func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name string) multireaderat.SizeReaderAt {
+	// corpus includes algo 0, 2, 3, 5, 13, 15
+	println("algo", method, "file", name)
+	switch method {
+	default:
+		return bytes.NewReader(make([]byte, size)) // dodgy temporary
+	case 0: // no compression
+		return compr
+	case 3: // Huffman compression
+		return decompressioncache.New(InitHuffman(compr, size), size, name)
+		// case 1: // RLE compression
+		// case 2: // LZC compression
+
+		// case 5: // LZ with adaptive Huffman
+		// case 6: // Fixed Huffman table
+		// case 8: // Miller-Wegman encoding
+		// case 13: // anonymous
+		// case 14: // anonymous
+		// case 15: // Arsenic
+	}
 }
