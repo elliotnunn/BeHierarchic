@@ -319,7 +319,7 @@ func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_i
 	}
 }
 
-func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
+func SIT_write_and_unrle_and_unrnd(accum []byte, block []byte, rnd int16) []byte {
 	var count int32 = 0
 	var last uint8 = 0
 	var rndindex int32
@@ -340,11 +340,11 @@ func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 
 		if count == 4 {
 			for range ch {
-				fmt.Printf("arsenic %c\n", 255&last)
+				accum = append(accum, last)
 			}
 			count = 0
 		} else {
-			fmt.Printf("arsenic %c\n", 255&ch)
+			accum = append(accum, ch)
 			if ch != last {
 				count = 0
 				last = ch
@@ -352,21 +352,22 @@ func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 			count++
 		}
 	}
+	return accum
 }
 
 func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
 	byteGetter := NewByteGetter(r)
 	bitReader := NewBitReader(byteGetter)
 
-	sa := &SIT_ArsenicData{
+	sa := SIT_ArsenicData{
 		br:         bitReader,
 		unpacksize: size,
 	}
 
-	SIT_reinit_model(sa, &Models.initial_model)
-	SIT_reinit_model(sa, &Models.selmodel)
+	SIT_reinit_model(&sa, &Models.initial_model)
+	SIT_reinit_model(&sa, &Models.selmodel)
 	for i := range 7 {
-		SIT_reinit_model(sa, &Models.mtfmodel[i])
+		SIT_reinit_model(&sa, &Models.mtfmodel[i])
 	}
 
 	sa.Range = 1 << 25
@@ -374,96 +375,105 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	sa.Half = 1 << 24
 	sa.Code, _ = sa.br.ReadBits(26)
 
-	if SIT_arith_getbits(sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(sa, &Models.initial_model, 8) != 's' {
+	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(&sa, &Models.initial_model, 8) != 's' {
 		panic("XADERR_ILLEGALDATA")
 	}
-	w := SIT_arith_getbits(sa, &Models.initial_model, 4)
+	w := SIT_arith_getbits(&sa, &Models.initial_model, 4)
 	sa.blockbits = uint16(w + 9)
+
+	eob := SIT_getsym(&sa, &Models.initial_model)
+	if eob != 0 {
+		panic("got end of block already?")
+	}
 
 	return func() (decompressioncache.Stepper, []byte, error) {
 		return stepArsenic(sa, size)
 	}
 }
 
-func stepArsenic(sa *SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
-	fmt.Println("initial_model: ", Model2String(sa, &Models.initial_model))
-	fmt.Println("selmodel: ", Model2String(sa, &Models.initial_model))
-	for i := range 7 {
-		fmt.Printf("%s\n", Model2String(sa, &Models.mtfmodel[i]))
-	}
+func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
+	// fmt.Println("initial_model: ", Model2String(&sa, &Models.initial_model))
+	// fmt.Println("selmodel: ", Model2String(&sa, &Models.initial_model))
+	// for i := range 7 {
+	// 	fmt.Printf("%s\n", Model2String(&sa, &Models.mtfmodel[i]))
+	// }
+	fmt.Println("START OF BLOCK")
 
 	block := make([]byte, 0, 1<<sa.blockbits)
 	unsortedblock := make([]byte, 1<<sa.blockbits)
+	var accum []byte
 
-	eob := SIT_getsym(sa, &Models.initial_model)
-	err := int32(0)
-	for eob == 0 && err == 0 {
-		rnd := SIT_getsym(sa, &Models.initial_model)
-		primary_index := int32(SIT_arith_getbits(sa, &Models.initial_model, int32(sa.blockbits)))
-		stopme, repeatstate, repeatcount := 0, 0, 0
-		for stopme == 0 {
-			sel := SIT_getsym(sa, &Models.selmodel)
-			sym := int32(0)
-			switch sel {
-			case 0:
-				sym = -1
-				if repeatstate == 0 {
-					repeatstate, repeatcount = 1, 1
-				} else {
-					repeatstate += repeatstate
-					repeatcount += repeatstate
-				}
-			case 1:
-				if repeatstate == 0 {
-					repeatstate = 1
-					repeatcount = 2
-				} else {
-					repeatstate += repeatstate
-					repeatcount += repeatstate
-					repeatcount += repeatstate
-				}
-				sym = -1
-			case 2:
-				sym = 1
-			case 10:
+	rnd := SIT_getsym(&sa, &Models.initial_model)
+	primary_index := int32(SIT_arith_getbits(&sa, &Models.initial_model, int32(sa.blockbits)))
+	stopme, repeatstate, repeatcount := 0, 0, 0
+	for stopme == 0 {
+		sel := SIT_getsym(&sa, &Models.selmodel)
+		sym := int32(0)
+		switch sel {
+		case 0:
+			sym = -1
+			if repeatstate == 0 {
+				repeatstate, repeatcount = 1, 1
+			} else {
+				repeatstate += repeatstate
+				repeatcount += repeatstate
+			}
+		case 1:
+			if repeatstate == 0 {
+				repeatstate = 1
+				repeatcount = 2
+			} else {
+				repeatstate += repeatstate
+				repeatcount += repeatstate
+				repeatcount += repeatstate
+			}
+			sym = -1
+		case 2:
+			sym = 1
+		case 10:
+			stopme = 1
+			sym = 0
+		default:
+			if (sel > 9) || (sel < 3) { /* this basically can't happen */
+				panic("XADERR_ILLEGALDATA")
 				stopme = 1
 				sym = 0
-			default:
-				if (sel > 9) || (sel < 3) { /* this basically can't happen */
-					panic("XADERR_ILLEGALDATA")
-					stopme = 1
-					sym = 0
-				} else {
-					sym = SIT_getsym(sa, &Models.mtfmodel[sel-3])
-				}
+			} else {
+				sym = SIT_getsym(&sa, &Models.mtfmodel[sel-3])
 			}
+		}
 
-			if repeatstate != 0 && (sym >= 0) {
-				repeatstate = 0
-				setto := SIT_dounmtf(sa, 0)
-				for range repeatcount {
-					block = append(block, uint8(setto))
-				}
-				repeatcount = 0
+		if repeatstate != 0 && (sym >= 0) {
+			repeatstate = 0
+			setto := SIT_dounmtf(&sa, 0)
+			for range repeatcount {
+				block = append(block, uint8(setto))
 			}
-			if stopme == 0 && repeatstate == 0 {
-				block = append(block, byte(SIT_dounmtf(sa, sym)))
-			}
+			repeatcount = 0
 		}
-		if err != 0 {
-			break
+		if stopme == 0 && repeatstate == 0 {
+			block = append(block, byte(SIT_dounmtf(&sa, sym)))
 		}
-		fmt.Printf("doing an unblocksort: primary_index=%d block=\n  %s\n", primary_index, hex.EncodeToString(block))
-		SIT_unblocksort(sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
-		SIT_write_and_unrle_and_unrnd(unsortedblock, int16(rnd))
-		eob = SIT_getsym(sa, &Models.initial_model)
-		SIT_reinit_model(sa, &Models.selmodel)
-		for i := range 7 {
-			SIT_reinit_model(sa, &Models.mtfmodel[i])
-		}
-		SIT_dounmtf(sa, -1)
 	}
+	fmt.Printf("doing an unblocksort: primary_index=%d block=\n  %s\n", primary_index, hex.EncodeToString(block))
+	SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
+	accum = SIT_write_and_unrle_and_unrnd(accum, unsortedblock, int16(rnd))
+	eob := SIT_getsym(&sa, &Models.initial_model)
+	if int64(len(accum)) >= size || eob != 0 {
+		accum = accum[:size]
+		goto done
+	}
+	SIT_reinit_model(&sa, &Models.selmodel)
+	for i := range 7 {
+		SIT_reinit_model(&sa, &Models.mtfmodel[i])
+	}
+	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
 
-	return nil, nil, nil
+	fmt.Println("got", hex.EncodeToString(accum))
+
+done:
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return stepArsenic(sa, size-int64(len(accum)))
+	}, accum, nil
 }
