@@ -39,59 +39,6 @@ import (
 	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
 
-const (
-	SIT_VERSION        = 1
-	SIT_REVISION       = 12
-	SIT5_VERSION       = SIT_VERSION
-	SIT5_REVISION      = SIT_REVISION
-	SIT5EXE_VERSION    = SIT_VERSION
-	SIT5EXE_REVISION   = SIT_REVISION
-	MACBINARY_VERSION  = SIT_VERSION
-	MACBINARY_REVISION = SIT_REVISION
-	PACKIT_VERSION     = SIT_VERSION
-	PACKIT_REVISION    = SIT_REVISION
-
-	SITFH_COMPRMETHOD  = 0   /* uint8 rsrc fork compression method */
-	SITFH_COMPDMETHOD  = 1   /* uint8 data fork compression method */
-	SITFH_FNAMESIZE    = 2   /* uint8 filename size */
-	SITFH_FNAME        = 3   /* uint8 83 byte filename */
-	SITFH_FTYPE        = 66  /* uint32 file type */
-	SITFH_CREATOR      = 70  /* uint32 file creator */
-	SITFH_FNDRFLAGS    = 74  /* uint16 Finder flags */
-	SITFH_CREATIONDATE = 76  /* uint32 creation date */
-	SITFH_MODDATE      = 80  /* uint32 modification date */
-	SITFH_RSRCLENGTH   = 84  /* uint32 decompressed rsrc length */
-	SITFH_DATALENGTH   = 88  /* uint32 decompressed data length */
-	SITFH_COMPRLENGTH  = 92  /* uint32 compressed rsrc length */
-	SITFH_COMPDLENGTH  = 96  /* uint32 compressed data length */
-	SITFH_RSRCCRC      = 100 /* uint16 crc of rsrc fork */
-	SITFH_DATACRC      = 102 /* uint16 crc of data fork */ /* 6 reserved bytes */
-	SITFH_HDRCRC       = 110 /* uint16 crc of file header */
-	SIT_FILEHDRSIZE    = 112
-
-	SITAH_SIGNATURE  = 0  /* uint32 signature = 'SIT!' */
-	SITAH_NUMFILES   = 4  /* uint16 number of files in archive */
-	SITAH_ARCLENGTH  = 6  /* uint32 arcLength length of entire archive incl. header */
-	SITAH_SIGNATURE2 = 10 /* uint32 signature2 = 'rLau' */
-	SITAH_VERSION    = 14 /* uint8 version number */
-	SIT_ARCHDRSIZE   = 22 /* +7 reserved bytes */
-
-	/* compression methods */
-	SITnocomp  = 0 /* just read each byte and write it to archive */
-	SITrle     = 1 /* RLE compression */
-	SITlzc     = 2 /* LZC compression */
-	SIThuffman = 3 /* Huffman compression */
-
-	SITlzah   = 5 /* LZ with adaptive Huffman */
-	SITfixhuf = 6 /* Fixed Huffman table */
-
-	SITmw = 8 /* Miller-Wegman encoding */
-
-	SITprot    = 16 /* password protected bit */
-	SITsfolder = 32 /* start of folder */
-	SITefolder = 33 /* end of folder */
-)
-
 type SITPrivate struct {
 	CRC    uint16
 	Method uint8
