@@ -165,12 +165,6 @@ func (s *SIT_model) String() string {
 type SIT_ArsenicData struct {
 	br BitReader
 
-	csumaccum     uint16
-	window        *uint8
-	windowpos     *uint8
-	windowe       *uint8
-	windowsize    int32
-	tsize         int32
 	One           uint32
 	Half          uint32
 	Range         uint32
@@ -219,9 +213,7 @@ func SIT_update_model(mymod *SIT_model, symindex int32) {
 
 func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint32) { /* aka remove symbol */
 	var lowincr uint32
-	var renorm_factor uint32
-
-	renorm_factor = sa.Range / symtot
+	renorm_factor := sa.Range / symtot
 	lowincr = renorm_factor * symlow
 	sa.Code -= lowincr
 	if symhigh == symtot {
