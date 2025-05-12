@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -43,7 +44,9 @@ type SITPrivate struct {
 	Method uint8
 }
 
-const SITESC = 0x90 /* repeat packing escape */
+const (
+	half = 1 << 24
+)
 
 var SIT_rndtable = []uint16{
 	0xee, 0x56, 0xf8, 0xc3, 0x9d, 0x9f, 0xae, 0x2c,
@@ -156,7 +159,6 @@ type SIT_ArsenicData struct {
 	moveme [256]uint8
 
 	blockbits   uint16
-	unpacksize  int64
 	frequencies [nfreq]uint32
 }
 
@@ -194,7 +196,7 @@ func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint
 	}
 
 	nbits := 0
-	for sa.Range <= sa.Half {
+	for sa.Range <= half {
 		sa.Range <<= 1
 		sa.Code <<= 1
 		nbits++
@@ -353,22 +355,22 @@ func SIT_write_and_unrle_and_unrnd(accum []byte, block []byte, rnd int16) []byte
 }
 
 func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
-	byteGetter := NewByteGetter(r)
-	bitReader := NewBitReader(byteGetter)
-
 	sa := SIT_ArsenicData{
-		br:         bitReader,
-		unpacksize: size,
+		br: NewBitReader(NewByteGetter(r)),
 	}
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return setupArsenic(sa, size)
+	}
+}
 
+func setupArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
 	sa.Range = 1 << 25
-	sa.One = 1 << 25
-	sa.Half = 1 << 24
 	sa.Code, _ = sa.br.ReadBits(26)
 
 	SIT_reinit_model(&sa, &Models.initial_model)
-	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(&sa, &Models.initial_model, 8) != 's' {
-		panic("XADERR_ILLEGALDATA")
+	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 0x41 ||
+		SIT_arith_getbits(&sa, &Models.initial_model, 8) != 0x73 {
+		return nil, nil, errors.New("arsenic data not starting with 'As'")
 	}
 	sa.blockbits = uint16(SIT_arith_getbits(&sa, &Models.initial_model, 4) + 9)
 
@@ -377,9 +379,7 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 		panic("got end of block already?")
 	}
 
-	return func() (decompressioncache.Stepper, []byte, error) {
-		return stepArsenic(sa, size)
-	}
+	return stepArsenic(sa, size)
 }
 
 func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
@@ -424,7 +424,7 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 			sym = 0
 		default:
 			if (sel > 9) || (sel < 3) { /* this basically can't happen */
-				panic("XADERR_ILLEGALDATA")
+				panic("illegal selector")
 			} else {
 				sym = SIT_getsym(&sa, &Models.mtfmodel[sel-3])
 			}
@@ -445,9 +445,12 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 	SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
 	accum = SIT_write_and_unrle_and_unrnd(accum, unsortedblock, int16(rnd))
 	eob := SIT_getsym(&sa, &Models.initial_model)
-	if int64(len(accum)) >= size || eob != 0 {
+	if int64(len(accum)) >= size {
+		fmt.Println("finishing because size reached")
 		accum = accum[:size]
 		goto done
+	} else if eob != 0 {
+		fmt.Println("finishing because of EOB")
 	}
 	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
