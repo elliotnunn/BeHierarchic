@@ -165,11 +165,10 @@ func (s *SIT_model) String() string {
 type SIT_ArsenicData struct {
 	br BitReader
 
-	One           uint32
-	Half          uint32
-	Range         uint32
-	Code          uint32
-	lastarithbits int32 /* init 0 */
+	One   uint32
+	Half  uint32
+	Range uint32
+	Code  uint32
 
 	/* SIT_dounmntf function private */
 	inited int32 /* init 0 */
@@ -222,15 +221,14 @@ func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint
 		sa.Range = (symhigh - symlow) * renorm_factor
 	}
 
-	sa.lastarithbits = 0
+	nbits := 0
 	for sa.Range <= sa.Half {
 		sa.Range <<= 1
 		sa.Code <<= 1
-		if b, _ := sa.br.ReadBits(1); b != 0 {
-			sa.Code |= 1
-		}
-		sa.lastarithbits++
+		nbits++
 	}
+	b, _ := sa.br.ReadBits(nbits)
+	sa.Code |= b
 }
 
 func SIT_getsym(sa *SIT_ArsenicData, model *SIT_model) int32 {
@@ -365,11 +363,11 @@ func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 
 		if count == 4 {
 			for range ch {
-				fmt.Printf("arsenic %02x\n", 255&last)
+				fmt.Printf("arsenic %c\n", 255&last)
 			}
 			count = 0
 		} else {
-			fmt.Printf("arsenic %02x\n", 255&ch)
+			fmt.Printf("arsenic %c\n", 255&ch)
 			if ch != last {
 				count = 0
 				last = ch
