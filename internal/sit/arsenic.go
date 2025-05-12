@@ -178,15 +178,6 @@ type SIT_ArsenicData struct {
 	initial_model SIT_model
 	selmodel      SIT_model
 	mtfmodel      [7]SIT_model
-	initial_syms  [2 + 1]SIT_modelsym
-	sel_syms      [11 + 1]SIT_modelsym
-	mtf0_syms     [2 + 1]SIT_modelsym
-	mtf1_syms     [4 + 1]SIT_modelsym
-	mtf2_syms     [8 + 1]SIT_modelsym
-	mtf3_syms     [0x10 + 1]SIT_modelsym
-	mtf4_syms     [0x20 + 1]SIT_modelsym
-	mtf5_syms     [0x40 + 1]SIT_modelsym
-	mtf6_syms     [0x80 + 1]SIT_modelsym
 
 	blockbits  uint16
 	unpacksize int64
@@ -264,10 +255,10 @@ func SIT_reinit_model(mymod *SIT_model) {
 	}
 }
 
-func SIT_init_model(newmod *SIT_model, sym []SIT_modelsym, entries int32, start int32, increment int32, maxfreq int32) {
+func SIT_init_model(newmod *SIT_model, entries int32, start int32, increment int32, maxfreq int32) {
 	var i int32
 
-	newmod.syms = sym
+	newmod.syms = make([]SIT_modelsym, entries+1)
 	newmod.increment = increment
 	newmod.maxfreq = maxfreq
 	newmod.entries = entries
@@ -394,23 +385,23 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	sa.Half = 1 << 24
 	sa.Code, _ = sa.br.ReadBits(26)
 
-	SIT_init_model(&sa.initial_model, sa.initial_syms[:], 2, 0, 1, 256)
-	SIT_init_model(&sa.selmodel, sa.sel_syms[:], 11, 0, 8, 1024)
+	SIT_init_model(&sa.initial_model, 2, 0, 1, 256)
+	SIT_init_model(&sa.selmodel, 11, 0, 8, 1024)
 	/* selector model: 11 selections, starting at 0, 8 increment, 1024 maxfreq */
 
-	SIT_init_model(&sa.mtfmodel[0], sa.mtf0_syms[:], 2, 2, 8, 1024)
+	SIT_init_model(&sa.mtfmodel[0], 2, 2, 8, 1024)
 	/* model 3: 2 symbols, starting at 2, 8 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[1], sa.mtf1_syms[:], 4, 4, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[1], 4, 4, 4, 1024)
 	/* model 4: 4 symbols, starting at 4, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[2], sa.mtf2_syms[:], 8, 8, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[2], 8, 8, 4, 1024)
 	/* model 5: 8 symbols, starting at 8, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[3], sa.mtf3_syms[:], 0x10, 0x10, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[3], 0x10, 0x10, 4, 1024)
 	/* model 6: $10 symbols, starting at $10, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[4], sa.mtf4_syms[:], 0x20, 0x20, 2, 1024)
+	SIT_init_model(&sa.mtfmodel[4], 0x20, 0x20, 2, 1024)
 	/* model 7: $20 symbols, starting at $20, 2 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[5], sa.mtf5_syms[:], 0x40, 0x40, 2, 1024)
+	SIT_init_model(&sa.mtfmodel[5], 0x40, 0x40, 2, 1024)
 	/* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[6], sa.mtf6_syms[:], 0x80, 0x80, 1, 1024)
+	SIT_init_model(&sa.mtfmodel[6], 0x80, 0x80, 1, 1024)
 	/* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
 	// fmt.Println("initial_model", sa.initial_model.String())
 	// fmt.Println("selmodel", sa.selmodel.String())
