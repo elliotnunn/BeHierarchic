@@ -31,6 +31,12 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 package sit
 
+import (
+	"fmt"
+
+	"github.com/elliotnunn/resourceform/internal/sit"
+)
+
 const (
 	SIT_VERSION        = 1
 	SIT_REVISION       = 12
@@ -136,11 +142,11 @@ type SIT_model struct {
 	maxfreq   int32
 	entries   int32
 	tabloc    [256]uint32
-	syms      *SIT_modelsym
+	syms      []SIT_modelsym
 }
 
 type SIT_ArsenicData struct {
-	io *xadInOut
+	br sit.BitReader
 
 	csumaccum     uint16
 	window        *uint8
@@ -173,13 +179,13 @@ type SIT_ArsenicData struct {
 	mtf6_syms     [0x80 + 1]SIT_modelsym
 }
 
-func SIT_update_model(SIT_model *mymod, int32 symindex) void {
+func SIT_update_model(mymod *SIT_model, symindex int32) {
 	var i int32
 
-	for i = 0; i < symindex; i++ {
-		mymod.syms[i].cumfreq += mymod.increment
+	for i := range symindex {
+		mymod.syms[i].cumfreq += uint32(mymod.increment)
 	}
-	if mymod.syms[0].cumfreq > mymod.maxfreq {
+	if mymod.syms[0].cumfreq > uint32(mymod.maxfreq) {
 		for i = 0; i < mymod.entries; i++ {
 			/* no -1, want to include the 0 entry */
 			/* this converts cumfreqs LONGo frequencies, then shifts right */
@@ -210,7 +216,10 @@ func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint
 	sa.lastarithbits = 0
 	for sa.Range <= sa.Half {
 		sa.Range <<= 1
-		sa.Code = (sa.Code << 1) | xadIOGetBitsHigh(sa.io, 1)
+		sa.Code <<= 1
+		if b, _ := sa.br.ReadBits(1); b != 0 {
+			sa.Code |= 1
+		}
 		sa.lastarithbits++
 	}
 }
@@ -221,13 +230,13 @@ func SIT_getsym(sa *SIT_ArsenicData, model *SIT_model) int32 {
 	var sym int32
 
 	/* getfreq */
-	freq = sa.Code / (sa.Range / model.syms[0].cumfreq)
+	freq = int32(sa.Code / (sa.Range / model.syms[0].cumfreq))
 	for i = 1; i < model.entries; i++ {
-		if model.syms[i].cumfreq <= freq {
+		if model.syms[i].cumfreq <= uint32(freq) {
 			break
 		}
 	}
-	sym = model.syms[i-1].sym
+	sym = int32(model.syms[i-1].sym)
 	SIT_getcode(sa, model.syms[i-1].cumfreq, model.syms[i].cumfreq, model.syms[0].cumfreq)
 	SIT_update_model(model, i)
 	return sym
@@ -240,12 +249,12 @@ func SIT_reinit_model(mymod *SIT_model) {
 	for i = 0; i <= mymod.entries; i++ {
 		/* <= sets last frequency to 0; there isn't really a symbol for that
 		   last one  */
-		mymod.syms[i].cumfreq = cumfreq
+		mymod.syms[i].cumfreq = uint32(cumfreq)
 		cumfreq -= mymod.increment
 	}
 }
 
-func SIT_init_model(newmod *SIT_model, sym *SIT_modelsym, entries int32, start int32, increment int32, maxfreq int32) {
+func SIT_init_model(newmod *SIT_model, sym []SIT_modelsym, entries int32, start int32, increment int32, maxfreq int32) {
 	var i int32
 
 	newmod.syms = sym
@@ -254,8 +263,8 @@ func SIT_init_model(newmod *SIT_model, sym *SIT_modelsym, entries int32, start i
 	newmod.entries = entries
 	/* memset(newmod.tabloc, 0, sizeof(newmod.tabloc)); */
 	for i = 0; i < entries; i++ {
-		newmod.tabloc[(entries-i-1)+start] = i
-		newmod.syms[i].sym = (entries - i - 1) + start
+		newmod.tabloc[(entries-i-1)+start] = uint32(i)
+		newmod.syms[i].sym = uint16((entries - i - 1) + start)
 	}
 	SIT_reinit_model(newmod)
 }
@@ -265,7 +274,7 @@ func SIT_arith_getbits(sa *SIT_ArsenicData, model *SIT_model, nbits int32) uint3
 	var addme uint32 = 1
 	var accum uint32 = 0
 	for range nbits {
-		if SIT_getsym(sa, model) {
+		if SIT_getsym(sa, model) != 0 {
 			accum += addme
 		}
 		addme += addme
@@ -274,24 +283,23 @@ func SIT_arith_getbits(sa *SIT_ArsenicData, model *SIT_model, nbits int32) uint3
 }
 
 func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
-	var i int32
 	var result int32
 
-	if sym == -1 || !sa.inited {
-		for i = 0; i < 256; i++ {
-			sa.moveme[i] = i
+	if sym == -1 || sa.inited == 0 {
+		for i := range 256 {
+			sa.moveme[i] = uint8(i)
 		}
 		sa.inited = 1
 	}
 	if sym == -1 {
 		return 0
 	}
-	result = sa.moveme[sym]
-	for i = sym; i > 0; i-- {
+	result = int32(sa.moveme[sym])
+	for i := sym; i > 0; i-- {
 		sa.moveme[i] = sa.moveme[i-1]
 	}
 
-	sa.moveme[0] = result
+	sa.moveme[0] = uint8(result)
 	return result
 }
 
@@ -327,25 +335,19 @@ func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_i
 	}
 }
 
-func SIT_write_and_unrle_and_unrnd(xadInOut *io, uint8 *block, uint32 blocklen, int16 rnd) void {
+func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 	var count int32 = 0
-	var last int32 = 0
-	var blockptr *uint8 = block
-	var i uint32
-	var j uint32
-	var ch int32
+	var last uint8 = 0
 	var rndindex int32
-	var rndcount int32
+	var rndcount uint16
 
 	rndindex = 0
 	rndcount = SIT_rndtable[rndindex]
-	for i = 0; i < blocklen; i++ {
-		ch = *blockptr
-		blockptr++
-		if rnd && (rndcount == 0) {
+	for _, ch := range block {
+		if rnd != 0 && (rndcount == 0) {
 			ch ^= 1
 			rndindex++
-			if rndindex == sizeof(SIT_rndtable)/sizeof(SIT_rndtable[0]) {
+			if rndindex == int32(len(SIT_rndtable)) {
 				rndindex = 0
 			}
 			rndcount = SIT_rndtable[rndindex]
@@ -353,12 +355,12 @@ func SIT_write_and_unrle_and_unrnd(xadInOut *io, uint8 *block, uint32 blocklen, 
 		rndcount--
 
 		if count == 4 {
-			for j = 0; j < ch; j++ {
-				xadIOPutChar(io, last)
+			for range ch {
+				fmt.Printf("%02x", 255&last)
 			}
 			count = 0
 		} else {
-			xadIOPutChar(io, ch)
+			fmt.Printf("%02x", 255&ch)
 			if ch != last {
 				count = 0
 				last = ch
@@ -368,143 +370,118 @@ func SIT_write_and_unrle_and_unrnd(xadInOut *io, uint8 *block, uint32 blocklen, 
 	}
 }
 
-func SIT_Arsenic(xadInOut *io) int32 {
+func SIT_Arsenic(in sit.BitReader) int32 {
 	var err int32 = 0
-	var sa *SIT_ArsenicData
-	var xadMasterBase *xadMasterBase = io.xio_xadMasterBase
-
-	io.xio_Flags &= ~(XADIOF_NOCRC32)
-	io.xio_Flags |= XADIOF_NOCRC16
-	io.xio_CRC32 = ~0
 
 	var sa SIT_ArsenicData
 
 	var i, sym, sel int32
 	var blockbits int16
 	var w, blocksize uint32
-	var stopme, nchars int32 /* 32 bits */
+	var stopme int32 /* 32 bits */
 	var repeatstate, repeatcount int32
 	var primary_index int32 /* 32 bits */
 	var eob, rnd int32
-	var block, blockptr, unsortedblock *uint8
+	// var block, blockptr, unsortedblock *uint8
 
-	sa.io = io
 	sa.Range = 1 << 25
 	sa.One = 1 << 25
 	sa.Half = 1 << 24
-	sa.Code = xadIOGetBitsHigh(io, 26)
+	sa.Code, _ = in.ReadBits(26)
 
-	SIT_init_model(&sa.initial_model, sa.initial_syms, 2, 0, 1, 256)
-	SIT_init_model(&sa.selmodel, sa.sel_syms, 11, 0, 8, 1024)
+	SIT_init_model(&sa.initial_model, sa.initial_syms[:], 2, 0, 1, 256)
+	SIT_init_model(&sa.selmodel, sa.sel_syms[:], 11, 0, 8, 1024)
 	/* selector model: 11 selections, starting at 0, 8 increment, 1024 maxfreq */
 
-	SIT_init_model(&sa.mtfmodel[0], sa.mtf0_syms, 2, 2, 8, 1024)
+	SIT_init_model(&sa.mtfmodel[0], sa.mtf0_syms[:], 2, 2, 8, 1024)
 	/* model 3: 2 symbols, starting at 2, 8 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[1], sa.mtf1_syms, 4, 4, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[1], sa.mtf1_syms[:], 4, 4, 4, 1024)
 	/* model 4: 4 symbols, starting at 4, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[2], sa.mtf2_syms, 8, 8, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[2], sa.mtf2_syms[:], 8, 8, 4, 1024)
 	/* model 5: 8 symbols, starting at 8, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[3], sa.mtf3_syms, 0x10, 0x10, 4, 1024)
+	SIT_init_model(&sa.mtfmodel[3], sa.mtf3_syms[:], 0x10, 0x10, 4, 1024)
 	/* model 6: $10 symbols, starting at $10, 4 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[4], sa.mtf4_syms, 0x20, 0x20, 2, 1024)
+	SIT_init_model(&sa.mtfmodel[4], sa.mtf4_syms[:], 0x20, 0x20, 2, 1024)
 	/* model 7: $20 symbols, starting at $20, 2 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[5], sa.mtf5_syms, 0x40, 0x40, 2, 1024)
+	SIT_init_model(&sa.mtfmodel[5], sa.mtf5_syms[:], 0x40, 0x40, 2, 1024)
 	/* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
-	SIT_init_model(&sa.mtfmodel[6], sa.mtf6_syms, 0x80, 0x80, 1, 1024)
+	SIT_init_model(&sa.mtfmodel[6], sa.mtf6_syms[:], 0x80, 0x80, 1, 1024)
 	/* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
-	if SIT_arith_getbits(sa, &sa.initial_model, 8) != 0x41 || SIT_arith_getbits(sa, &sa.initial_model, 8) != 0x73 {
-		err = XADERR_ILLEGALDATA
+	if SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x41 || SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x73 {
+		panic("XADERR_ILLEGALDATA")
 	}
-	w = SIT_arith_getbits(sa, &sa.initial_model, 4)
-	blockbits = w + 9
+	w = SIT_arith_getbits(&sa, &sa.initial_model, 4)
+	blockbits = int16(w + 9)
 	blocksize = 1 << blockbits
-	if !err {
-		block := make([]byte, blocksize)
-		unsortedblock := make([]byte, blocksize)
+	block := make([]byte, 0, blocksize)
+	unsortedblock := make([]byte, 0, blocksize)
 
-		eob = SIT_getsym(sa, &sa.initial_model)
-		for !eob && !err {
-			rnd = SIT_getsym(sa, &sa.initial_model)
-			primary_index = SIT_arith_getbits(sa, &sa.initial_model, blockbits)
-			nchars, stopme, repeatstate, repeatcount = 0, 0, 0, 0
-			blockptr = block
-			for !stopme {
-				sel = SIT_getsym(sa, &sa.selmodel)
-				switch sel {
-				case 0:
-					sym = -1
-					if !repeatstate {
-						repeatstate, repeatcount = 1, 1
-					} else {
-						repeatstate += repeatstate
-						repeatcount += repeatstate
-					}
-				case 1:
-					if !repeatstate {
-						repeatstate = 1
-						repeatcount = 2
-					} else {
-						repeatstate += repeatstate
-						repeatcount += repeatstate
-						repeatcount += repeatstate
-					}
-					sym = -1
-				case 2:
-					sym = 1
-				case 10:
+	eob = SIT_getsym(&sa, &sa.initial_model)
+	for eob == 0 && err == 0 {
+		rnd = SIT_getsym(&sa, &sa.initial_model)
+		primary_index = int32(SIT_arith_getbits(&sa, &sa.initial_model, int32(blockbits)))
+		stopme, repeatstate, repeatcount = 0, 0, 0
+		for stopme == 0 {
+			sel = SIT_getsym(&sa, &sa.selmodel)
+			switch sel {
+			case 0:
+				sym = -1
+				if repeatstate == 0 {
+					repeatstate, repeatcount = 1, 1
+				} else {
+					repeatstate += repeatstate
+					repeatcount += repeatstate
+				}
+			case 1:
+				if repeatstate == 0 {
+					repeatstate = 1
+					repeatcount = 2
+				} else {
+					repeatstate += repeatstate
+					repeatcount += repeatstate
+					repeatcount += repeatstate
+				}
+				sym = -1
+			case 2:
+				sym = 1
+			case 10:
+				stopme = 1
+				sym = 0
+			default:
+				if (sel > 9) || (sel < 3) { /* this basically can't happen */
+					panic("XADERR_ILLEGALDATA")
 					stopme = 1
 					sym = 0
-				default:
-					if (sel > 9) || (sel < 3) { /* this basically can't happen */
-						err = XADERR_ILLEGALDATA
-						stopme = 1
-						sym = 0
-					} else {
-						sym = SIT_getsym(sa, &sa.mtfmodel[sel-3])
-					}
+				} else {
+					sym = SIT_getsym(&sa, &sa.mtfmodel[sel-3])
 				}
+			}
 
-				if repeatstate && (sym >= 0) {
-					nchars += repeatcount
-					repeatstate = 0
-					memset(blockptr, SIT_dounmtf(sa, 0), repeatcount)
-					blockptr += repeatcount
-					repeatcount = 0
+			if repeatstate != 0 && (sym >= 0) {
+				repeatstate = 0
+				setto := SIT_dounmtf(&sa, 0)
+				for range repeatcount {
+					block = append(block, uint8(setto))
 				}
-				if !stopme && !repeatstate {
-					sym = SIT_dounmtf(sa, sym)
-					*blockptr = sym
-					blockptr++
-					nchars++
-				}
-				if nchars > blocksize {
-					err = XADERR_ILLEGALDATA
-					stopme = 1
-				}
+				repeatcount = 0
 			}
-			if err {
-				break
-			}
-			err = SIT_unblocksort(sa, block, nchars, primary_index, unsortedblock)
-			if err {
-				break
-			}
-			SIT_write_and_unrle_and_unrnd(io, unsortedblock, nchars, rnd)
-			eob = SIT_getsym(sa, &sa.initial_model)
-			SIT_reinit_model(&sa.selmodel)
-			for i = 0; i < 7; i++ {
-				SIT_reinit_model(&sa.mtfmodel[i])
-			}
-			SIT_dounmtf(sa, -1)
-		}
-		if !err {
-			err = xadIOWriteBuf(io)
-			if !err && SIT_arith_getbits(sa, &sa.initial_model, 32) != ~io.xio_CRC32 {
-				err = XADERR_CHECKSUM
+			if stopme == 0 && repeatstate == 0 {
+				block = append(block, byte(SIT_dounmtf(&sa, sym)))
 			}
 		}
-	} /* if(!err) */
-	xadFreeObjectA(sa, 0)
+		if err != 0 {
+			break
+		}
+		SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
+		SIT_write_and_unrle_and_unrnd(unsortedblock, int16(rnd))
+		eob = SIT_getsym(&sa, &sa.initial_model)
+		SIT_reinit_model(&sa.selmodel)
+		for i = 0; i < 7; i++ {
+			SIT_reinit_model(&sa.mtfmodel[i])
+		}
+		SIT_dounmtf(&sa, -1)
+	}
+	// there was a checksum here that we don't calculate
 
 	return err
 }
