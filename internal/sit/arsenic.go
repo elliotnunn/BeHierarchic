@@ -122,6 +122,7 @@ func init() {
 	n += SIT_init_model(&Models.mtfmodel[5], n, 0x40, 0x40, 2, 1024)
 	/* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
 	n += SIT_init_model(&Models.mtfmodel[6], n, 0x80, 0x80, 1, 1024)
+	/* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
 	if n != nfreq {
 		panic("wrong nfreq")
 	}
@@ -364,22 +365,16 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 		unpacksize: size,
 	}
 
-	SIT_reinit_model(&sa, &Models.initial_model)
-	SIT_reinit_model(&sa, &Models.selmodel)
-	for i := range 7 {
-		SIT_reinit_model(&sa, &Models.mtfmodel[i])
-	}
-
 	sa.Range = 1 << 25
 	sa.One = 1 << 25
 	sa.Half = 1 << 24
 	sa.Code, _ = sa.br.ReadBits(26)
 
+	SIT_reinit_model(&sa, &Models.initial_model)
 	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(&sa, &Models.initial_model, 8) != 's' {
 		panic("XADERR_ILLEGALDATA")
 	}
-	w := SIT_arith_getbits(&sa, &Models.initial_model, 4)
-	sa.blockbits = uint16(w + 9)
+	sa.blockbits = uint16(SIT_arith_getbits(&sa, &Models.initial_model, 4) + 9)
 
 	eob := SIT_getsym(&sa, &Models.initial_model)
 	if eob != 0 {
@@ -398,6 +393,11 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 	// 	fmt.Printf("%s\n", Model2String(&sa, &Models.mtfmodel[i]))
 	// }
 	fmt.Println("START OF BLOCK")
+
+	SIT_reinit_model(&sa, &Models.selmodel)
+	for i := range 7 {
+		SIT_reinit_model(&sa, &Models.mtfmodel[i])
+	}
 
 	block := make([]byte, 0, 1<<sa.blockbits)
 	unsortedblock := make([]byte, 1<<sa.blockbits)
@@ -462,10 +462,6 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 	if int64(len(accum)) >= size || eob != 0 {
 		accum = accum[:size]
 		goto done
-	}
-	SIT_reinit_model(&sa, &Models.selmodel)
-	for i := range 7 {
-		SIT_reinit_model(&sa, &Models.mtfmodel[i])
 	}
 	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
