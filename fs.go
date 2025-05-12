@@ -7,6 +7,7 @@ import (
 
 	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
+	"github.com/elliotnunn/resourceform/internal/sit"
 	"github.com/elliotnunn/resourceform/internal/zipreaderat"
 )
 
@@ -164,19 +165,25 @@ func try1(fsys fs.FS, name string) (fs.FS, error) {
 }
 
 func couldItBe(file io.ReaderAt) (fs.FS, string) {
-	var magic [2]byte
-	if n, _ := file.ReadAt(magic[:], 0); n == 2 {
-		switch {
-		case string(magic[:]) == "ER": // Apple Partition Map
-			fsys, err := apm.New(file)
-			if err == nil {
-				return fsys, "Apple Partition Map"
-			}
-		case string(magic[:]) == "PK": // Zip file (kinda, it's complicated)
-			fsys, err := zipreaderat.New(file, size(file))
-			if err == nil {
-				return fsys, "ZIP archive"
-			}
+	var magic [16]byte
+	if n, _ := file.ReadAt(magic[:], 0); n < 16 {
+		return nil, ""
+	}
+	switch {
+	case string(magic[:2]) == "ER": // Apple Partition Map
+		fsys, err := apm.New(file)
+		if err == nil {
+			return fsys, "Apple Partition Map"
+		}
+	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
+		fsys, err := zipreaderat.New(file, size(file))
+		if err == nil {
+			return fsys, "ZIP archive"
+		}
+	case string(magic[10:14]) == "rLau" || string(magic[:16]) == "StuffIt (c)1997-":
+		fsys, err := sit.New(file)
+		if err == nil {
+			return fsys, "StuffIt archive"
 		}
 	}
 
