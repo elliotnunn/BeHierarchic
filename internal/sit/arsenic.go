@@ -432,7 +432,7 @@ func stepArsenic(in BitReader, size int64) (decompressioncache.Stepper, []byte, 
 		fmt.Printf("mtfmodel[%d] %s\n", i, sa.mtfmodel[i].String())
 	}
 
-	if SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x41 || SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x73 {
+	if SIT_arith_getbits(&sa, &sa.initial_model, 8) != 'A' || SIT_arith_getbits(&sa, &sa.initial_model, 8) != 's' {
 		panic("XADERR_ILLEGALDATA")
 	}
 	w = SIT_arith_getbits(&sa, &sa.initial_model, 4)
