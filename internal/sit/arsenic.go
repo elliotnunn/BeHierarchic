@@ -180,6 +180,22 @@ func init() {
 	}
 }
 
+func Model2String(sa *SIT_ArsenicData, s *SIT_model) string {
+	frequencies := sa.frequencies[s.offset:]
+	ret := []byte(fmt.Sprintf("MODEL inc=%d maxfreq=%d tabloc=", s.increment, s.maxfreq))
+	for _, t := range s.tabloc {
+		ret = append(ret, fmt.Sprintf("%d/", t)...)
+	}
+	for string(ret[len(ret)-3:]) == "/0/" {
+		ret = ret[:len(ret)-2]
+	}
+	ret[len(ret)-1] = '\n'
+	for i := range min(s.entries, int32(len(s.syms))) {
+		ret = append(ret, fmt.Sprintf("  %d=(s=%d/f=%d)\n", i, s.syms[i], frequencies[i])...)
+	}
+	return string(ret[:len(ret)-1])
+}
+
 type SIT_ArsenicData struct {
 	br BitReader
 
@@ -395,9 +411,15 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	byteGetter := NewByteGetter(r)
 	bitReader := NewBitReader(byteGetter)
 
-	sa := SIT_ArsenicData{
+	sa := &SIT_ArsenicData{
 		br:         bitReader,
 		unpacksize: size,
+	}
+
+	SIT_reinit_model(sa, &Models.initial_model)
+	SIT_reinit_model(sa, &Models.selmodel)
+	for i := range 7 {
+		SIT_reinit_model(sa, &Models.mtfmodel[i])
 	}
 
 	sa.Range = 1 << 25
@@ -405,27 +427,22 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	sa.Half = 1 << 24
 	sa.Code, _ = sa.br.ReadBits(26)
 
-	// fmt.Println("initial_model: ", sa.initial_model.String())
-	// fmt.Println("selmodel: ", sa.selmodel.String())
-	// for i := range 7 {
-	// 	fmt.Printf("%s\n", sa.mtfmodel[i].String())
-	// }
-	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(&sa, &Models.initial_model, 8) != 's' {
+	if SIT_arith_getbits(sa, &Models.initial_model, 8) != 'A' || SIT_arith_getbits(sa, &Models.initial_model, 8) != 's' {
 		panic("XADERR_ILLEGALDATA")
 	}
-	w := SIT_arith_getbits(&sa, &Models.initial_model, 4)
+	w := SIT_arith_getbits(sa, &Models.initial_model, 4)
 	sa.blockbits = uint16(w + 9)
 
 	return func() (decompressioncache.Stepper, []byte, error) {
-		return stepArsenic(&sa, size)
+		return stepArsenic(sa, size)
 	}
 }
 
 func stepArsenic(sa *SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
-	SIT_reinit_model(sa, &Models.initial_model)
-	SIT_reinit_model(sa, &Models.selmodel)
+	fmt.Println("initial_model: ", Model2String(sa, &Models.initial_model))
+	fmt.Println("selmodel: ", Model2String(sa, &Models.initial_model))
 	for i := range 7 {
-		SIT_reinit_model(sa, &Models.mtfmodel[i])
+		fmt.Printf("%s\n", Model2String(sa, &Models.mtfmodel[i]))
 	}
 
 	block := make([]byte, 0, 1<<sa.blockbits)
