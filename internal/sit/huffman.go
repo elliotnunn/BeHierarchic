@@ -92,8 +92,6 @@ func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 			break
 		}
 	}
-	printHuffmanTable(nodelist)
-	println("--")
 
 	bitReader.SacrificeBuffer()
 	return func() (decompressioncache.Stepper, []byte, error) {
@@ -104,7 +102,6 @@ func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 func stepHuffman(br BitReader, huff []node, remain int64) (decompressioncache.Stepper, []byte, error) {
 	accum := make([]byte, 0, min(4096, int(remain)))
 	for range cap(accum) {
-		fmt.Println("huffman search...")
 		node := 0
 		for huff[node].one != -1 {
 			which, err := br.ReadBits(1)
@@ -116,9 +113,7 @@ func stepHuffman(br BitReader, huff []node, remain int64) (decompressioncache.St
 			} else {
 				node = huff[node].one
 			}
-			fmt.Printf("   %d -> %d\n", which, node)
 		}
-		fmt.Printf("      %02x\n", huff[node].byte)
 		accum = append(accum, huff[node].byte)
 	}
 

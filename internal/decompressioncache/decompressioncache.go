@@ -27,14 +27,11 @@ func (r *ReaderAt) Size() int64 {
 
 func (r *ReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	if off >= r.size {
-		println("decompressioncache eof")
 		return 0, io.EOF
 	} else if off+int64(len(p)) > r.size {
-		println("decompressioncache near eof")
 		p = p[:r.size-off]
 	}
 
-	println("having a crack at a read")
 	i := sort.Search(len(r.checkpoints), func(i int) bool {
 		return r.checkpoints[i].offset > off
 	}) - 1
