@@ -32,7 +32,6 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -289,9 +288,6 @@ func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
 }
 
 func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_index uint32, outblock []uint8) {
-	fmt.Printf("unblocksort len(block)=%d blocklen=%d last_index=%d len(outblock)=%d\n",
-		len(block), blocklen, last_index, len(outblock))
-
 	var counts [256]uint32
 	var cumcounts [256]uint32
 	xform := make([]uint32, blocklen)
@@ -387,13 +383,6 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 }
 
 func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
-	// fmt.Println("initial_model: ", Model2String(&sa, &Models.initial_model))
-	// fmt.Println("selmodel: ", Model2String(&sa, &Models.initial_model))
-	// for i := range 7 {
-	// 	fmt.Printf("%s\n", Model2String(&sa, &Models.mtfmodel[i]))
-	// }
-	fmt.Println("START OF BLOCK")
-
 	SIT_reinit_model(&sa, &Models.selmodel)
 	for i := range 7 {
 		SIT_reinit_model(&sa, &Models.mtfmodel[i])
@@ -436,8 +425,6 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 		default:
 			if (sel > 9) || (sel < 3) { /* this basically can't happen */
 				panic("XADERR_ILLEGALDATA")
-				stopme = 1
-				sym = 0
 			} else {
 				sym = SIT_getsym(&sa, &Models.mtfmodel[sel-3])
 			}
@@ -455,7 +442,6 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 			block = append(block, byte(SIT_dounmtf(&sa, sym)))
 		}
 	}
-	fmt.Printf("doing an unblocksort: primary_index=%d block=\n  %s\n", primary_index, hex.EncodeToString(block))
 	SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
 	accum = SIT_write_and_unrle_and_unrnd(accum, unsortedblock, int16(rnd))
 	eob := SIT_getsym(&sa, &Models.initial_model)
@@ -465,8 +451,6 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 	}
 	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
-
-	fmt.Println("got", hex.EncodeToString(accum))
 
 done:
 	return func() (decompressioncache.Stepper, []byte, error) {
