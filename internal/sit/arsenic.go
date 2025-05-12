@@ -32,9 +32,11 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
+	"encoding/hex"
 	"fmt"
+	"io"
 
-	"github.com/elliotnunn/resourceform/internal/sit"
+	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
 
 const (
@@ -145,8 +147,23 @@ type SIT_model struct {
 	syms      []SIT_modelsym
 }
 
+func (s *SIT_model) String() string {
+	ret := []byte(fmt.Sprintf("MODEL inc=%d maxfreq=%d tabloc=", s.increment, s.maxfreq))
+	for _, t := range s.tabloc {
+		ret = append(ret, fmt.Sprintf("%d/", t)...)
+	}
+	for string(ret[len(ret)-3:]) == "/0/" {
+		ret = ret[:len(ret)-2]
+	}
+	ret[len(ret)-1] = '\n'
+	for i := range min(s.entries, int32(len(s.syms))) {
+		ret = append(ret, fmt.Sprintf("  %d=(s=%d/f=%d)\n", i, s.syms[i].sym, s.syms[i].cumfreq)...)
+	}
+	return string(ret[:len(ret)-1])
+}
+
 type SIT_ArsenicData struct {
-	br sit.BitReader
+	br BitReader
 
 	csumaccum     uint16
 	window        *uint8
@@ -304,6 +321,9 @@ func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
 }
 
 func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_index uint32, outblock []uint8) {
+	fmt.Printf("unblocksort len(block)=%d blocklen=%d last_index=%d len(outblock)=%d\n",
+		len(block), blocklen, last_index, len(outblock))
+
 	var counts [256]uint32
 	var cumcounts [256]uint32
 	xform := make([]uint32, blocklen)
@@ -319,18 +339,15 @@ func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_i
 		counts[i] = 0
 	}
 
-	bi := 0
 	for i, b := range block {
 		xform[cumcounts[b]+counts[b]] = uint32(i)
 		counts[b]++
-		bi++
 	}
 
 	j := xform[last_index]
 	for i := range block {
 		outblock[i] = block[j]
 		//      block[j] = 0xa5; /* for debugging */
-		i++
 		j = xform[j]
 	}
 }
@@ -356,11 +373,11 @@ func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 
 		if count == 4 {
 			for range ch {
-				fmt.Printf("%02x", 255&last)
+				fmt.Printf("arsenic %02x\n", 255&last)
 			}
 			count = 0
 		} else {
-			fmt.Printf("%02x", 255&ch)
+			fmt.Printf("arsenic %02x\n", 255&ch)
 			if ch != last {
 				count = 0
 				last = ch
@@ -370,10 +387,21 @@ func SIT_write_and_unrle_and_unrnd(block []byte, rnd int16) {
 	}
 }
 
-func SIT_Arsenic(in sit.BitReader) int32 {
+func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
+	byteGetter := NewByteGetter(r)
+	bitReader := NewBitReader(byteGetter)
+
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return stepArsenic(bitReader, size)
+	}
+}
+
+func stepArsenic(in BitReader, size int64) (decompressioncache.Stepper, []byte, error) {
+	fmt.Println("stepping arsenic")
 	var err int32 = 0
 
 	var sa SIT_ArsenicData
+	sa.br = in
 
 	var i, sym, sel int32
 	var blockbits int16
@@ -387,7 +415,7 @@ func SIT_Arsenic(in sit.BitReader) int32 {
 	sa.Range = 1 << 25
 	sa.One = 1 << 25
 	sa.Half = 1 << 24
-	sa.Code, _ = in.ReadBits(26)
+	sa.Code, _ = sa.br.ReadBits(26)
 
 	SIT_init_model(&sa.initial_model, sa.initial_syms[:], 2, 0, 1, 256)
 	SIT_init_model(&sa.selmodel, sa.sel_syms[:], 11, 0, 8, 1024)
@@ -407,6 +435,13 @@ func SIT_Arsenic(in sit.BitReader) int32 {
 	/* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
 	SIT_init_model(&sa.mtfmodel[6], sa.mtf6_syms[:], 0x80, 0x80, 1, 1024)
 	/* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
+
+	fmt.Println("initial_model", sa.initial_model.String())
+	fmt.Println("selmodel", sa.selmodel.String())
+	for i := range 7 {
+		fmt.Printf("mtfmodel[%d] %s\n", i, sa.mtfmodel[i].String())
+	}
+
 	if SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x41 || SIT_arith_getbits(&sa, &sa.initial_model, 8) != 0x73 {
 		panic("XADERR_ILLEGALDATA")
 	}
@@ -414,7 +449,7 @@ func SIT_Arsenic(in sit.BitReader) int32 {
 	blockbits = int16(w + 9)
 	blocksize = 1 << blockbits
 	block := make([]byte, 0, blocksize)
-	unsortedblock := make([]byte, 0, blocksize)
+	unsortedblock := make([]byte, blocksize)
 
 	eob = SIT_getsym(&sa, &sa.initial_model)
 	for eob == 0 && err == 0 {
@@ -472,6 +507,7 @@ func SIT_Arsenic(in sit.BitReader) int32 {
 		if err != 0 {
 			break
 		}
+		fmt.Printf("doing an unblocksort: primary_index=%d block=\n  %s\n", primary_index, hex.EncodeToString(block))
 		SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
 		SIT_write_and_unrle_and_unrnd(unsortedblock, int16(rnd))
 		eob = SIT_getsym(&sa, &sa.initial_model)
@@ -483,5 +519,5 @@ func SIT_Arsenic(in sit.BitReader) int32 {
 	}
 	// there was a checksum here that we don't calculate
 
-	return err
+	return nil, nil, nil
 }
