@@ -39,11 +39,6 @@ import (
 	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
 
-type SITPrivate struct {
-	CRC    uint16
-	Method uint8
-}
-
 const (
 	half = 1 << 24
 )
@@ -81,11 +76,6 @@ var SIT_rndtable = []uint16{
 	0x98, 0x101, 0x60, 0x93, 0x100, 0x75, 0x31, 0xce,
 	0x49, 0x20, 0x56, 0x57, 0xe2, 0xf5, 0x26, 0x2b,
 	0x8a, 0xbf, 0xde, 0xd0, 0x83, 0x34, 0xf4, 0x17,
-}
-
-type SIT_modelsym struct {
-	sym     uint16
-	cumfreq uint32
 }
 
 type SIT_model struct {
@@ -130,7 +120,7 @@ func init() {
 	}
 }
 
-func Model2String(sa *SIT_ArsenicData, s *SIT_model) string {
+func model2String(sa *SIT_ArsenicData, s *SIT_model) string {
 	frequencies := sa.frequencies[s.offset:]
 	ret := []byte(fmt.Sprintf("MODEL inc=%d maxfreq=%d tabloc=", s.increment, s.maxfreq))
 	for _, t := range s.tabloc {
@@ -149,8 +139,6 @@ func Model2String(sa *SIT_ArsenicData, s *SIT_model) string {
 type SIT_ArsenicData struct {
 	br BitReader
 
-	One   uint32
-	Half  uint32
 	Range uint32
 	Code  uint32
 
@@ -363,7 +351,13 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	}
 }
 
-func setupArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
+func setupArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+	defer func() {
+		if recover() != nil {
+			rs, rb, re = nil, nil, errors.New("internal panic")
+		}
+	}()
+
 	sa.Range = 1 << 25
 	sa.Code, _ = sa.br.ReadBits(26)
 
@@ -376,13 +370,19 @@ func setupArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, [
 
 	eob := SIT_getsym(&sa, &Models.initial_model)
 	if eob != 0 {
-		panic("got end of block already?")
+		return nil, nil, io.EOF
 	}
 
 	return stepArsenic(sa, size)
 }
 
-func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []byte, error) {
+func stepArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+	defer func() {
+		if recover() != nil {
+			rs, rb, re = nil, nil, errors.New("internal panic")
+		}
+	}()
+
 	SIT_reinit_model(&sa, &Models.selmodel)
 	for i := range 7 {
 		SIT_reinit_model(&sa, &Models.mtfmodel[i])
@@ -445,17 +445,12 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (decompressioncache.Stepper, []
 	SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
 	accum = SIT_write_and_unrle_and_unrnd(accum, unsortedblock, int16(rnd))
 	eob := SIT_getsym(&sa, &Models.initial_model)
-	if int64(len(accum)) >= size {
-		fmt.Println("finishing because size reached")
-		accum = accum[:size]
-		goto done
-	} else if eob != 0 {
-		fmt.Println("finishing because of EOB")
+	if int64(len(accum)) >= size || eob != 0 {
+		return nil, accum[:min(size, int64(len(accum)))], io.EOF
 	}
 	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
 
-done:
 	return func() (decompressioncache.Stepper, []byte, error) {
 		return stepArsenic(sa, size-int64(len(accum)))
 	}, accum, nil
