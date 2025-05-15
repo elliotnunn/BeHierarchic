@@ -20,6 +20,12 @@ type FS struct {
 	root *entry
 }
 
+// fs.FileInfo.Sys() method returns [2]ForkDebug for data/resource
+type ForkDebug struct {
+	PackOffset, PackSize, UnpackSize int64
+	Algorithm                        int
+}
+
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (*FS, error) {
 	var buf [80]byte
@@ -131,7 +137,6 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			name:    strings.ReplaceAll(string(name), "/", ":"),
 			modtime: time.Unix(int64(binary.BigEndian.Uint32(hdr1[14:]))-2082844800, 0).UTC(),
 		}
-		job.next = siblingOffset
 		job.remain--
 		if job.parent.childMap == nil {
 			job.parent.childMap = make(map[string]*entry)
@@ -155,7 +160,7 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			}
 		} else {
 			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fDFUnpacked, e.name),
+				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fDFUnpacked, e.name),
 				appledouble.Make(
 					map[int][]byte{
 						appledouble.MACINTOSH_FILE_INFO: {hdr1[9] & 0x80, 0, 0, 0},                  // lock bit
@@ -163,11 +168,16 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 						appledouble.FILE_DATES_INFO:     append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fRFUnpacked, e.name),
+						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fRFUnpacked, e.name+".rsrc"),
 					},
 				),
 			}
+			e.dbg = [2]ForkDebug{
+				{PackOffset: job.next + int64(ptr) + fRFPacked, PackSize: fDFPacked, UnpackSize: fDFUnpacked, Algorithm: int(fDFFmt)},
+				{PackOffset: job.next + int64(ptr), PackSize: fRFPacked, UnpackSize: fRFUnpacked, Algorithm: int(fRFFmt)},
+			}
 		}
+		job.next = siblingOffset
 	}
 
 	return &FS{root: root}, nil
@@ -227,22 +237,27 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 				),
 			}
 		} else {
-			rsize, dsize := int64(binary.BigEndian.Uint32(hdr[92:])), int64(binary.BigEndian.Uint32(hdr[96:]))
-			rreader := io.NewSectionReader(disk, offset, rsize)
-			dreader := io.NewSectionReader(disk, offset+rsize, dsize)
-			offset += rsize + dsize
+			ralgo, dalgo := hdr[0], hdr[1]
+			rpacked, dpacked := int64(binary.BigEndian.Uint32(hdr[92:])), int64(binary.BigEndian.Uint32(hdr[96:]))
+			runpacked, dunpacked := int64(binary.BigEndian.Uint32(hdr[84:])), int64(binary.BigEndian.Uint32(hdr[88:]))
+			roffset, doffset := offset, offset+rpacked
 			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(hdr[1], dreader, int64(binary.BigEndian.Uint32(hdr[88:])), e.name),
+				readerFor(dalgo, io.NewSectionReader(disk, doffset, dpacked), dunpacked, e.name),
 				appledouble.Make(
 					map[int][]byte{
 						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
 						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
 					},
 					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(hdr[0], rreader, int64(binary.BigEndian.Uint32(hdr[84:])), e.name),
+						appledouble.RESOURCE_FORK: readerFor(ralgo, io.NewSectionReader(disk, roffset, rpacked), runpacked, e.name),
 					},
 				),
 			}
+			e.dbg = [2]ForkDebug{
+				{PackOffset: doffset, PackSize: dpacked, UnpackSize: dunpacked, Algorithm: int(dalgo)},
+				{PackOffset: roffset, PackSize: rpacked, UnpackSize: runpacked, Algorithm: int(ralgo)},
+			}
+			offset += rpacked + dpacked
 		}
 	}
 	return &FS{root: stack[0]}, nil
@@ -292,6 +307,7 @@ type entry struct {
 	fork       [2]multireaderat.SizeReaderAt // {datafork, appledouble}
 	childSlice []*entry
 	childMap   map[string]*entry
+	dbg        [2]ForkDebug
 }
 
 type openfile struct {
@@ -337,7 +353,7 @@ func (f *openfile) ModTime() time.Time { // implements fs.FileInfo
 }
 
 func (f *openfile) Sys() any { // implements fs.FileInfo
-	return nil
+	return f.e.dbg
 }
 
 func (f *openfile) IsDir() bool { // implements fs.FileInfo and fs.DirEntry
@@ -377,7 +393,6 @@ func (f *openfile) Close() error { // implements fs.File
 
 func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name string) multireaderat.SizeReaderAt {
 	// corpus includes algo 0, 2, 3, 5, 13, 15
-	println("algo", method, "file", name)
 	switch method {
 	default:
 		return bytes.NewReader(make([]byte, size)) // dodgy temporary
@@ -385,14 +400,14 @@ func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name s
 		return compr
 	case 3: // Huffman compression
 		return decompressioncache.New(InitHuffman(compr, size), size, name)
-		// case 1: // RLE compression
-		// case 2: // LZC compression
-
-		// case 5: // LZ with adaptive Huffman
-		// case 6: // Fixed Huffman table
-		// case 8: // Miller-Wegman encoding
-		// case 13: // anonymous
-		// case 14: // anonymous
-		// case 15: // Arsenic
+	// case 1: // RLE compression
+	// case 2: // LZC compression
+	// case 5: // LZ with adaptive Huffman
+	// case 6: // Fixed Huffman table
+	// case 8: // Miller-Wegman encoding
+	// case 13: // anonymous
+	// case 14: // anonymous
+	case 15: // Arsenic
+		return decompressioncache.New(InitArsenic(compr, size), size, name)
 	}
 }

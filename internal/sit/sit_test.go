@@ -4,81 +4,163 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
+	"os"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/elliotnunn/resourceform/internal/appledouble"
 )
 
 //go:embed stuffit-test-files/sources
 var sourcesFS embed.FS
-var sources = fsToMap(sourcesFS)
 
 //go:embed stuffit-test-files/build
 var archivesFS embed.FS
-var archives = fsToMap(archivesFS)
 
-func fsToMap(fsys fs.FS) map[string][]byte {
-	ret := make(map[string][]byte)
-	fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
-		if !d.IsDir() {
-			ret[d.Name()], _ = fs.ReadFile(fsys, path)
+var algoTestCases = mkAlgoTestCases()
+
+func TestAlgorithms(t *testing.T) {
+	for _, x := range algoTestCases {
+		if x.unpackedData == nil {
+			continue // not much use at the moment, let's focus on the corpus
 		}
-		return nil
-	})
-	return ret
-}
 
-func TestDumpEach(t *testing.T) {
-	for name, data := range archives {
-		// if string(data[10:14]) == "rLau" {
-		// 	continue
-		// }
-		fmt.Println("##", name)
-		t.Run(name, func(t *testing.T) {
-			fsys, err := New(bytes.NewReader(data))
+		t.Run(x.String(), func(t *testing.T) {
+			r := readerFor(byte(x.algorithm), bytes.NewReader(x.packedData), x.unpackedSize, x.String())
+			got, err := io.ReadAll(io.NewSectionReader(r, 0, int64(x.unpackedSize)))
 			if err != nil {
 				t.Fatal(err)
 			}
-
-			dumpFS(fsys)
-			fmt.Println("")
+			if !bytes.Equal(got, x.unpackedData) {
+				save := "/tmp/" + strings.ReplaceAll(x.stuffitPath+"//"+x.path, "/", ".")
+				os.Mkdir(save, 0o755)
+				os.WriteFile(save+"/expect", x.unpackedData, 0o644)
+				os.WriteFile(save+"/got", got, 0o644)
+				t.Fatal("bad data loggest at " + save)
+			}
 		})
 	}
 }
 
-func dumpFS(fsys fs.FS) {
-	const tfmt = "2006-01-02T15:04:05"
-	fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-		fmt.Printf("%#v\n", p)
-		if d == nil {
-			fmt.Println("    nil info!")
-			return nil
-		}
+type testCase struct {
+	stuffitPath  string
+	path         string
+	whichFork    string // "data"/"resource"
+	algorithm    int
+	offset       int64
+	packedSize   int64
+	unpackedSize int64
 
-		i, err := d.Info()
+	packedData, unpackedData []byte
+}
+
+func (t *testCase) String() string {
+	return fmt.Sprintf("%s/%s/%s/%s/%#x+%#x->%#x",
+		algoName(t.algorithm),
+		strings.ReplaceAll(t.stuffitPath, "/", ":"),
+		strings.ReplaceAll(t.path, "/", ":"),
+		t.whichFork, t.offset, t.packedSize, t.unpackedSize)
+}
+
+func mkAlgoTestCases() []testCase {
+	var ret []testCase
+	known := fsToMap(sourcesFS)
+	for sitPath, sitBytes := range fsToMap(archivesFS) {
+		if strings.Contains(sitPath, "password") {
+			continue // we really need a better way here
+		}
+		sit, err := New(bytes.NewReader(sitBytes))
 		if err != nil {
-			panic(err)
+			continue
 		}
 
-		fmt.Printf("    %v size=%d modtime=%s\n",
-			i.Mode(), i.Size(), i.ModTime().Format(tfmt))
+		fs.WalkDir(sit, ".", func(p string, d fs.DirEntry, err error) error {
+			if d.IsDir() || strings.Contains(p, "._") {
+				return nil
+			}
 
-		// AppleDouble file
-		if strings.HasPrefix(path.Base(p), "._") {
-			f, err := fsys.Open(p)
+			f, err := sit.Open(p)
 			if err != nil {
 				panic(err)
 			}
-			defer f.Close()
-			d, _ := appledouble.Dump(f)
-			for _, l := range strings.Split(strings.TrimRight(d, "\n"), "\n") {
-				fmt.Println("    " + l)
+			stat, err := f.Stat()
+			if err != nil {
+				panic(err)
 			}
-		}
+			forks := stat.Sys().([2]ForkDebug)
 
+			for i, fork := range forks[:1] { // only data, we only care about tests
+				if _, ok := known[path.Base(p)]; !ok {
+					continue
+				}
+				ret = append(ret, testCase{
+					stuffitPath:  sitPath,
+					path:         p,
+					whichFork:    [2]string{"data", "resource"}[i],
+					algorithm:    fork.Algorithm,
+					offset:       fork.PackOffset,
+					packedSize:   fork.PackSize,
+					unpackedSize: fork.UnpackSize,
+					packedData:   sitBytes[fork.PackOffset:][:fork.PackSize],
+					unpackedData: known[path.Base(p)],
+				})
+			}
+			return nil
+		})
+	}
+
+	sort.Slice(ret, func(a, b int) bool {
+		return ret[a].String() < ret[b].String()
+	})
+
+	return ret
+}
+
+func algoName(method int) string {
+	switch method {
+	case 0: // no compression
+		return "nocompress"
+	case 3: // Huffman compression
+		return "Huffman"
+	case 1:
+		return "RLE"
+	case 2:
+		return "LZC"
+	case 5:
+		return "LZAH"
+	case 6:
+		return "FixedHuffman"
+	case 8:
+		return "LZMW"
+	case 15:
+		return "Arsenic"
+	default:
+		return "algo" + strconv.Itoa(method)
+	}
+
+}
+
+func fsToMap(fsys fs.FS) map[string][]byte {
+	nope := make(map[string]bool)
+	ret := make(map[string][]byte)
+	fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if nope[name] {
+			return nil
+		}
+		if _, exist := ret[name]; exist {
+			delete(ret, name)
+			nope[name] = true
+			return nil
+		}
+		ret[name], _ = fs.ReadFile(fsys, path)
 		return nil
 	})
+	return ret
 }
