@@ -10,6 +10,8 @@ import (
 	"github.com/allegro/bigcache/v3"
 )
 
+// Guaranteed never to be called too many times
+// therefore never feel obliged to return io.EOF for the last one
 type Stepper func() (Stepper, []byte, error)
 
 func New(stepper Stepper, size int64, debugName string) *ReaderAt {
@@ -45,21 +47,24 @@ func (r *ReaderAt) ReadAt(p []byte, off int64) (int, error) {
 			newstepper, newblob, err := r.checkpoints[i].stepper()
 			blob = newblob
 			cache.Set(key, blob)
-			if i+1 == len(r.checkpoints) {
+			r.checkpoints[i].err = err
+			if r.checkpoints[i].offset+int64(len(blob)) >= r.size {
+				r.checkpoints[i].err = io.EOF // this is the last one, return io.EOF consistently
+			} else if i+1 == len(r.checkpoints) { // stepper for the next one
 				r.checkpoints = append(r.checkpoints, checkpoint{
 					stepper: newstepper,
 					offset:  r.checkpoints[i].offset + int64(len(blob))})
 			}
-			r.checkpoints[i].err = err
 		}
 
 		// copy bytes into the destination buffer
 		destcut, srccut, ok := overlap(off, len(p), r.checkpoints[i].offset, len(blob))
-		if ok {
-			n := copy(p[destcut:], blob[srccut:])
-			if destcut+n == len(p) /*satisfied*/ || r.checkpoints[i].err != nil /*eof*/ {
-				return destcut + n, r.checkpoints[i].err
-			}
+		if !ok {
+			panic("obtained a chunk but it does not overlap with the request, never OK")
+		}
+		n := copy(p[destcut:], blob[srccut:])
+		if destcut+n == len(p) /*satisfied*/ || r.checkpoints[i].err != nil /*eof*/ {
+			return destcut + n, r.checkpoints[i].err
 		}
 
 		i++
