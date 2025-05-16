@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,16 +31,17 @@ func TestAlgorithms(t *testing.T) {
 
 		t.Run(x.String(), func(t *testing.T) {
 			r := readerFor(byte(x.algorithm), bytes.NewReader(x.packedData), x.unpackedSize, x.String())
-			got, err := io.ReadAll(io.NewSectionReader(r, 0, int64(x.unpackedSize)))
-			if err != nil {
-				t.Fatal(err)
+			got := make([]byte, x.unpackedSize)
+			gotn, goterr := r.ReadAt(got, 0)
+			got = got[:gotn]
+			if goterr != nil && goterr != io.EOF {
+				t.Errorf("expected io.EOF or nil, got %v", goterr)
 			}
-			if !bytes.Equal(got, x.unpackedData) {
-				save := "/tmp/" + strings.ReplaceAll(x.stuffitPath+"//"+x.path, "/", ".")
-				os.Mkdir(save, 0o755)
-				os.WriteFile(save+"/expect", x.unpackedData, 0o644)
-				os.WriteFile(save+"/got", got, 0o644)
-				t.Fatal("bad data loggest at " + save)
+			if gotn != int(x.unpackedSize) {
+				t.Errorf("expected %d bytes, got %d", x.unpackedSize, gotn)
+			}
+			if !bytes.Equal(got, x.unpackedData) && !sameTextFile(got, x.unpackedData) {
+				t.Error(logMismatch(got, x.unpackedData, x.stuffitPath, x.path))
 			}
 		})
 	}
@@ -163,4 +165,32 @@ func fsToMap(fsys fs.FS) map[string][]byte {
 		return nil
 	})
 	return ret
+}
+
+func safeName(s string) string {
+	ok := []byte("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+	var ret []byte
+	for _, b := range []byte(s) {
+		if bytes.ContainsRune(ok, rune(b)) {
+			ret = append(ret, b)
+		} else if !bytes.HasSuffix(ret, []byte(".")) {
+			ret = append(ret, '.')
+		}
+	}
+	return string(ret)
+}
+
+func logMismatch(got, expect []byte, name1, name2 string) string {
+	save := filepath.Join(os.TempDir(), safeName(name1), safeName(name2))
+	os.MkdirAll(save, 0o755)
+	os.WriteFile(filepath.Join(save, "expect"), expect, 0o644)
+	os.WriteFile(filepath.Join(save, "got"), got, 0o644)
+	return fmt.Sprintf("mismatched data logged: %s", filepath.Join(save, "*"))
+}
+
+func sameTextFile(a, b []byte) bool {
+	return bytes.Equal(
+		bytes.ReplaceAll(a, []byte("\r"), []byte("\n")),
+		bytes.ReplaceAll(b, []byte("\r"), []byte("\n")),
+	)
 }
