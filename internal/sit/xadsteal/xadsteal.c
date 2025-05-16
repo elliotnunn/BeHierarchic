@@ -30,10 +30,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+unsigned char *outbuffer;
+long outsize;
+
 unsigned char *buffer;
 long bsize;
 long offset;
-unsigned char bit = 0x80;
+unsigned char bit = 0;
 void slurp(const char *name) {
     FILE *f = fopen(name, "rb");
     fseek(f, 0, SEEK_END);
@@ -45,7 +48,65 @@ void slurp(const char *name) {
     fclose(f);
 }
 
+uint8_t xadIOGetChar(void *io) {
+    return buffer[offset++];
+}
+
+uint32_t xadIOGetBitsLow(void *io, int n) {
+    if (bit == 0) {
+        bit = 1;
+    }
+    uint32_t shiftin = 1UL << n;
+    uint32_t ret = 0;
+    for (int i=0; i<n; i++) {
+        if (buffer[offset]&bit) {
+            ret |= shiftin;
+        }
+        ret >>= 1;
+
+        bit <<= 1;
+        if (bit == 0) {
+            offset++;
+            bit = 1;
+        }
+    }
+    // printf("%d lobits=%02x\n", n, ret);
+    return ret;
+}
+#define xadIODropBitsLow(a, b) (void)xadIOGetBitsLow(a, b)
+
+#define xadCopyMem(src, dest, len) memcpy(dest, src, len)
+
+typedef void * xadPTR;
+
+uint32_t xadIOReadBitsLow(void *io, int n) {
+    uint8_t mybit = bit;
+    long myoffset = offset;
+    if (mybit == 0) {
+        mybit = 1;
+    }
+    uint32_t shiftin = 1UL << n;
+    uint32_t ret = 0;
+    for (int i=0; i<n; i++) {
+        if (buffer[myoffset]&mybit) {
+            ret |= shiftin;
+        }
+        ret >>= 1;
+
+        mybit <<= 1;
+        if (mybit == 0) {
+            myoffset++;
+            mybit = 1;
+        }
+    }
+    // printf("%d lobits=%02x\n", n, ret);
+    return ret;
+}
+
 uint32_t xadIOGetBitsHigh(void *io, int n) {
+    if (bit == 0) {
+        bit = 0x80;
+    }
     uint32_t ret = 0;
     for (int i=0; i<n; i++) {
         ret <<= 1;
@@ -58,17 +119,16 @@ uint32_t xadIOGetBitsHigh(void *io, int n) {
             bit = 0x80;
         }
     }
+    // printf("%d hibits=%02x\n", n, ret);
     return ret;
 }
 
-uint32_t xadIOGetBitsLow(void *io, int n) {
-    printf("xadIOGetBitsLow unimp\n");
-    exit(1);
-}
-
-int xadIOPutChar(void *io, uint8_t ch) {
-    printf("%02x", 255&ch);
-    return 0; // not the last one
+uint8_t xadIOPutChar(void *io, uint8_t ch) {
+    if (outbuffer == NULL) {
+        outbuffer = malloc(0x1000000ULL);
+    }
+    outbuffer[outsize++] = ch;
+    return ch;
 }
 
 #define xadFreeObjectA(a, b) 0
@@ -1162,165 +1222,165 @@ static void SIT13InitInfo(struct SIT13Data *s, xadUINT8 id)
   }
 }
 
-// static void SIT13_Extract(struct SIT13Data *s, struct xadInOut *io)
-// {
-//   xadUINT32 wpos = 0, j, k, l, size;
-//   struct SIT13Buffer *buf = s->Buffer3;
+static void SIT13_Extract(struct SIT13Data *s, struct xadInOut *io)
+{
+  xadUINT32 wpos = 0, j, k, l, size;
+  struct SIT13Buffer *buf = s->Buffer3;
 
-//   while(!io->xio_Error)
-//   {
-//     k = xadIOReadBitsLow(io, 12);
-//     if((j = buf[k].bits) <= 12)
-//     {
-//       l = buf[k].data;
-//       xadIODropBitsLow(io, j);
-//     }
-//     else
-//     {
-//       xadIODropBitsLow(io, 12);
+  while(!io->xio_Error)
+  {
+    k = xadIOReadBitsLow(io, 12);
+    if((j = buf[k].bits) <= 12)
+    {
+      l = buf[k].data;
+      xadIODropBitsLow(io, j);
+    }
+    else
+    {
+      xadIODropBitsLow(io, 12);
 
-//       j = buf[k].data;
-//       while(s->Buffer4[j].freq == -1)
-//         j = xadIOGetBitsLow(io, 1) ? s->Buffer4[j].d2 : s->Buffer4[j].d1;
-//       l = s->Buffer4[j].freq;
-//     }
-//     if(l < 0x100)
-//     {
-//       s->Window[wpos++] = xadIOPutChar(io, l);
-//       wpos &= 0xFFFF;
-//       buf = s->Buffer3;
-//     }
-//     else
-//     {
-//       buf = s->Buffer3b;
-//       if(l < 0x13E)
-//         size = l - 0x100 + 3;
-//       else
-//       {
-//         if(l == 0x13E)
-//           size = xadIOGetBitsLow(io, 10);
-//         else
-//         {
-//           if(l == 0x140)
-//             return;
-//           size = xadIOGetBitsLow(io, 15);
-//         }
-//         size += 65;
-//       }
-//       j = xadIOReadBitsLow(io, 12);
-//       k = s->Buffer2[j].bits;
-//       if(k <= 12)
-//       {
-//         l = s->Buffer2[j].data;
-//         xadIODropBitsLow(io, k);
-//       }
-//       else
-//       {
-//         xadIODropBitsLow(io, 12);
-//         j = s->Buffer2[j].data;
-//         while(s->Buffer4[j].freq == -1)
-//           j = xadIOGetBitsLow(io, 1) ? s->Buffer4[j].d2 : s->Buffer4[j].d1;
-//         l = s->Buffer4[j].freq;
-//       }
-//       k = 0;
-//       if(l--)
-//         k = (1 << l) | xadIOGetBitsLow(io, l);
-//       l = wpos+0x10000-(k+1);
-//       while(size--)
-//       {
-//         l &= 0xFFFF;
-//         s->Window[wpos++] = xadIOPutChar(io, s->Window[l++]);
-//         wpos &= 0xFFFF;
-//       }
-//     } /* l >= 0x100 */
-//   }
-// }
+      j = buf[k].data;
+      while(s->Buffer4[j].freq == -1)
+        j = xadIOGetBitsLow(io, 1) ? s->Buffer4[j].d2 : s->Buffer4[j].d1;
+      l = s->Buffer4[j].freq;
+    }
+    if(l < 0x100)
+    {
+      s->Window[wpos++] = xadIOPutChar(io, l);
+      wpos &= 0xFFFF;
+      buf = s->Buffer3;
+    }
+    else
+    {
+      buf = s->Buffer3b;
+      if(l < 0x13E)
+        size = l - 0x100 + 3;
+      else
+      {
+        if(l == 0x13E)
+          size = xadIOGetBitsLow(io, 10);
+        else
+        {
+          if(l == 0x140)
+            return;
+          size = xadIOGetBitsLow(io, 15);
+        }
+        size += 65;
+      }
+      j = xadIOReadBitsLow(io, 12);
+      k = s->Buffer2[j].bits;
+      if(k <= 12)
+      {
+        l = s->Buffer2[j].data;
+        xadIODropBitsLow(io, k);
+      }
+      else
+      {
+        xadIODropBitsLow(io, 12);
+        j = s->Buffer2[j].data;
+        while(s->Buffer4[j].freq == -1)
+          j = xadIOGetBitsLow(io, 1) ? s->Buffer4[j].d2 : s->Buffer4[j].d1;
+        l = s->Buffer4[j].freq;
+      }
+      k = 0;
+      if(l--)
+        k = (1 << l) | xadIOGetBitsLow(io, l);
+      l = wpos+0x10000-(k+1);
+      while(size--)
+      {
+        l &= 0xFFFF;
+        s->Window[wpos++] = xadIOPutChar(io, s->Window[l++]);
+        wpos &= 0xFFFF;
+      }
+    } /* l >= 0x100 */
+  }
+}
 
-// static void SIT13_CreateTree(struct SIT13Data *s, struct xadInOut *io, struct SIT13Buffer *buf, xadUINT16 num)
-// {
-//   struct SIT13Buffer *b;
-//   xadUINT32 i;
-//   xadUINT16 data;
-//   xadINT8 bi = 0;
+static void SIT13_CreateTree(struct SIT13Data *s, struct xadInOut *io, struct SIT13Buffer *buf, xadUINT16 num)
+{
+  struct SIT13Buffer *b;
+  xadUINT32 i;
+  xadUINT16 data;
+  xadINT8 bi = 0;
 
-//   for(i = 0; i < num; ++i)
-//   {
-//     b = &s->Buffer1[xadIOReadBitsLow(io, 12)];
-//     data = b->data;
-//     xadIODropBitsLow(io, b->bits);
+  for(i = 0; i < num; ++i)
+  {
+    b = &s->Buffer1[xadIOReadBitsLow(io, 12)];
+    data = b->data;
+    xadIODropBitsLow(io, b->bits);
 
-//     switch(data-0x1F)
-//     {
-//     case 0: bi = -1; break;
-//     case 1: ++bi; break;
-//     case 2: --bi; break;
-//     case 3:
-//       if(xadIOGetBitsLow(io, 1))
-//         s->Buffer5[i++].bits = bi;
-//       break;
-//     case 4:
-//       data = xadIOGetBitsLow(io, 3)+2;
-//       while(data--)
-//         s->Buffer5[i++].bits = bi;
-//       break;
-//     case 5:
-//       data = xadIOGetBitsLow(io, 6)+10;
-//       while(data--)
-//         s->Buffer5[i++].bits = bi;
-//       break;
-//     default: bi = data+1; break;
-//     }
-//     s->Buffer5[i].bits = bi;
-//   }
-//   for(i = 0; i < num; ++i)
-//     s->Buffer5[i].data = i;
-//   SIT13_Func2(s, buf, num, s->Buffer5);
-// }
+    switch(data-0x1F)
+    {
+    case 0: bi = -1; break;
+    case 1: ++bi; break;
+    case 2: --bi; break;
+    case 3:
+      if(xadIOGetBitsLow(io, 1))
+        s->Buffer5[i++].bits = bi;
+      break;
+    case 4:
+      data = xadIOGetBitsLow(io, 3)+2;
+      while(data--)
+        s->Buffer5[i++].bits = bi;
+      break;
+    case 5:
+      data = xadIOGetBitsLow(io, 6)+10;
+      while(data--)
+        s->Buffer5[i++].bits = bi;
+      break;
+    default: bi = data+1; break;
+    }
+    s->Buffer5[i].bits = bi;
+  }
+  for(i = 0; i < num; ++i)
+    s->Buffer5[i].data = i;
+  SIT13_Func2(s, buf, num, s->Buffer5);
+}
 
-// static xadINT32 SIT_13(struct xadInOut *io)
-// {
-//   xadUINT32 i, j;
-//   struct xadMasterBase *xadMasterBase = io->xio_xadMasterBase;
-//   struct SIT13Data *s;
+static xadINT32 SIT_13(struct xadInOut *io)
+{
+  xadUINT32 i, j;
+  struct xadMasterBase *xadMasterBase = io->xio_xadMasterBase;
+  struct SIT13Data *s;
 
-//   if((s = xadAllocVec(XADM sizeof(struct SIT13Data), XADMEMF_CLEAR)))
-//   {
-//     s->MaxBits = 1;
-//     for(i = 0; i < 37; ++i)
-//       SIT13_Func1(s, s->Buffer1, SIT13Info[i], SIT13InfoBits[i], i);
-//     for(i = 1; i < 0x704; ++i)
-//     {
-//       /* s->Buffer4[i].d1 = s->Buffer4[i].d2 = 0; */
-//       s->Buffer4[i].freq = -1;
-//     }
+  if((s = xadAllocVec(XADM sizeof(struct SIT13Data), XADMEMF_CLEAR)))
+  {
+    s->MaxBits = 1;
+    for(i = 0; i < 37; ++i)
+      SIT13_Func1(s, s->Buffer1, SIT13Info[i], SIT13InfoBits[i], i);
+    for(i = 1; i < 0x704; ++i)
+    {
+      /* s->Buffer4[i].d1 = s->Buffer4[i].d2 = 0; */
+      s->Buffer4[i].freq = -1;
+    }
 
-//     j = xadIOGetChar(io);
-//     i = j>>4;
-//     if(i > 5)
-//       io->xio_Error = XADERR_ILLEGALDATA;
-//     else if(i)
-//     {
-//       SIT13InitInfo(s, i--);
-//       SIT13_CreateStaticTree(s, s->Buffer3, 0x141, s->TextBuf);
-//       SIT13_CreateStaticTree(s, s->Buffer3b, 0x141, s->TextBuf+0x141);
-//       SIT13_CreateStaticTree(s, s->Buffer2, SIT13StaticBits[i], s->TextBuf+0x282);
-//     }
-//     else
-//     {
-//       SIT13_CreateTree(s, io, s->Buffer3, 0x141);
-//       if(j&8)
-//         xadCopyMem(XADM (xadPTR) s->Buffer3, (xadPTR) s->Buffer3b, 0x1000*sizeof(struct SIT13Buffer));
-//       else
-//         SIT13_CreateTree(s, io, s->Buffer3b, 0x141);
-//       j = (j&7)+10;
-//       SIT13_CreateTree(s, io, s->Buffer2, j);
-//     }
-//     if(!io->xio_Error)
-//       SIT13_Extract(s, io);
-//     xadFreeObjectA(XADM s, 0);
-//   }
-//   return io->xio_Error;
-// }
+    j = xadIOGetChar(io);
+    i = j>>4;
+    if(i > 5)
+      io->xio_Error = XADERR_ILLEGALDATA;
+    else if(i)
+    {
+      SIT13InitInfo(s, i--);
+      SIT13_CreateStaticTree(s, s->Buffer3, 0x141, s->TextBuf);
+      SIT13_CreateStaticTree(s, s->Buffer3b, 0x141, s->TextBuf+0x141);
+      SIT13_CreateStaticTree(s, s->Buffer2, SIT13StaticBits[i], s->TextBuf+0x282);
+    }
+    else
+    {
+      SIT13_CreateTree(s, io, s->Buffer3, 0x141);
+      if(j&8)
+        xadCopyMem(XADM (xadPTR) s->Buffer3, (xadPTR) s->Buffer3b, 0x1000*sizeof(struct SIT13Buffer));
+      else
+        SIT13_CreateTree(s, io, s->Buffer3b, 0x141);
+      j = (j&7)+10;
+      SIT13_CreateTree(s, io, s->Buffer2, j);
+    }
+    if(!io->xio_Error)
+      SIT13_Extract(s, io);
+    xadFreeObjectA(XADM s, 0);
+  }
+  return io->xio_Error;
+}
 
 /*****************************************************************************/
 
@@ -1660,6 +1720,19 @@ struct SIT_model
   struct SIT_modelsym *syms;
 };
 
+void printModel(struct SIT_model *s) {
+    printf("MODEL inc=%d maxfreq=%d tabloc=", s->increment, s->maxfreq);
+    int n = 256;
+    while (n > 1 && s->tabloc[n-1] == 0) n--;
+    for (int i=0; i<n; i++) {
+        printf("%d/", s->tabloc[i]);
+    }
+    printf("\n");
+    for (int i=0; i<s->entries; i++) {
+        printf("  %d=(s=%d/f=%d)\n", i, s->syms[i].sym, s->syms[i].cumfreq);
+    }
+}
+
 struct SIT_ArsenicData
 {
   struct xadInOut *io;
@@ -1963,6 +2036,17 @@ static xadINT32 SIT_Arsenic(struct xadInOut *io)
     /* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
     SIT_init_model(&sa->mtfmodel[6], sa->mtf6_syms, 0x80, 0x80, 1, 1024);
     /* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
+
+    printf("initial_model "); printModel(&sa->initial_model);
+    printf("selmodel "); printModel(&sa->selmodel);
+    printf("mtfmodel[0] "); printModel(&sa->mtfmodel[0]);
+    printf("mtfmodel[1] "); printModel(&sa->mtfmodel[1]);
+    printf("mtfmodel[2] "); printModel(&sa->mtfmodel[2]);
+    printf("mtfmodel[3] "); printModel(&sa->mtfmodel[3]);
+    printf("mtfmodel[4] "); printModel(&sa->mtfmodel[4]);
+    printf("mtfmodel[5] "); printModel(&sa->mtfmodel[5]);
+    printf("mtfmodel[6] "); printModel(&sa->mtfmodel[6]);
+
     if(SIT_arith_getbits(sa, &sa->initial_model, 8) != 0x41 ||
     SIT_arith_getbits(sa, &sa->initial_model, 8) != 0x73)
       err = XADERR_ILLEGALDATA;
@@ -2051,6 +2135,9 @@ static xadINT32 SIT_Arsenic(struct xadInOut *io)
             }
             if(err)
               break;
+            printf("doing an unblocksort: primary_index=%d\n", primary_index);
+            for (int i=0; i<nchars; i++) printf("%02x", 255&block[i]);
+            printf("\n");
             if((err = SIT_unblocksort(sa, block, nchars, primary_index, unsortedblock)))
               break;
             SIT_write_and_unrle_and_unrnd(io, unsortedblock, nchars, rnd);
@@ -3128,5 +3215,11 @@ int main(int argc, char **argv) {
     printf("welcome to xadsteal.c\n");
     slurp(argv[1]);
     printf("slurped size %ld\n", bsize);
-    SIT_Arsenic(&bigio);
+    SIT_13(&bigio);
+    printf("unpacked size %ld\n", outsize);
+    
+    FILE *out = fopen(argv[2], "wb");
+    fwrite(outbuffer, outsize, 1, out);
+    fclose(out);
+    return 0;
 }
