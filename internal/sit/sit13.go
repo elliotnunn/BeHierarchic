@@ -87,8 +87,10 @@ func (s *SIT13Data) print() {
 }
 
 func (s *SIT13Data) PutByte(b byte) {
+	if len(s.out) >= 0x100000 {
+		panic("too long")
+	}
 	s.out = append(s.out, b)
-	fmt.Printf("byte %02x\n", b)
 }
 
 var SIT13Bits = [16]uint8{0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15}
@@ -364,7 +366,7 @@ func SIT13_Extract(s *SIT13Data) {
 	buf := s.Buffer3[:]
 
 	for { // this loop should terminate if we get an IO error
-		k, err := s.br.ReadLoBits(12)
+		k, err := s.br.ReadLoBitsTemp(12)
 		if err != nil {
 			panic(err)
 		}
@@ -416,7 +418,7 @@ func SIT13_Extract(s *SIT13Data) {
 				}
 				size += 65
 			}
-			j2, _ := s.br.ReadLoBits(12)
+			j2, _ := s.br.ReadLoBitsTemp(12)
 			k = uint32(s.Buffer2[j2].bits)
 			if k <= 12 {
 				l = uint32(s.Buffer2[j2].data)
@@ -459,7 +461,7 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 	var bi int8 = 0
 
 	for i := uint16(0); i < num; i++ { // note the loop body changes i
-		bits, _ := s.br.ReadLoBits(12)
+		bits, _ := s.br.ReadLoBitsTemp(12)
 		b = &s.Buffer1[bits]
 		data = b.data
 		s.br.ReadLoBits(int(b.bits))
@@ -524,12 +526,7 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		s.Buffer4[i].freq = -1
 	}
 
-	jj, _ := s.br.ReadLoBits(8) // awks, need to reverse this
-	for range 8 {
-		j <<= 1
-		j |= jj & 1
-		jj >>= 1
-	}
+	j, _ = s.br.ReadLoBits(8) // awks, need to reverse this
 	i = j >> 4
 	if i > 5 {
 		panic("XADERR_ILLEGALDATA")
@@ -555,6 +552,13 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 }
 
 func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
-	// SIT13_Extract(&s)
+	defer func() {
+		recover()
+		rs = nil
+		rb = make([]byte, remain)
+		copy(rb, "game over u lose")
+		re = io.EOF
+	}()
+	SIT13_Extract(&s)
 	return nil, s.out, io.EOF
 }
