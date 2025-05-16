@@ -10,7 +10,6 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -140,7 +139,7 @@ func algoName(method int) string {
 	case 15:
 		return "Arsenic"
 	default:
-		return "algo" + strconv.Itoa(method)
+		return fmt.Sprintf("SIT%d", method)
 	}
 
 }
