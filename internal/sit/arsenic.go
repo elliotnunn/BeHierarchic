@@ -451,6 +451,7 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper,
 	SIT_dounmtf(&sa, -1)
 	// there was a checksum here that we don't calculate
 
+	sa.br.SacrificeBuffer()
 	return func() (decompressioncache.Stepper, []byte, error) {
 		return stepArsenic(sa, size-int64(len(accum)))
 	}, accum, nil
