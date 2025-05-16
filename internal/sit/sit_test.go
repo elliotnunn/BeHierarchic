@@ -185,7 +185,7 @@ func logMismatch(got, expect, packed []byte, name1, name2 string) string {
 	os.WriteFile(filepath.Join(save, "expect"), expect, 0o644)
 	os.WriteFile(filepath.Join(save, "got"), got, 0o644)
 	os.WriteFile(filepath.Join(save, "packed"), packed, 0o644)
-	return fmt.Sprintf("mismatched data logged: %s", filepath.Join(save, "*"))
+	return fmt.Sprintf("mismatched data logged: %s", filepath.Join(save, "{expect,got}"))
 }
 
 func sameTextFile(a, b []byte) bool {
