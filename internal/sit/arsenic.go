@@ -78,7 +78,21 @@ var SIT_rndtable = []uint16{
 	0x8a, 0xbf, 0xde, 0xd0, 0x83, 0x34, 0xf4, 0x17,
 }
 
-type SIT_model struct {
+type arsenicData struct {
+	br BitReader
+
+	Range uint32
+	Code  uint32
+
+	/* SIT_dounmntf function private */
+	inited int32 /* init 0 */
+	moveme [256]uint8
+
+	blockbits   uint16
+	frequencies [nfreq]uint32
+}
+
+type arsenicModel struct {
 	increment int32
 	maxfreq   int32
 	entries   int32
@@ -87,40 +101,40 @@ type SIT_model struct {
 	syms      []uint16
 }
 
-var Models = struct {
-	initial_model SIT_model
-	selmodel      SIT_model
-	mtfmodel      [7]SIT_model
+var arsenicModels = struct {
+	initial_model arsenicModel
+	selmodel      arsenicModel
+	mtfmodel      [7]arsenicModel
 }{}
 
 const nfreq = 276
 
 func init() {
 	n := uint16(0)
-	n += SIT_init_model(&Models.initial_model, n, 2, 0, 1, 256)
-	n += SIT_init_model(&Models.selmodel, n, 11, 0, 8, 1024)
+	n += initArsenicModel(&arsenicModels.initial_model, n, 2, 0, 1, 256)
+	n += initArsenicModel(&arsenicModels.selmodel, n, 11, 0, 8, 1024)
 	/* selector model: 11 selections, starting at 0, 8 increment, 1024 maxfreq */
 
-	n += SIT_init_model(&Models.mtfmodel[0], n, 2, 2, 8, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[0], n, 2, 2, 8, 1024)
 	/* model 3: 2 symbols, starting at 2, 8 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[1], n, 4, 4, 4, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[1], n, 4, 4, 4, 1024)
 	/* model 4: 4 symbols, starting at 4, 4 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[2], n, 8, 8, 4, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[2], n, 8, 8, 4, 1024)
 	/* model 5: 8 symbols, starting at 8, 4 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[3], n, 0x10, 0x10, 4, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[3], n, 0x10, 0x10, 4, 1024)
 	/* model 6: $10 symbols, starting at $10, 4 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[4], n, 0x20, 0x20, 2, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[4], n, 0x20, 0x20, 2, 1024)
 	/* model 7: $20 symbols, starting at $20, 2 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[5], n, 0x40, 0x40, 2, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[5], n, 0x40, 0x40, 2, 1024)
 	/* model 8: $40 symbols, starting at $40, 2 increment, 1024 maxfreq */
-	n += SIT_init_model(&Models.mtfmodel[6], n, 0x80, 0x80, 1, 1024)
+	n += initArsenicModel(&arsenicModels.mtfmodel[6], n, 0x80, 0x80, 1, 1024)
 	/* model 9: $80 symbols, starting at $80, 1 increment, 1024 maxfreq */
 	if n != nfreq {
 		panic("wrong nfreq")
 	}
 }
 
-func model2String(sa *SIT_ArsenicData, s *SIT_model) string {
+func (sa *arsenicData) model2String(s *arsenicModel) string {
 	frequencies := sa.frequencies[s.offset:]
 	ret := []byte(fmt.Sprintf("MODEL inc=%d maxfreq=%d tabloc=", s.increment, s.maxfreq))
 	for _, t := range s.tabloc {
@@ -136,29 +150,13 @@ func model2String(sa *SIT_ArsenicData, s *SIT_model) string {
 	return string(ret[:len(ret)-1])
 }
 
-type SIT_ArsenicData struct {
-	br BitReader
-
-	Range uint32
-	Code  uint32
-
-	/* SIT_dounmntf function private */
-	inited int32 /* init 0 */
-	moveme [256]uint8
-
-	blockbits   uint16
-	frequencies [nfreq]uint32
-}
-
-func SIT_update_model(sa *SIT_ArsenicData, mymod *SIT_model, symindex int32) {
-	var i int32
-
+func (sa *arsenicData) updateModel(mymod *arsenicModel, symindex int32) {
 	frequencies := sa.frequencies[mymod.offset:]
 	for i := range symindex {
 		frequencies[i] += uint32(mymod.increment)
 	}
 	if frequencies[0] > uint32(mymod.maxfreq) {
-		for i = 0; i < mymod.entries; i++ {
+		for i := range mymod.entries {
 			/* no -1, want to include the 0 entry */
 			/* this converts cumfreqs LONGo frequencies, then shifts right */
 			frequencies[i] -= frequencies[i+1]
@@ -166,16 +164,15 @@ func SIT_update_model(sa *SIT_ArsenicData, mymod *SIT_model, symindex int32) {
 			frequencies[i] >>= 1
 		}
 		/* then convert frequencies back to cumfreq */
-		for i = mymod.entries - 1; i >= 0; i-- {
+		for i := mymod.entries - 1; i >= 0; i-- {
 			frequencies[i] += frequencies[i+1]
 		}
 	}
 }
 
-func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint32) { /* aka remove symbol */
-	var lowincr uint32
+func (sa *arsenicData) getCode(symhigh uint32, symlow uint32, symtot uint32) { /* aka remove symbol */
 	renorm_factor := sa.Range / symtot
-	lowincr = renorm_factor * symlow
+	lowincr := renorm_factor * symlow
 	sa.Code -= lowincr
 	if symhigh == symtot {
 		sa.Range -= lowincr
@@ -193,33 +190,29 @@ func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint
 	sa.Code |= b
 }
 
-func SIT_getsym(sa *SIT_ArsenicData, model *SIT_model) int32 {
-	var freq int32
-	var i int32
-	var sym int32
-
+func (sa *arsenicData) getSym(model *arsenicModel) int32 {
 	frequencies := sa.frequencies[model.offset:]
 
 	/* getfreq */
-	freq = int32(sa.Code / (sa.Range / frequencies[0]))
+	freq := int32(sa.Code / (sa.Range / frequencies[0]))
+	var i int32
 	for i = 1; i < model.entries; i++ {
 		if frequencies[i] <= uint32(freq) {
 			break
 		}
 	}
-	sym = int32(model.syms[i-1])
-	SIT_getcode(sa, frequencies[i-1], frequencies[i], frequencies[0])
-	SIT_update_model(sa, model, i)
+	sym := int32(model.syms[i-1])
+	sa.getCode(frequencies[i-1], frequencies[i], frequencies[0])
+	sa.updateModel(model, i)
 	return sym
 }
 
-func SIT_reinit_model(sa *SIT_ArsenicData, mymod *SIT_model) {
-	var cumfreq int32 = mymod.entries * mymod.increment
-	var i int32
+func (sa *arsenicData) reinitModel(mymod *arsenicModel) {
+	cumfreq := mymod.entries * mymod.increment
 
 	frequencies := sa.frequencies[mymod.offset:]
 
-	for i = 0; i <= mymod.entries; i++ {
+	for i := range mymod.entries + 1 {
 		/* <= sets last frequency to 0; there isn't really a symbol for that
 		   last one  */
 		frequencies[i] = uint32(cumfreq)
@@ -227,28 +220,25 @@ func SIT_reinit_model(sa *SIT_ArsenicData, mymod *SIT_model) {
 	}
 }
 
-func SIT_init_model(newmod *SIT_model, base uint16, entries int32, start int32, increment int32, maxfreq int32) uint16 {
-	var i int32
-
+func initArsenicModel(newmod *arsenicModel, base uint16, entries int32, start int32, increment int32, maxfreq int32) uint16 {
 	newmod.syms = make([]uint16, entries+1)
 	newmod.increment = increment
 	newmod.maxfreq = maxfreq
 	newmod.entries = entries
 	newmod.offset = base
-	/* memset(newmod.tabloc, 0, sizeof(newmod.tabloc)); */
-	for i = 0; i < entries; i++ {
+	for i := range entries {
 		newmod.tabloc[(entries-i-1)+start] = uint32(i)
 		newmod.syms[i] = uint16((entries - i - 1) + start)
 	}
 	return uint16(entries + 1)
 }
 
-func SIT_arith_getbits(sa *SIT_ArsenicData, model *SIT_model, nbits int32) uint32 {
+func (sa *arsenicData) arithGetBits(model *arsenicModel, nbits int32) uint32 {
 	/* the model is assumed to be a binary one */
-	var addme uint32 = 1
-	var accum uint32 = 0
+	addme := uint32(1)
+	accum := uint32(0)
 	for range nbits {
-		if SIT_getsym(sa, model) != 0 {
+		if sa.getSym(model) != 0 {
 			accum += addme
 		}
 		addme += addme
@@ -256,9 +246,7 @@ func SIT_arith_getbits(sa *SIT_ArsenicData, model *SIT_model, nbits int32) uint3
 	return accum
 }
 
-func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
-	var result int32
-
+func (sa *arsenicData) doUnmtf(sym int32) int32 {
 	if sym == -1 || sa.inited == 0 {
 		for i := range 256 {
 			sa.moveme[i] = uint8(i)
@@ -268,7 +256,7 @@ func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
 	if sym == -1 {
 		return 0
 	}
-	result = int32(sa.moveme[sym])
+	result := int32(sa.moveme[sym])
 	for i := sym; i > 0; i-- {
 		sa.moveme[i] = sa.moveme[i-1]
 	}
@@ -277,7 +265,7 @@ func SIT_dounmtf(sa *SIT_ArsenicData, sym int32) int32 {
 	return result
 }
 
-func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_index uint32, outblock []uint8) {
+func (sa *arsenicData) unblockSort(block []uint8, blocklen uint32, last_index uint32, outblock []uint8) {
 	var counts [256]uint32
 	var cumcounts [256]uint32
 	xform := make([]uint32, blocklen)
@@ -306,19 +294,17 @@ func SIT_unblocksort(sa *SIT_ArsenicData, block []uint8, blocklen uint32, last_i
 	}
 }
 
-func SIT_write_and_unrle_and_unrnd(accum []byte, block []byte, rnd int16) []byte {
-	var count int32 = 0
-	var last uint8 = 0
-	var rndindex int32
-	var rndcount uint16
+func writeAndUnrleAndUnrnd(accum []byte, block []byte, rnd int16) []byte {
+	count := 0
+	last := uint8(0)
 
-	rndindex = 0
-	rndcount = SIT_rndtable[rndindex]
+	rndindex := 0
+	rndcount := SIT_rndtable[rndindex]
 	for _, ch := range block {
 		if rnd != 0 && (rndcount == 0) {
 			ch ^= 1
 			rndindex++
-			if rndindex == int32(len(SIT_rndtable)) {
+			if rndindex == len(SIT_rndtable) {
 				rndindex = 0
 			}
 			rndcount = SIT_rndtable[rndindex]
@@ -343,7 +329,7 @@ func SIT_write_and_unrle_and_unrnd(accum []byte, block []byte, rnd int16) []byte
 }
 
 func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
-	sa := SIT_ArsenicData{
+	sa := arsenicData{
 		br: NewBitReader(NewByteGetter(r)),
 	}
 	return func() (decompressioncache.Stepper, []byte, error) {
@@ -351,7 +337,7 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 	}
 }
 
-func setupArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+func setupArsenic(sa arsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	defer func() {
 		if recover() != nil {
 			rs, rb, re = nil, nil, errors.New("internal panic")
@@ -361,14 +347,14 @@ func setupArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper
 	sa.Range = 1 << 25
 	sa.Code, _ = sa.br.ReadHiBits(26)
 
-	SIT_reinit_model(&sa, &Models.initial_model)
-	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 0x41 ||
-		SIT_arith_getbits(&sa, &Models.initial_model, 8) != 0x73 {
+	sa.reinitModel(&arsenicModels.initial_model)
+	if sa.arithGetBits(&arsenicModels.initial_model, 8) != 0x41 ||
+		sa.arithGetBits(&arsenicModels.initial_model, 8) != 0x73 {
 		return nil, nil, errors.New("arsenic data not starting with 'As'")
 	}
-	sa.blockbits = uint16(SIT_arith_getbits(&sa, &Models.initial_model, 4) + 9)
+	sa.blockbits = uint16(sa.arithGetBits(&arsenicModels.initial_model, 4) + 9)
 
-	eob := SIT_getsym(&sa, &Models.initial_model)
+	eob := sa.getSym(&arsenicModels.initial_model)
 	if eob != 0 {
 		return nil, nil, io.EOF
 	}
@@ -376,27 +362,27 @@ func setupArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper
 	return stepArsenic(sa, size)
 }
 
-func stepArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+func stepArsenic(sa arsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	defer func() {
 		if recover() != nil {
 			rs, rb, re = nil, nil, errors.New("internal panic")
 		}
 	}()
 
-	SIT_reinit_model(&sa, &Models.selmodel)
+	sa.reinitModel(&arsenicModels.selmodel)
 	for i := range 7 {
-		SIT_reinit_model(&sa, &Models.mtfmodel[i])
+		sa.reinitModel(&arsenicModels.mtfmodel[i])
 	}
 
 	block := make([]byte, 0, 1<<sa.blockbits)
 	unsortedblock := make([]byte, 1<<sa.blockbits)
 	var accum []byte
 
-	rnd := SIT_getsym(&sa, &Models.initial_model)
-	primary_index := int32(SIT_arith_getbits(&sa, &Models.initial_model, int32(sa.blockbits)))
+	rnd := sa.getSym(&arsenicModels.initial_model)
+	primary_index := int32(sa.arithGetBits(&arsenicModels.initial_model, int32(sa.blockbits)))
 	stopme, repeatstate, repeatcount := 0, 0, 0
 	for stopme == 0 {
-		sel := SIT_getsym(&sa, &Models.selmodel)
+		sel := sa.getSym(&arsenicModels.selmodel)
 		sym := int32(0)
 		switch sel {
 		case 0:
@@ -426,29 +412,29 @@ func stepArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper,
 			if (sel > 9) || (sel < 3) { /* this basically can't happen */
 				panic("illegal selector")
 			} else {
-				sym = SIT_getsym(&sa, &Models.mtfmodel[sel-3])
+				sym = sa.getSym(&arsenicModels.mtfmodel[sel-3])
 			}
 		}
 
 		if repeatstate != 0 && (sym >= 0) {
 			repeatstate = 0
-			setto := SIT_dounmtf(&sa, 0)
+			setto := sa.doUnmtf(0)
 			for range repeatcount {
 				block = append(block, uint8(setto))
 			}
 			repeatcount = 0
 		}
 		if stopme == 0 && repeatstate == 0 {
-			block = append(block, byte(SIT_dounmtf(&sa, sym)))
+			block = append(block, byte(sa.doUnmtf(sym)))
 		}
 	}
-	SIT_unblocksort(&sa, block, uint32(len(block)), uint32(primary_index), unsortedblock)
-	accum = SIT_write_and_unrle_and_unrnd(accum, unsortedblock, int16(rnd))
-	eob := SIT_getsym(&sa, &Models.initial_model)
+	sa.unblockSort(block, uint32(len(block)), uint32(primary_index), unsortedblock)
+	accum = writeAndUnrleAndUnrnd(accum, unsortedblock, int16(rnd))
+	eob := sa.getSym(&arsenicModels.initial_model)
 	if int64(len(accum)) >= size || eob != 0 {
 		return nil, accum[:min(size, int64(len(accum)))], io.EOF
 	}
-	SIT_dounmtf(&sa, -1)
+	sa.doUnmtf(-1)
 	// there was a checksum here that we don't calculate
 
 	sa.br.SacrificeBuffer()
