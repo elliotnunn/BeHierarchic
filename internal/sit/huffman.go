@@ -54,12 +54,12 @@ func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 		for {
 			np = len(nodelist)
 			nodelist = append(nodelist, node{})
-			bit, err := bitReader.ReadBits(1)
+			bit, err := bitReader.ReadHiBits(1)
 			if err != nil {
 				panic(err)
 			}
 			if bit == 1 {
-				byt, err := bitReader.ReadBits(8)
+				byt, err := bitReader.ReadHiBits(8)
 				if err != nil {
 					panic(err)
 				}
@@ -94,7 +94,7 @@ func stepHuffman(br BitReader, huff []node, remain int64) (decompressioncache.St
 	for range cap(accum) {
 		node := 0
 		for huff[node].one != -1 {
-			which, err := br.ReadBits(1)
+			which, err := br.ReadHiBits(1)
 			if err != nil {
 				return nil, accum, err
 			}

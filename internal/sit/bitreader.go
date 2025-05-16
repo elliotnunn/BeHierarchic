@@ -40,7 +40,7 @@ func (b *BitReader) SacrificeBuffer() {
 	b.current = nil
 }
 
-func (b *BitReader) ReadBits(n int) (uint32, error) {
+func (b *BitReader) ReadHiBits(n int) (uint32, error) {
 	if len(b.current) == 0 { // is new or has been SacrificeBuffer'd
 		if b.bit == 0 {
 			b.bit = 0x80

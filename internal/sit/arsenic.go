@@ -189,7 +189,7 @@ func SIT_getcode(sa *SIT_ArsenicData, symhigh uint32, symlow uint32, symtot uint
 		sa.Code <<= 1
 		nbits++
 	}
-	b, _ := sa.br.ReadBits(nbits)
+	b, _ := sa.br.ReadHiBits(nbits)
 	sa.Code |= b
 }
 
@@ -359,7 +359,7 @@ func setupArsenic(sa SIT_ArsenicData, size int64) (rs decompressioncache.Stepper
 	}()
 
 	sa.Range = 1 << 25
-	sa.Code, _ = sa.br.ReadBits(26)
+	sa.Code, _ = sa.br.ReadHiBits(26)
 
 	SIT_reinit_model(&sa, &Models.initial_model)
 	if SIT_arith_getbits(&sa, &Models.initial_model, 8) != 0x41 ||
