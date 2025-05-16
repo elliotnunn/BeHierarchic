@@ -122,14 +122,14 @@ func mkAlgoTestCases() []testCase {
 
 func algoName(method int) string {
 	switch method {
-	case 0: // no compression
+	case 0:
 		return "nocompress"
-	case 3: // Huffman compression
-		return "Huffman"
 	case 1:
 		return "RLE"
 	case 2:
 		return "LZC"
+	case 3:
+		return "Huffman"
 	case 5:
 		return "LZAH"
 	case 6:
