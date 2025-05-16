@@ -952,6 +952,31 @@ struct SIT13Data {
   xadUINT8              Window[0x10000];
 };
 
+void printStores(char *name, struct SIT13Store *data, int n) {
+    for (int i=0; i<n; i++) {
+        printf("%s[%d] = (%d,%04x,%04x)\n", name, i, data[i].freq, data[i].d1, data[i].d2);
+    }
+}
+
+void printBuffers(char *name, struct SIT13Buffer *data, int n) {
+    for (int i=0; i<n; i++) {
+        printf("%s[%d] = (%04x,%02x)\n", name, i, data[i].data, data[i].bits);
+    }
+}
+
+void printSIT13Data(struct SIT13Data *s) {
+	printf("numbits = %04x\n", s->MaxBits);
+	printStores("Buffer4", s->Buffer4, 0xE08);
+	printBuffers("Buffer1", s->Buffer1, 0x1000);
+	printBuffers("Buffer2", s->Buffer2, 0x1000);
+	printBuffers("Buffer3", s->Buffer3, 0x1000);
+	printBuffers("Buffer3b", s->Buffer3b, 0x1000);
+	printBuffers("Buffer5", s->Buffer5, 0x141);
+	printf("TextBuf\n    ");
+    for (int i=0; i<658; i++) printf("%02x", 255&s->TextBuf[i]);
+    printf("\n");
+}
+
 static const xadUINT8 SIT13Bits[16] = {0,8,4,12,2,10,6,14,1,9,5,13,3,11,7,15};
 static const xadUINT16 SIT13Info[37] = {
   0x5D8, 0x058, 0x040, 0x0C0, 0x000, 0x078, 0x02B, 0x014,
@@ -1375,6 +1400,7 @@ static xadINT32 SIT_13(struct xadInOut *io)
       j = (j&7)+10;
       SIT13_CreateTree(s, io, s->Buffer2, j);
     }
+    printSIT13Data(s);
     if(!io->xio_Error)
       SIT13_Extract(s, io);
     xadFreeObjectA(XADM s, 0);
