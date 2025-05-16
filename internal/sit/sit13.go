@@ -31,6 +31,8 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 package sit
 
+import "fmt"
+
 const (
 	SIT_VERSION        = 1
 	SIT_REVISION       = 12
@@ -103,6 +105,7 @@ type SIT13Store struct {
 }
 
 type SIT13Data struct {
+	br       BitReader
 	MaxBits  uint16
 	Buffer4  [0xE08]SIT13Store
 	Buffer1  [0x1000]SIT13Buffer
@@ -112,6 +115,12 @@ type SIT13Data struct {
 	Buffer5  [0x141]SIT13Buffer
 	TextBuf  [658]uint8
 	Window   [0x10000]uint8
+	out      []byte
+}
+
+func (s *SIT13Data) PutByte(b byte) uint32 {
+	s.out = append(s.out, b)
+	return uint32(len(s.out))
 }
 
 var SIT13Bits = [16]uint8{0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15}
@@ -215,16 +224,16 @@ var SIT13Static = [1655]uint8{
 	0x75, 0x95, 0xB7, 0x70, 0x8F, 0x80, 0xA6, 0x87, 0x65, 0x66, 0x78, 0x7A, 0x17, 0x77, 0x70,
 }
 
-func SIT13_Func1(s *SIT13Data, buf *SIT13Buffer, info uint32, bits uint16, num uint16) {
+func SIT13_Func1(s *SIT13Data, buf []SIT13Buffer, info uint32, bits uint16, num uint16) {
 	var i, j uint32
 
 	if bits <= 12 {
 		for i = 0; i < (1 << 12); i += (1 << bits) {
 			buf[info+i].data = num
-			buf[info+i].bits = bits
+			buf[info+i].bits = int8(bits)
 		}
 	} else {
-		j = bits - 12
+		j = uint32(bits - 12)
 
 		if buf[info&0xFFF].bits != 0x1F {
 			buf[info&0xFFF].bits = 0x1F
@@ -235,90 +244,80 @@ func SIT13_Func1(s *SIT13Data, buf *SIT13Buffer, info uint32, bits uint16, num u
 		info >>= 12
 
 		for range j {
-			uint16 * a
+			var a *uint16
 
 			if info != 0 {
-				info = &s.Buffer4[bits].d2
+				a = &s.Buffer4[bits].d2
 			} else {
-				info = &s.Buffer4[bits].d1
+				a = &s.Buffer4[bits].d1
 			}
-			if !*a {
+			if *a == 0 {
 				*a = s.MaxBits
 				s.MaxBits++
 			}
 			bits = *a
 			info >>= 1
 		}
-		s.Buffer4[bits].freq = num
+		s.Buffer4[bits].freq = int16(num)
 	}
 }
 
-func SIT13_SortTree(s *SIT13Data, buf *SIT13Buffer, buf2 *SIT13Buffer) {
-	var td uint16
-	var tb int8
+func SIT13_SortTree(s *SIT13Data, buf []SIT13Buffer) {
+	buf1, buf2 := 0, len(buf)
 
-	var a, b *SIT13Buffer
-
-	for buf2-1 > buf {
-		a = buf
-		b = buf2
+	for buf2-1 > buf1 {
+		a, b := buf1, buf2
 
 		for {
-			a++
-			for a < buf2 {
-				tb = a.bits - buf.bits
-				if tb > 0 || (!tb && (a.data >= buf.data)) {
-					break
-				}
+			for {
 				a++
-			}
-			b--
-			for b > buf {
-				tb = b.bits - buf.bits
-				if tb < 0 || (!tb && (b.data <= buf.data)) {
+				if a >= buf2 {
 					break
 				}
+				tb := buf[a].bits - buf[buf1].bits
+				if tb > 0 || (tb == 0 && (buf[a].data >= buf[buf1].data)) {
+					break
+				}
+			}
+			for {
 				b--
+				if b <= buf1 {
+					break
+				}
+				tb := buf[b].bits - buf[buf1].bits
+				if tb < 0 || (tb == 0 && (buf[b].data <= buf[buf1].data)) {
+					break
+				}
 			}
 			if b < a {
 				break
 			} else {
-				tb = a.bits
-				td = a.data
-				a.bits = b.bits
-				a.data = b.data
-				b.bits = tb
-				b.data = td
+				buf[a], buf[b] = buf[b], buf[a]
 			}
 		}
-		if b == buf {
-			buf++
+		if b == buf1 {
+			buf1++
 		} else {
-			tb = buf.bits
-			td = buf.data
-			buf.bits = b.bits
-			buf.data = b.data
-			b.bits = tb
-			b.data = td
-			if buf2-b-1 > b-buf {
-				SIT13_SortTree(s, buf, b)
-				buf = b + 1
+			buf[buf1], buf[b] = buf[b], buf[buf1]
+			if buf2-b-1 > b-buf1 {
+				SIT13_SortTree(s, buf[buf1:b])
+				buf1 = b + 1
 			} else {
-				SIT13_SortTree(s, b+1, buf2)
+				SIT13_SortTree(s, buf[b+1:buf2])
 				buf2 = b
 			}
 		}
 	}
 }
 
-func SIT13_Func2(s *SIT13Data, buf *SIT13Buffer, bits uint16, buf2 *SIT13Buffer) {
+func SIT13_Func2(s *SIT13Data, buf []SIT13Buffer, bits uint16, buf2 []SIT13Buffer) {
 	var i, j, k, l, m, n int32
 
-	SIT13_SortTree(s, buf2, buf2+bits)
+	SIT13_SortTree(s, buf2[:bits])
 
-	for i = 0; i < bits; i++ {
+	for i = 0; i < int32(bits); i++ {
 		l += k
-		m = buf2[i].bits
+		m = int32(buf2[i].bits)
 		if m != j {
 			j = m
 			if j == -1 {
@@ -330,136 +329,149 @@ func SIT13_Func2(s *SIT13Data, buf *SIT13Buffer, bits uint16, buf2 *SIT13Buffer)
 		if j > 0 {
 			m = 0
 			for n = 0; n < 8*4; n += 4 {
-				m += SIT13Bits[(l>>n)&0xF] << (7*4 - n)
+				m += int32(SIT13Bits[(l>>n)&0xF] << (7*4 - n))
 			}
-			SIT13_Func1(s, buf, m, j, buf2[i].data)
+			SIT13_Func1(s, buf, uint32(m), uint16(j), buf2[i].data)
 		}
 	}
 }
 
-func SIT13_CreateStaticTree(s *SIT13Data, buf *SIT13Buffer, bits uint16, bitsbuf *uint8) {
-	var i uint32
-
-	for i = 0; i < bits; i++ {
+func SIT13_CreateStaticTree(s *SIT13Data, buf []SIT13Buffer, bits uint16, bitsbuf []uint8) {
+	for i := range bits {
 		s.Buffer5[i].data = i
-		s.Buffer5[i].bits = bitsbuf[i]
+		s.Buffer5[i].bits = int8(bitsbuf[i])
 	}
-	SIT13_Func2(s, buf, bits, s.Buffer5)
+	SIT13_Func2(s, buf, bits, s.Buffer5[:])
 }
 
 func SIT13InitInfo(s *SIT13Data, id uint8) {
-	var i int32
 	var k, l uint8
-	var a, b *uint8
 
-	a = s.TextBuf
-	b = /*(uint8 *)*/ SIT13Static + SIT13StaticPos[id-1]
+	a := s.TextBuf[:]
+	b := SIT13Static[SIT13StaticPos[id-1]:]
 	id &= 1
 
-	for i = 658; i; i-- {
+	for i := 658; i != 0; i-- {
 		if id != 0 {
-			k = *b >> 4
+			k = b[0] >> 4
 		} else {
-			k = *b & 0xF
-			b++
+			k = b[0] & 0xF
+			b = b[1:]
 		}
 		id ^= 1
 
-		if !k {
+		if k == 0 {
 			if id != 0 {
-				l -= *b >> 4
+				l -= b[0] >> 4
 			} else {
-				l -= *b & 0xF
-				b++
+				l -= b[0] & 0xF
+				b = b[1:]
 			}
 			id ^= 1
 		} else {
 			if k == 15 {
 				if id != 0 {
-					l += *b >> 4
+					l += b[0] >> 4
 				} else {
-					l += *b & 0xF
-					b++
+					l += b[0] & 0xF
+					b = b[1:]
 				}
 				id ^= 1
 			} else {
 				l += k - 7
 			}
 		}
-		*a = l
-		a++
+		a[0] = l
+		a = a[1:]
 	}
 }
 
-func SIT13_Extract(s *SIT13Data, io *xadInOut) {
-	var wpos, j, k, l, size uint32
-	SIT13Buffer * buf = s.Buffer3
+func SIT13_Extract(s *SIT13Data) {
+	var wpos, l, size uint32
+	buf := s.Buffer3[:]
 
-	for !io.xio_Error {
-		k = xadIOReadBitsLow(io, 12)
-		j = buf[k].bits
+	for { // this loop should terminate if we get an IO error
+		k, err := s.br.ReadLoBits(12)
+		if err != nil {
+			panic(err)
+		}
+		j := buf[k].bits
 		if j <= 12 {
-			l = buf[k].data
-			xadIODropBitsLow(io, j)
+			l = uint32(buf[k].data)
+			_, err := s.br.ReadLoBits(int(j))
+			if err != nil {
+				panic(err)
+			}
 		} else {
-			xadIODropBitsLow(io, 12)
+			_, err := s.br.ReadLoBits(12)
+			if err != nil {
+				panic(err)
+			}
 
-			j = buf[k].data
+			j := buf[k].data
 			for s.Buffer4[j].freq == -1 {
-				if xadIOGetBitsLow(io, 1) != 0 {
+				bit, err := s.br.ReadLoBits(12)
+				if err != nil {
+					panic(err)
+				}
+				if bit != 0 {
 					j = s.Buffer4[j].d2
 				} else {
 					j = s.Buffer4[j].d1
 				}
 			}
-			l = s.Buffer4[j].freq
+			l = uint32(s.Buffer4[j].freq)
 		}
 		if l < 0x100 {
-			s.Window[wpos] = xadIOPutChar(io, l)
+			fmt.Println("char %c", byte(l))
+			s.Window[wpos] = byte(l)
 			wpos++
 			wpos &= 0xFFFF
-			buf = s.Buffer3
+			buf = s.Buffer3[:]
 		} else {
-			buf = s.Buffer3b
+			buf = s.Buffer3b[:]
 			if l < 0x13E {
 				size = l - 0x100 + 3
 			} else {
 				if l == 0x13E {
-					size = xadIOGetBitsLow(io, 10)
+					size, _ = s.br.ReadLoBits(10)
 				} else {
 					if l == 0x140 {
 						return
 					}
-					size = xadIOGetBitsLow(io, 15)
+					size, _ = s.br.ReadLoBits(15)
 				}
 				size += 65
 			}
-			j = xadIOReadBitsLow(io, 12)
-			k = s.Buffer2[j].bits
+			j2, _ := s.br.ReadLoBits(12)
+			k = uint32(s.Buffer2[j2].bits)
 			if k <= 12 {
-				l = s.Buffer2[j].data
-				xadIODropBitsLow(io, k)
+				l = uint32(s.Buffer2[j2].data)
+				s.br.ReadLoBits(int(k))
 			} else {
-				xadIODropBitsLow(io, 12)
-				j = s.Buffer2[j].data
-				for s.Buffer4[j].freq == -1 {
-					if xadIOGetBitsLow(io, 1) != 0 {
-						j = s.Buffer4[j].d2
+				s.br.ReadLoBits(12)
+				j2 = uint32(s.Buffer2[j2].data)
+				for s.Buffer4[j2].freq == -1 {
+					bit, _ := s.br.ReadLoBits(1)
+					if bit != 0 {
+						j2 = uint32(s.Buffer4[j2].d2)
 					} else {
-						j = s.Buffer4[j].d1
+						j2 = uint32(s.Buffer4[j2].d1)
 					}
 				}
-				l = s.Buffer4[j].freq
+				l = uint32(s.Buffer4[j2].freq)
 			}
 			k = 0
-			if l {
+			if l != 0 {
 				l--
-				k = (1 << l) | xadIOGetBitsLow(io, l)
+				bits, _ := s.br.ReadLoBits(int(l))
+				k = (1 << l) | bits
 			}
 			l = wpos + 0x10000 - (k + 1)
 			for range size {
 				l &= 0xFFFF
-				s.Window[wpos] = xadIOPutChar(io, s.Window[l])
+				fmt.Println("char %c", s.Window[l])
+				s.Window[wpos] = s.Window[l]
 				wpos++
 				l++
 				wpos &= 0xFFFF
@@ -468,16 +480,16 @@ func SIT13_Extract(s *SIT13Data, io *xadInOut) {
 	}
 }
 
-func SIT13_CreateTree(s *SIT13Data, io *xadInOut, buf *SIT13Buffer, num uint16) {
+func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 	var b *SIT13Buffer
-	var i uint32
 	var data uint16
 	var bi int8 = 0
 
-	for i = 0; i < num; i++ {
-		b = &s.Buffer1[xadIOReadBitsLow(io, 12)]
+	for i := range num {
+		bits, _ := s.br.ReadLoBits(12)
+		b = &s.Buffer1[bits]
 		data = b.data
-		xadIODropBitsLow(io, b.bits)
+		s.br.ReadLoBits(int(b.bits))
 
 		switch data - 0x1F {
 		case 0:
@@ -487,73 +499,69 @@ func SIT13_CreateTree(s *SIT13Data, io *xadInOut, buf *SIT13Buffer, num uint16) 
 		case 2:
 			bi--
 		case 3:
-			if xadIOGetBitsLow(io, 1) {
+			bit, _ := s.br.ReadLoBits(1)
+			if bit != 0 {
 				s.Buffer5[i].bits = bi
 				i++
 			}
-			break
 		case 4:
-			data = xadIOGetBitsLow(io, 3) + 2
+			bits, _ := s.br.ReadLoBits(3)
+			data = uint16(bits) + 2
 			for range data {
 				s.Buffer5[i].bits = bi
 				i++
 			}
-			break
 		case 5:
-			data = xadIOGetBitsLow(io, 6) + 10
+			bits, _ := s.br.ReadLoBits(6)
+			data = uint16(bits) + 10
 			for range data {
 				s.Buffer5[i].bits = bi
 				i++
 			}
-			break
 		default:
-			bi = data + 1
-			break
+			bi = int8(data + 1)
+
 		}
 		s.Buffer5[i].bits = bi
 	}
-	for i = 0; i < num; i++ {
+	for i := range num {
 		s.Buffer5[i].data = i
 	}
-	SIT13_Func2(s, buf, num, s.Buffer5)
+	SIT13_Func2(s, buf, num, s.Buffer5[:])
 }
 
-func SIT_13(io *xadInOut) int32 {
+func SIT_13() int32 {
 	var i, j uint32
-	var xadMasterBase *xadMasterBase = io.xio_xadMasterBase
 	s := &SIT13Data{}
 	s.MaxBits = 1
-	for i = 0; i < 37; i++ {
-		SIT13_Func1(s, s.Buffer1, SIT13Info[i], SIT13InfoBits[i], i)
+	for i := range 37 {
+		SIT13_Func1(s, s.Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
 	}
 	for i = 1; i < 0x704; i++ {
 		/* s.Buffer4[i].d1 = s.Buffer4[i].d2 = 0; */
 		s.Buffer4[i].freq = -1
 	}
 
-	j = xadIOGetChar(io)
+	j, _ = s.br.ReadLoBits(8)
 	i = j >> 4
 	if i > 5 {
-		io.xio_Error = XADERR_ILLEGALDATA
-	} else if i {
-		SIT13InitInfo(s, i)
+		panic("XADERR_ILLEGALDATA")
+	} else if i != 0 {
+		SIT13InitInfo(s, uint8(i))
 		i--
-		SIT13_CreateStaticTree(s, s.Buffer3, 0x141, s.TextBuf)
-		SIT13_CreateStaticTree(s, s.Buffer3b, 0x141, s.TextBuf+0x141)
-		SIT13_CreateStaticTree(s, s.Buffer2, SIT13StaticBits[i], s.TextBuf+0x282)
+		SIT13_CreateStaticTree(s, s.Buffer3[:], 0x141, s.TextBuf[:])
+		SIT13_CreateStaticTree(s, s.Buffer3b[:], 0x141, s.TextBuf[0x141:])
+		SIT13_CreateStaticTree(s, s.Buffer2[:], uint16(SIT13StaticBits[i]), s.TextBuf[0x282:])
 	} else {
-		SIT13_CreateTree(s, io, s.Buffer3, 0x141)
-		if j & 8 {
-			xadCopyMem(s.Buffer3, s.Buffer3b, 0x1000*sizeof(SIT13Buffer))
+		SIT13_CreateTree(s, s.Buffer3[:], 0x141)
+		if j&8 != 0 {
+			copy(s.Buffer3b[:], s.Buffer3[:])
 		} else {
-			SIT13_CreateTree(s, io, s.Buffer3b, 0x141)
+			SIT13_CreateTree(s, s.Buffer3b[:], 0x141)
 		}
 		j = (j & 7) + 10
-		SIT13_CreateTree(s, io, s.Buffer2, j)
+		SIT13_CreateTree(s, s.Buffer2[:], uint16(j))
 	}
-	if !io.xio_Error {
-		SIT13_Extract(s, io)
-	}
-	xadFreeObjectA(s, 0)
-	return io.xio_Error
+	SIT13_Extract(s)
+	return 0
 }
