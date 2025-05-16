@@ -43,16 +43,6 @@ type node struct {
 	byte      uint8
 }
 
-// Okay, the mission is to convert this into a "stepper" function
-// ... with abstractions like BitReader, which is a bit of a tricky thing...
-
-func printHuffmanTable(nodelist []node) {
-	for i, node := range nodelist {
-		fmt.Printf("NODE % 2d: (0)=(%d) (1)=(%d) (byte)=%02x\n",
-			i, node.zero, node.one, node.byte)
-	}
-}
-
 func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
 	byteGetter := NewByteGetter(r)
 	bitReader := NewBitReader(byteGetter)
@@ -121,4 +111,11 @@ func stepHuffman(br BitReader, huff []node, remain int64) (decompressioncache.St
 	return func() (decompressioncache.Stepper, []byte, error) {
 		return stepHuffman(br, huff, remain-int64(len(accum)))
 	}, accum, nil
+}
+
+func printHuffmanTable(nodelist []node) {
+	for i, node := range nodelist {
+		fmt.Printf("NODE % 2d: (0)=(%d) (1)=(%d) (byte)=%02x\n",
+			i, node.zero, node.one, node.byte)
+	}
 }
