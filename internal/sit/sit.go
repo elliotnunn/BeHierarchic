@@ -405,7 +405,8 @@ func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name s
 	// case 5: // LZ with adaptive Huffman
 	// case 6: // Fixed Huffman table
 	// case 8: // Miller-Wegman encoding
-	// case 13: // anonymous
+	case 13: // anonymous
+		return decompressioncache.New(InitSIT13(compr, size), size, name)
 	// case 14: // anonymous
 	case 15: // Arsenic
 		return decompressioncache.New(InitArsenic(compr, size), size, name)

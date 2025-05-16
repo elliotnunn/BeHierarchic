@@ -31,67 +31,12 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 package sit
 
-import "fmt"
+import (
+	"fmt"
+	"io"
 
-const (
-	SIT_VERSION        = 1
-	SIT_REVISION       = 12
-	SIT5_VERSION       = SIT_VERSION
-	SIT5_REVISION      = SIT_REVISION
-	SIT5EXE_VERSION    = SIT_VERSION
-	SIT5EXE_REVISION   = SIT_REVISION
-	MACBINARY_VERSION  = SIT_VERSION
-	MACBINARY_REVISION = SIT_REVISION
-	PACKIT_VERSION     = SIT_VERSION
-	PACKIT_REVISION    = SIT_REVISION
-
-	SITFH_COMPRMETHOD  = 0   /* uint8 rsrc fork compression method */
-	SITFH_COMPDMETHOD  = 1   /* uint8 data fork compression method */
-	SITFH_FNAMESIZE    = 2   /* uint8 filename size */
-	SITFH_FNAME        = 3   /* uint8 83 byte filename */
-	SITFH_FTYPE        = 66  /* uint32 file type */
-	SITFH_CREATOR      = 70  /* uint32 file creator */
-	SITFH_FNDRFLAGS    = 74  /* uint16 Finder flags */
-	SITFH_CREATIONDATE = 76  /* uint32 creation date */
-	SITFH_MODDATE      = 80  /* uint32 modification date */
-	SITFH_RSRCLENGTH   = 84  /* uint32 decompressed rsrc length */
-	SITFH_DATALENGTH   = 88  /* uint32 decompressed data length */
-	SITFH_COMPRLENGTH  = 92  /* uint32 compressed rsrc length */
-	SITFH_COMPDLENGTH  = 96  /* uint32 compressed data length */
-	SITFH_RSRCCRC      = 100 /* uint16 crc of rsrc fork */
-	SITFH_DATACRC      = 102 /* uint16 crc of data fork */ /* 6 reserved bytes */
-	SITFH_HDRCRC       = 110 /* uint16 crc of file header */
-	SIT_FILEHDRSIZE    = 112
-
-	SITAH_SIGNATURE  = 0  /* uint32 signature = 'SIT!' */
-	SITAH_NUMFILES   = 4  /* uint16 number of files in archive */
-	SITAH_ARCLENGTH  = 6  /* uint32 arcLength length of entire archive incl. header */
-	SITAH_SIGNATURE2 = 10 /* uint32 signature2 = 'rLau' */
-	SITAH_VERSION    = 14 /* uint8 version number */
-	SIT_ARCHDRSIZE   = 22 /* +7 reserved bytes */
-
-	/* compression methods */
-	SITnocomp  = 0 /* just read each byte and write it to archive */
-	SITrle     = 1 /* RLE compression */
-	SITlzc     = 2 /* LZC compression */
-	SIThuffman = 3 /* Huffman compression */
-
-	SITlzah   = 5 /* LZ with adaptive Huffman */
-	SITfixhuf = 6 /* Fixed Huffman table */
-
-	SITmw = 8 /* Miller-Wegman encoding */
-
-	SITprot    = 16 /* password protected bit */
-	SITsfolder = 32 /* start of folder */
-	SITefolder = 33 /* end of folder */
+	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
-
-type SITPrivate struct {
-	CRC    uint16
-	Method uint8
-}
-
-const SITESC = 0x90 /* repeat packing escape */
 
 type SIT13Buffer struct {
 	data uint16
@@ -118,9 +63,9 @@ type SIT13Data struct {
 	out      []byte
 }
 
-func (s *SIT13Data) PutByte(b byte) uint32 {
+func (s *SIT13Data) PutByte(b byte) {
 	s.out = append(s.out, b)
-	return uint32(len(s.out))
+	fmt.Printf("byte %02x\n", b)
 }
 
 var SIT13Bits = [16]uint8{0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15}
@@ -423,7 +368,7 @@ func SIT13_Extract(s *SIT13Data) {
 			l = uint32(s.Buffer4[j].freq)
 		}
 		if l < 0x100 {
-			fmt.Println("char %c", byte(l))
+			s.PutByte(byte(l))
 			s.Window[wpos] = byte(l)
 			wpos++
 			wpos &= 0xFFFF
@@ -470,7 +415,7 @@ func SIT13_Extract(s *SIT13Data) {
 			l = wpos + 0x10000 - (k + 1)
 			for range size {
 				l &= 0xFFFF
-				fmt.Println("char %c", s.Window[l])
+				s.PutByte(s.Window[l])
 				s.Window[wpos] = s.Window[l]
 				wpos++
 				l++
@@ -530,12 +475,20 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 	SIT13_Func2(s, buf, num, s.Buffer5[:])
 }
 
-func SIT_13() int32 {
+func InitSIT13(r io.ReaderAt, unpack int64) decompressioncache.Stepper {
+	s := SIT13Data{
+		br: NewBitReader(NewByteGetter(r)),
+	}
+	return func() (decompressioncache.Stepper, []byte, error) {
+		return setupSIT13(s, unpack)
+	}
+}
+
+func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	var i, j uint32
-	s := &SIT13Data{}
 	s.MaxBits = 1
 	for i := range 37 {
-		SIT13_Func1(s, s.Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
+		SIT13_Func1(&s, s.Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
 	}
 	for i = 1; i < 0x704; i++ {
 		/* s.Buffer4[i].d1 = s.Buffer4[i].d2 = 0; */
@@ -547,21 +500,26 @@ func SIT_13() int32 {
 	if i > 5 {
 		panic("XADERR_ILLEGALDATA")
 	} else if i != 0 {
-		SIT13InitInfo(s, uint8(i))
+		SIT13InitInfo(&s, uint8(i))
 		i--
-		SIT13_CreateStaticTree(s, s.Buffer3[:], 0x141, s.TextBuf[:])
-		SIT13_CreateStaticTree(s, s.Buffer3b[:], 0x141, s.TextBuf[0x141:])
-		SIT13_CreateStaticTree(s, s.Buffer2[:], uint16(SIT13StaticBits[i]), s.TextBuf[0x282:])
+		SIT13_CreateStaticTree(&s, s.Buffer3[:], 0x141, s.TextBuf[:])
+		SIT13_CreateStaticTree(&s, s.Buffer3b[:], 0x141, s.TextBuf[0x141:])
+		SIT13_CreateStaticTree(&s, s.Buffer2[:], uint16(SIT13StaticBits[i]), s.TextBuf[0x282:])
 	} else {
-		SIT13_CreateTree(s, s.Buffer3[:], 0x141)
+		SIT13_CreateTree(&s, s.Buffer3[:], 0x141)
 		if j&8 != 0 {
 			copy(s.Buffer3b[:], s.Buffer3[:])
 		} else {
-			SIT13_CreateTree(s, s.Buffer3b[:], 0x141)
+			SIT13_CreateTree(&s, s.Buffer3b[:], 0x141)
 		}
 		j = (j & 7) + 10
-		SIT13_CreateTree(s, s.Buffer2[:], uint16(j))
+		SIT13_CreateTree(&s, s.Buffer2[:], uint16(j))
 	}
-	SIT13_Extract(s)
-	return 0
+
+	return stepSIT13(s, remain)
+}
+
+func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+	SIT13_Extract(&s)
+	return nil, s.out, io.EOF
 }
