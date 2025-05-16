@@ -32,6 +32,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 
@@ -61,6 +62,27 @@ type SIT13Data struct {
 	TextBuf  [658]uint8
 	Window   [0x10000]uint8
 	out      []byte
+}
+
+func (s *SIT13Data) print() {
+	fmt.Printf("numbits = %04x\n", s.MaxBits)
+	fmt.Println("Buffer4")
+	for _, b := range s.Buffer4 {
+		fmt.Printf("    (%d,%04x,%04x)\n", b.freq, b.d1, b.d2)
+	}
+	do := func(name string, slice []SIT13Buffer) {
+		fmt.Println(name)
+		for _, b := range slice {
+			fmt.Printf("    (%04x,%02x)\n", b.data, b.bits)
+		}
+	}
+	do("Buffer1", s.Buffer1[:])
+	do("Buffer2", s.Buffer2[:])
+	do("Buffer3", s.Buffer3[:])
+	do("Buffer3b", s.Buffer3b[:])
+	do("Buffer5", s.Buffer5[:])
+	fmt.Println("TextBuf")
+	fmt.Println("    " + hex.EncodeToString(s.TextBuf[:]))
 }
 
 func (s *SIT13Data) PutByte(b byte) {
@@ -430,7 +452,7 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 	var data uint16
 	var bi int8 = 0
 
-	for i := range num {
+	for i := uint16(0); i < num; i++ { // note the loop body changes i
 		bits, _ := s.br.ReadLoBits(12)
 		b = &s.Buffer1[bits]
 		data = b.data
@@ -490,12 +512,19 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 	for i := range 37 {
 		SIT13_Func1(&s, s.Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
 	}
+
 	for i = 1; i < 0x704; i++ {
 		/* s.Buffer4[i].d1 = s.Buffer4[i].d2 = 0; */
 		s.Buffer4[i].freq = -1
 	}
+	s.print()
 
-	j, _ = s.br.ReadLoBits(8)
+	jj, _ := s.br.ReadLoBits(8) // awks, need to reverse this
+	for range 8 {
+		j <<= 1
+		j |= jj & 1
+		jj >>= 1
+	}
 	i = j >> 4
 	if i > 5 {
 		panic("XADERR_ILLEGALDATA")

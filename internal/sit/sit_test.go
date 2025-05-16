@@ -40,7 +40,7 @@ func TestAlgorithms(t *testing.T) {
 				t.Errorf("expected %d bytes, got %d", x.unpackedSize, gotn)
 			}
 			if !bytes.Equal(got, x.unpackedData) && !sameTextFile(got, x.unpackedData) {
-				t.Error(logMismatch(got, x.unpackedData, x.stuffitPath, x.path))
+				t.Error(logMismatch(got, x.unpackedData, x.packedData, x.stuffitPath, x.path))
 			}
 		})
 	}
@@ -179,11 +179,12 @@ func safeName(s string) string {
 	return string(ret)
 }
 
-func logMismatch(got, expect []byte, name1, name2 string) string {
+func logMismatch(got, expect, packed []byte, name1, name2 string) string {
 	save := filepath.Join(os.TempDir(), safeName(name1), safeName(name2))
 	os.MkdirAll(save, 0o755)
 	os.WriteFile(filepath.Join(save, "expect"), expect, 0o644)
 	os.WriteFile(filepath.Join(save, "got"), got, 0o644)
+	os.WriteFile(filepath.Join(save, "packed"), packed, 0o644)
 	return fmt.Sprintf("mismatched data logged: %s", filepath.Join(save, "*"))
 }
 
