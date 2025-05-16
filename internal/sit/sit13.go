@@ -66,21 +66,22 @@ type SIT13Data struct {
 
 func (s *SIT13Data) print() {
 	fmt.Printf("numbits = %04x\n", s.MaxBits)
-	fmt.Println("Buffer4")
-	for _, b := range s.Buffer4 {
-		fmt.Printf("    (%d,%04x,%04x)\n", b.freq, b.d1, b.d2)
-	}
-	do := func(name string, slice []SIT13Buffer) {
-		fmt.Println(name)
-		for _, b := range slice {
-			fmt.Printf("    (%04x,%02x)\n", b.data, b.bits)
+	do1 := func(name string, slice []SIT13Store) {
+		for i, b := range slice {
+			fmt.Printf("%s[%d] = (%d,%04x,%04x)\n", name, i, b.freq, b.d1, b.d2)
 		}
 	}
-	do("Buffer1", s.Buffer1[:])
-	do("Buffer2", s.Buffer2[:])
-	do("Buffer3", s.Buffer3[:])
-	do("Buffer3b", s.Buffer3b[:])
-	do("Buffer5", s.Buffer5[:])
+	do2 := func(name string, slice []SIT13Buffer) {
+		for i, b := range slice {
+			fmt.Printf("%s[%d] = (%04x,%02x)\n", name, i, b.data, b.bits)
+		}
+	}
+	do1("Buffer4", s.Buffer4[:])
+	do2("Buffer1", s.Buffer1[:])
+	do2("Buffer2", s.Buffer2[:])
+	do2("Buffer3", s.Buffer3[:])
+	do2("Buffer3b", s.Buffer3b[:])
+	do2("Buffer5", s.Buffer5[:])
 	fmt.Println("TextBuf")
 	fmt.Println("    " + hex.EncodeToString(s.TextBuf[:]))
 }
@@ -353,6 +354,11 @@ func SIT13InitInfo(s *SIT13Data, id uint8) {
 	}
 }
 
+/*
+Darn big problem...
+We need to be able to un-read up to 11 bytes... very upsetting situation!
+Is this because of huffman table shenanigans? I do think so...
+*/
 func SIT13_Extract(s *SIT13Data) {
 	var wpos, l, size uint32
 	buf := s.Buffer3[:]
@@ -517,7 +523,6 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		/* s.Buffer4[i].d1 = s.Buffer4[i].d2 = 0; */
 		s.Buffer4[i].freq = -1
 	}
-	s.print()
 
 	jj, _ := s.br.ReadLoBits(8) // awks, need to reverse this
 	for range 8 {
@@ -545,10 +550,11 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		SIT13_CreateTree(&s, s.Buffer2[:], uint16(j))
 	}
 
+	s.print()
 	return stepSIT13(s, remain)
 }
 
 func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
-	SIT13_Extract(&s)
+	// SIT13_Extract(&s)
 	return nil, s.out, io.EOF
 }
