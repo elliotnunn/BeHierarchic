@@ -33,6 +33,7 @@ package sit
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 
@@ -73,7 +74,7 @@ func (s *SIT13Data) print() {
 	}
 	do2 := func(name string, slice []SIT13Buffer) {
 		for i, b := range slice {
-			fmt.Printf("%s[%d] = (%04x,%02x)\n", name, i, b.data, b.bits)
+			fmt.Printf("%s[%d] = (%04x,%02x)\n", name, i, b.data, uint8(b.bits))
 		}
 	}
 	do1("Buffer4", s.Buffer4[:])
@@ -216,7 +217,7 @@ func SIT13_Func1(s *SIT13Data, buf []SIT13Buffer, info uint32, bits uint16, num 
 		for range j {
 			var a *uint16
 
-			if info != 0 {
+			if info&1 != 0 {
 				a = &s.Buffer4[bits].d2
 			} else {
 				a = &s.Buffer4[bits].d1
@@ -299,7 +300,7 @@ func SIT13_Func2(s *SIT13Data, buf []SIT13Buffer, bits uint16, buf2 []SIT13Buffe
 		if j > 0 {
 			m = 0
 			for n = 0; n < 8*4; n += 4 {
-				m += int32(SIT13Bits[(l>>n)&0xF] << (7*4 - n))
+				m += int32(SIT13Bits[(l>>n)&0xF]) << (7*4 - n)
 			}
 			SIT13_Func1(s, buf, uint32(m), uint16(j), buf2[i].data)
 		}
@@ -495,7 +496,6 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 			}
 		default:
 			bi = int8(data + 1)
-
 		}
 		s.Buffer5[i].bits = bi
 	}
@@ -547,17 +547,14 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		SIT13_CreateTree(&s, s.Buffer2[:], uint16(j))
 	}
 
-	s.print()
 	return stepSIT13(s, remain)
 }
 
 func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	defer func() {
-		recover()
-		rs = nil
-		rb = make([]byte, remain)
-		copy(rb, "game over u lose")
-		re = io.EOF
+		if recover() != nil {
+			re = errors.New("internal StuffIt panic")
+		}
 	}()
 	SIT13_Extract(&s)
 	return nil, s.out, io.EOF

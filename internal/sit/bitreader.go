@@ -75,3 +75,46 @@ func (b *BitReader) ReadHiBits(n int) (uint32, error) {
 	}
 	return ret, nil
 }
+
+func (b *BitReader) ReadLoBits(n int) (uint32, error) {
+	if len(b.current) == 0 { // is new or has been SacrificeBuffer'd
+		if b.bit == 0 {
+			b.bit = 1
+		}
+		var err error
+		b.current, err = b.bg.GetBytes(b.curbase)
+		if len(b.current) == 0 {
+			return 0, err
+		}
+	}
+
+	// might be worth optimising the below loop at some point in future
+	var ret uint32
+	shiftinfrom := uint32(1) << n
+	for i := range n {
+		if b.current[0]&b.bit != 0 {
+			ret |= shiftinfrom
+		}
+		ret >>= 1
+		b.bit <<= 1
+		if b.bit == 0 {
+			b.bit = 1
+			b.current = b.current[1:]
+			b.curbase++
+			if i < n-1 && len(b.current) == 0 { // will we need more bits soon?
+				var err error
+				b.current, err = b.bg.GetBytes(b.curbase)
+				if len(b.current) == 0 {
+					return 0, err
+				}
+			}
+		}
+	}
+	return ret, nil
+}
+
+func (b *BitReader) ReadLoBitsTemp(n int) (uint32, error) {
+	temp := *b
+	r1, r2 := temp.ReadLoBits(n)
+	return r1, r2
+}
