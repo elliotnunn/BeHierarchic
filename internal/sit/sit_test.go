@@ -60,11 +60,11 @@ type testCase struct {
 }
 
 func (t *testCase) String() string {
-	return fmt.Sprintf("%s/%s/%s/%s/%#x+%#x->%#x",
+	return fmt.Sprintf("%s/%s/%s/%cfork",
 		algoName(t.algorithm),
 		strings.ReplaceAll(t.stuffitPath, "/", ":"),
 		strings.ReplaceAll(t.path, "/", ":"),
-		t.whichFork, t.offset, t.packedSize, t.unpackedSize)
+		t.whichFork[0])
 }
 
 func mkAlgoTestCases() []testCase {
