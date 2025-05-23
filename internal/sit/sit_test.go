@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -180,7 +181,11 @@ func safeName(s string) string {
 }
 
 func logMismatch(got, expect, packed []byte, name1, name2 string) string {
-	save := filepath.Join(os.TempDir(), safeName(name1), safeName(name2))
+	tmp := "/tmp"
+	if runtime.GOOS == "windows" {
+		tmp = `C:\Windows\Temp`
+	}
+	save := filepath.Join(tmp, safeName(name1), safeName(name2))
 	os.MkdirAll(save, 0o755)
 	os.WriteFile(filepath.Join(save, "expect"), expect, 0o644)
 	os.WriteFile(filepath.Join(save, "got"), got, 0o644)
