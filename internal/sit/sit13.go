@@ -33,7 +33,6 @@ package sit
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 
@@ -361,24 +360,22 @@ func SIT13InitInfo(s *SIT13Data, id uint8) {
 Darn big problem...
 We need to be able to un-read up to 11 bytes... very upsetting situation!
 Is this because of huffman table shenanigans? I do think so...
+
+Should we do it this way, with a single lookup?
+It is likely to be more efficient
 */
 func SIT13_Extract(s *SIT13Data) {
 	var wpos, l, size uint32
 	buf := s.Buffer3[:]
 
-	for { // this loop should terminate if we get an IO error
-		k, err := s.br.ReadLoBitsTemp(12)
-		if err != nil {
-			panic(err)
-		}
+	for {
+		k, _ := s.br.ReadLoBitsTemp(12) // EOF allowed, post-EOF bits are zero
 		j := buf[k].bits
 		if j <= 12 {
 			l = uint32(buf[k].data)
-			_, err := s.br.ReadLoBits(int(j))
-			if err != nil {
-				panic(err)
-			}
+			s.br.DiscardBits(uint8(j))
 		} else {
+			s.br.DiscardBits(12)
 			_, err := s.br.ReadLoBits(12)
 			if err != nil {
 				panic(err)
@@ -423,9 +420,9 @@ func SIT13_Extract(s *SIT13Data) {
 			k = uint32(s.Buffer2[j2].bits)
 			if k <= 12 {
 				l = uint32(s.Buffer2[j2].data)
-				s.br.ReadLoBits(int(k))
+				s.br.DiscardBits(uint8(k))
 			} else {
-				s.br.ReadLoBits(12)
+				s.br.DiscardBits(12)
 				j2 = uint32(s.Buffer2[j2].data)
 				for s.Buffer4[j2].freq == -1 {
 					bit, _ := s.br.ReadLoBits(1)
@@ -440,7 +437,7 @@ func SIT13_Extract(s *SIT13Data) {
 			k = 0
 			if l != 0 {
 				l--
-				bits, _ := s.br.ReadLoBits(int(l))
+				bits, _ := s.br.ReadLoBits(uint8(l))
 				k = (1 << l) | bits
 			}
 			l = wpos + 0x10000 - (k + 1)
@@ -465,7 +462,7 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 		bits, _ := s.br.ReadLoBitsTemp(12)
 		b = &s.Buffer1[bits]
 		data = b.data
-		s.br.ReadLoBits(int(b.bits))
+		s.br.DiscardBits(uint8(b.bits))
 
 		switch data - 0x1F {
 		case 0:
@@ -551,11 +548,12 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 }
 
 func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
-	defer func() {
-		if recover() != nil {
-			re = errors.New("internal StuffIt panic")
-		}
-	}()
+	// defer func() {
+	// 	if recover() != nil {
+	// 		fmt.Println("internal StuffIt panic")
+	// 		re = errors.New("internal StuffIt panic")
+	// 	}
+	// }()
 	SIT13_Extract(&s)
 	return nil, s.out, io.EOF
 }
