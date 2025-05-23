@@ -1,6 +1,7 @@
 package sit
 
 import (
+	"fmt"
 	"io"
 )
 
@@ -184,7 +185,7 @@ func (b *BitReader) DiscardBits(n uint8) {
 		b.step1()
 	}
 	if b.bit >= 8 {
-		panic("discarding bits that were never read")
+		panic(fmt.Sprintf("discarding %d bits that were never read", n))
 	}
 }
 
