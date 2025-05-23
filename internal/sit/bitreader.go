@@ -188,6 +188,24 @@ func (b *BitReader) DiscardBits(n uint8) {
 	}
 }
 
+// func (b *BitReader) ReadBool() (bool, error) {
+// again:
+// 	if len(b.bufs[0]) >= 0 { // yay fast path
+// 		ret := b.bufs[0][0]>>b.bit&1 != 0
+// 		b.bit++
+// 		if b.bit == 8 {
+// 			b.step1()
+// 		}
+// 		return ret, nil
+// 	} else { // sad slow path
+// 		err := b.ensurebyteavail()
+// 		if err != nil {
+// 			return false, err
+// 		}
+// 		goto again
+// 	}
+// }
+
 func (b *BitReader) ReadLoBitsTemp(n uint8) (uint32, error) {
 	if len(b.bufs[0]) >= 4 { // yay fast path
 		v := uint32(b.bufs[0][0]) | uint32(b.bufs[0][1])<<8 | uint32(b.bufs[0][2])<<16 | uint32(b.bufs[0][3])<<24
