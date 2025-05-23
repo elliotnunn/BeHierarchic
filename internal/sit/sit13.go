@@ -86,13 +86,6 @@ func (s *SIT13Data) print() {
 	fmt.Println("    " + hex.EncodeToString(s.TextBuf[:]))
 }
 
-func (s *SIT13Data) PutByte(b byte) {
-	if len(s.out) >= 0x100000 {
-		panic("too long")
-	}
-	s.out = append(s.out, b)
-}
-
 var SIT13Bits = [16]uint8{0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15}
 var SIT13Info = [37]uint16{
 	0x5D8, 0x058, 0x040, 0x0C0, 0x000, 0x078, 0x02B, 0x014,
@@ -364,7 +357,7 @@ Is this because of huffman table shenanigans? I do think so...
 Should we do it this way, with a single lookup?
 It is likely to be more efficient
 */
-func SIT13_Extract(s *SIT13Data) {
+func SIT13_Extract(s *SIT13Data, remain int64) {
 	var wpos, l, size uint32
 	buf := s.Buffer3[:]
 
@@ -396,7 +389,11 @@ func SIT13_Extract(s *SIT13Data) {
 			l = uint32(s.Buffer4[j].freq)
 		}
 		if l < 0x100 {
-			s.PutByte(byte(l))
+			s.out = append(s.out, byte(l))
+			remain--
+			if remain == 0 {
+				return
+			}
 			s.Window[wpos] = byte(l)
 			wpos++
 			wpos &= 0xFFFF
@@ -443,7 +440,11 @@ func SIT13_Extract(s *SIT13Data) {
 			l = wpos + 0x10000 - (k + 1)
 			for range size {
 				l &= 0xFFFF
-				s.PutByte(s.Window[l])
+				s.out = append(s.out, s.Window[l])
+				remain--
+				if remain == 0 {
+					return
+				}
 				s.Window[wpos] = s.Window[l]
 				wpos++
 				l++
@@ -554,6 +555,6 @@ func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []b
 	// 		re = errors.New("internal StuffIt panic")
 	// 	}
 	// }()
-	SIT13_Extract(&s)
+	SIT13_Extract(&s, remain)
 	return nil, s.out, io.EOF
 }
