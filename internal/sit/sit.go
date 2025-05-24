@@ -398,8 +398,8 @@ func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name s
 		return bytes.NewReader(make([]byte, size)) // dodgy temporary
 	case 0: // no compression
 		return compr
-	case 3: // Huffman compression
-		return decompressioncache.New(InitHuffman(compr, size), size, name)
+	// case 3: // Huffman compression
+	// 	return decompressioncache.New(InitHuffman(compr, size), size, name)
 	// case 1: // RLE compression
 	// case 2: // LZC compression
 	// case 5: // LZ with adaptive Huffman

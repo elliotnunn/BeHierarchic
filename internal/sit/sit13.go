@@ -33,6 +33,7 @@ package sit
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 
@@ -349,50 +350,49 @@ func SIT13InitInfo(s *SIT13Data, id uint8) {
 	}
 }
 
-/*
-Darn big problem...
-We need to be able to un-read up to 11 bytes... very upsetting situation!
-Is this because of huffman table shenanigans? I do think so...
-
-Should we do it this way, with a single lookup?
-It is likely to be more efficient
-*/
-func SIT13_Extract(s *SIT13Data, remain int64) {
+func stepSIT13(s SIT13Data, bitbuf int, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+	re = io.EOF
+	defer func() {
+		if recover() != nil {
+			fmt.Println("internal StuffIt panic")
+			re = errors.New("internal StuffIt panic")
+		}
+	}()
 	var wpos, l, size uint32
 	buf := s.Buffer3[:]
 
 	for {
-		k, _ := s.br.ReadLoBitsTemp(12) // EOF allowed, post-EOF bits are zero
+		bitbuf = s.br.More(bitbuf)
+		// now guaranteed 55 bits
+		k := uint32(bitbuf & (1<<12 - 1)) // not sure of type?
 		j := buf[k].bits
 		if j <= 12 {
 			l = uint32(buf[k].data)
-			s.br.DiscardBits(uint8(j))
+			bitbuf >>= j
+			// now guaranteed 43 bits
 		} else {
-			s.br.DiscardBits(12)
-			_, err := s.br.ReadLoBits(12)
-			if err != nil {
-				panic(err)
-			}
+			bitbuf >>= 12
 
 			j := buf[k].data
 			for s.Buffer4[j].freq == -1 {
-				bit, err := s.br.ReadLoBits(12)
-				if err != nil {
-					panic(err)
-				}
+				bit := bitbuf & 1
+				bitbuf >>= 1
 				if bit != 0 {
 					j = s.Buffer4[j].d2
 				} else {
 					j = s.Buffer4[j].d1
 				}
+				bitbuf = s.br.More(bitbuf)
 			}
+			// now guaranteed 55 bits
 			l = uint32(s.Buffer4[j].freq)
 		}
+		// now guaranteed 43 bits
 		if l < 0x100 {
-			s.out = append(s.out, byte(l))
+			rb = append(rb, byte(l))
 			remain--
 			if remain == 0 {
-				return
+				goto done
 			}
 			s.Window[wpos] = byte(l)
 			wpos++
@@ -404,46 +404,57 @@ func SIT13_Extract(s *SIT13Data, remain int64) {
 				size = l - 0x100 + 3
 			} else {
 				if l == 0x13E {
-					size, _ = s.br.ReadLoBits(10)
+					size = uint32(bitbuf & (1<<10 - 1))
+					bitbuf >>= 10
+					// now guaranteed 33 bits
 				} else {
 					if l == 0x140 {
-						return
+						goto done
 					}
-					size, _ = s.br.ReadLoBits(15)
+					size = uint32(bitbuf & (1<<15 - 1))
+					bitbuf >>= 15
+					// now guaranteed 28 bits
 				}
 				size += 65
 			}
-			j2, _ := s.br.ReadLoBitsTemp(12)
+			// now guaranteed 28 bits
+			j2 := uint32(bitbuf & (1<<12 - 1))
 			k = uint32(s.Buffer2[j2].bits)
 			if k <= 12 {
 				l = uint32(s.Buffer2[j2].data)
-				s.br.DiscardBits(uint8(k))
+				bitbuf >>= k
+				// now guaranteed 16 bits
 			} else {
-				s.br.DiscardBits(12)
+				bitbuf >>= k
+				// now guaranteed 16 bits
 				j2 = uint32(s.Buffer2[j2].data)
 				for s.Buffer4[j2].freq == -1 {
-					bit, _ := s.br.ReadLoBits(1)
+					bit := bitbuf & 1
+					bitbuf >>= 1
 					if bit != 0 {
 						j2 = uint32(s.Buffer4[j2].d2)
 					} else {
 						j2 = uint32(s.Buffer4[j2].d1)
 					}
+					bitbuf = s.br.More(bitbuf)
 				}
+				// now guaranteed 55 bits
 				l = uint32(s.Buffer4[j2].freq)
 			}
+			// now guaranteed 16 bits
 			k = 0
 			if l != 0 {
 				l--
-				bits, _ := s.br.ReadLoBits(uint8(l))
-				k = (1 << l) | bits
+				k = (1 << l) | uint32((bitbuf & (1<<l - 1)))
+				bitbuf >>= l
 			}
 			l = wpos + 0x10000 - (k + 1)
 			for range size {
 				l &= 0xFFFF
-				s.out = append(s.out, s.Window[l])
+				rb = append(rb, s.Window[l])
 				remain--
 				if remain == 0 {
-					return
+					goto done
 				}
 				s.Window[wpos] = s.Window[l]
 				wpos++
@@ -452,19 +463,22 @@ func SIT13_Extract(s *SIT13Data, remain int64) {
 			}
 		} /* l >= 0x100 */
 	}
+done:
+	return // nakedly
 }
 
-func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
+func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) int {
 	var b *SIT13Buffer
 	var data uint16
 	var bi int8 = 0
 
 	for i := uint16(0); i < num; i++ { // note the loop body changes i
-		bits, _ := s.br.ReadLoBitsTemp(12)
+		bitbuf = s.br.More(bitbuf) // guaranteed 55 bits, enough for a loop iteration
+
+		bits := bitbuf & (1<<12 - 1)
 		b = &s.Buffer1[bits]
 		data = b.data
-		s.br.DiscardBits(uint8(b.bits))
-
+		bitbuf >>= b.bits
 		switch data - 0x1F {
 		case 0:
 			bi = -1
@@ -473,22 +487,23 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 		case 2:
 			bi--
 		case 3:
-			bit, _ := s.br.ReadLoBits(1)
-			if bit != 0 {
+			field := bitbuf & 1
+			bitbuf >>= 1
+			if field != 0 {
 				s.Buffer5[i].bits = bi
 				i++
 			}
 		case 4:
-			bits, _ := s.br.ReadLoBits(3)
-			data = uint16(bits) + 2
-			for range data {
+			field := bitbuf&(1<<3-1) + 2
+			bitbuf >>= 3
+			for range field {
 				s.Buffer5[i].bits = bi
 				i++
 			}
 		case 5:
-			bits, _ := s.br.ReadLoBits(6)
-			data = uint16(bits) + 10
-			for range data {
+			field := bitbuf&(1<<6-1) + 10
+			bitbuf >>= 6
+			for range field {
 				s.Buffer5[i].bits = bi
 				i++
 			}
@@ -501,6 +516,7 @@ func SIT13_CreateTree(s *SIT13Data, buf []SIT13Buffer, num uint16) {
 		s.Buffer5[i].data = i
 	}
 	SIT13_Func2(s, buf, num, s.Buffer5[:])
+	return bitbuf
 }
 
 func InitSIT13(r io.ReaderAt, unpack int64) decompressioncache.Stepper {
@@ -513,6 +529,14 @@ func InitSIT13(r io.ReaderAt, unpack int64) decompressioncache.Stepper {
 }
 
 func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+	defer func() {
+		if recover() != nil {
+			fmt.Println("internal StuffIt panic")
+			re = errors.New("internal StuffIt panic")
+			rb = []byte("nah")
+		}
+	}()
+
 	var i, j uint32
 	s.MaxBits = 1
 	for i := range 37 {
@@ -524,7 +548,9 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		s.Buffer4[i].freq = -1
 	}
 
-	j, _ = s.br.ReadLoBits(8) // awks, need to reverse this
+	bitbuf := s.br.More(InitialBitBuffer)
+	j = uint32(bitbuf) & 0xff
+	bitbuf >>= 8
 	i = j >> 4
 	if i > 5 {
 		panic("XADERR_ILLEGALDATA")
@@ -535,26 +561,15 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		SIT13_CreateStaticTree(&s, s.Buffer3b[:], 0x141, s.TextBuf[0x141:])
 		SIT13_CreateStaticTree(&s, s.Buffer2[:], uint16(SIT13StaticBits[i]), s.TextBuf[0x282:])
 	} else {
-		SIT13_CreateTree(&s, s.Buffer3[:], 0x141)
+		bitbuf = SIT13_CreateTree(&s, bitbuf, s.Buffer3[:], 0x141)
 		if j&8 != 0 {
 			copy(s.Buffer3b[:], s.Buffer3[:])
 		} else {
-			SIT13_CreateTree(&s, s.Buffer3b[:], 0x141)
+			bitbuf = SIT13_CreateTree(&s, bitbuf, s.Buffer3b[:], 0x141)
 		}
 		j = (j & 7) + 10
-		SIT13_CreateTree(&s, s.Buffer2[:], uint16(j))
+		bitbuf = SIT13_CreateTree(&s, bitbuf, s.Buffer2[:], uint16(j))
 	}
 
-	return stepSIT13(s, remain)
-}
-
-func stepSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
-	// defer func() {
-	// 	if recover() != nil {
-	// 		fmt.Println("internal StuffIt panic")
-	// 		re = errors.New("internal StuffIt panic")
-	// 	}
-	// }()
-	SIT13_Extract(&s, remain)
-	return nil, s.out, io.EOF
+	return stepSIT13(s, bitbuf, remain)
 }

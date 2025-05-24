@@ -60,8 +60,16 @@ type testCase struct {
 }
 
 func (t *testCase) String() string {
+	algo := algoName(t.algorithm)
+	if t.algorithm == 13 {
+		if t.packedData[0]&0xf0 == 0 {
+			algo += "dynamic"
+		} else {
+			algo += "static"
+		}
+	}
 	return fmt.Sprintf("%s/%s/%s/%cfork",
-		algoName(t.algorithm),
+		algo,
 		strings.ReplaceAll(t.stuffitPath, "/", ":"),
 		strings.ReplaceAll(t.path, "/", ":"),
 		t.whichFork[0])
