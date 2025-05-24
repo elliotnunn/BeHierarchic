@@ -51,11 +51,12 @@ type SIT13Store struct {
 	d2   uint16
 }
 
+var Buffer1 [0x1000]SIT13Buffer
+
 type SIT13Data struct {
 	br       BitReader
 	MaxBits  uint16
 	Buffer4  [0xE08]SIT13Store
-	Buffer1  [0x1000]SIT13Buffer
 	Buffer2  [0x1000]SIT13Buffer
 	Buffer3  [0x1000]SIT13Buffer
 	Buffer3b [0x1000]SIT13Buffer
@@ -78,7 +79,7 @@ func (s *SIT13Data) print() {
 		}
 	}
 	do1("Buffer4", s.Buffer4[:])
-	do2("Buffer1", s.Buffer1[:])
+	do2("Buffer1", Buffer1[:])
 	do2("Buffer2", s.Buffer2[:])
 	do2("Buffer3", s.Buffer3[:])
 	do2("Buffer3b", s.Buffer3b[:])
@@ -476,7 +477,7 @@ func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) i
 		bitbuf = s.br.More(bitbuf) // guaranteed 55 bits, enough for a loop iteration
 
 		bits := bitbuf & (1<<12 - 1)
-		b = &s.Buffer1[bits]
+		b = &Buffer1[bits]
 		data = b.data
 		bitbuf >>= b.bits
 		switch data - 0x1F {
@@ -539,8 +540,9 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 
 	var i, j uint32
 	s.MaxBits = 1
+	clear(Buffer1[:])
 	for i := range 37 {
-		SIT13_Func1(&s, s.Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
+		SIT13_Func1(&s, Buffer1[:], uint32(SIT13Info[i]), SIT13InfoBits[i], uint16(i))
 	}
 
 	for i = 1; i < 0x704; i++ {
