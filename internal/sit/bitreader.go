@@ -69,6 +69,7 @@ func (b *BitReader) More(bbuf int) int {
 				return int(uint(bbuf) | 1<<(bits.UintSize-1)) // poison the top bit
 			}
 			b.buf, b.Error = b.bg.GetBytes(b.nextoffset)
+			b.nextoffset += int64(len(b.buf))
 		}
 		bbuf |= int(b.buf[0]) << goodbits
 		b.buf = b.buf[1:]
