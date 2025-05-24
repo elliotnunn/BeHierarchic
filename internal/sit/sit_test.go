@@ -64,6 +64,11 @@ func (t *testCase) String() string {
 	if t.algorithm == 13 {
 		if t.packedData[0]&0xf0 == 0 {
 			algo += "dynamic"
+			if t.packedData[0]&8 == 0 {
+				algo += "2"
+			} else {
+				algo += "1"
+			}
 		} else {
 			algo += "static"
 		}
