@@ -35,6 +35,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 
 	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
@@ -79,7 +80,8 @@ var SIT_rndtable = []uint16{
 }
 
 type arsenicData struct {
-	br BitReader
+	br     BitReader
+	bitbuf uint
 
 	Range uint32
 	Code  uint32
@@ -186,8 +188,9 @@ func (sa *arsenicData) getCode(symhigh uint32, symlow uint32, symtot uint32) { /
 		sa.Code <<= 1
 		nbits++
 	}
-	b, _ := sa.br.ReadHiBits(nbits)
-	sa.Code |= b
+	sa.bitbuf = sa.br.FillBigEndian(sa.bitbuf)
+	sa.Code |= uint32(sa.bitbuf >> (bits.UintSize - nbits))
+	sa.bitbuf <<= nbits
 }
 
 func (sa *arsenicData) getSym(model *arsenicModel) int32 {
@@ -339,13 +342,15 @@ func InitArsenic(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 
 func setupArsenic(sa arsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	defer func() {
-		if recover() != nil {
-			rs, rb, re = nil, nil, errors.New("internal panic")
+		if r := recover(); r != nil {
+			rs, rb, re = nil, nil, fmt.Errorf("%v", r)
 		}
 	}()
 
 	sa.Range = 1 << 25
-	sa.Code, _ = sa.br.ReadHiBits(26)
+	sa.bitbuf = sa.br.FillBigEndian(InitialBigEndian)
+	sa.Code = uint32(sa.bitbuf >> (bits.UintSize - 26))
+	sa.bitbuf <<= 26
 
 	sa.reinitModel(&arsenicModels.initial_model)
 	if sa.arithGetBits(&arsenicModels.initial_model, 8) != 0x41 ||
@@ -364,8 +369,8 @@ func setupArsenic(sa arsenicData, size int64) (rs decompressioncache.Stepper, rb
 
 func stepArsenic(sa arsenicData, size int64) (rs decompressioncache.Stepper, rb []byte, re error) {
 	defer func() {
-		if recover() != nil {
-			rs, rb, re = nil, nil, errors.New("internal panic")
+		if r := recover(); r != nil {
+			rs, rb, re = nil, nil, fmt.Errorf("%v", r)
 		}
 	}()
 
