@@ -59,7 +59,7 @@ func (r *ReaderAt) ReadAt(p []byte, off int64) (int, error) {
 
 		// copy bytes into the destination buffer
 		destcut, srccut, ok := overlap(off, len(p), r.checkpoints[i].offset, len(blob))
-		if !ok {
+		if !ok && len(blob) != 0 {
 			panic("obtained a chunk but it does not overlap with the request, never OK")
 		}
 		n := copy(p[destcut:], blob[srccut:])
