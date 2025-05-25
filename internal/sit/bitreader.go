@@ -29,8 +29,8 @@ func (b MyByteGetter) GetBytes(offset int64) ([]byte, error) {
 }
 
 const (
-	InitialLittleEndian = 1
-	InitialBigEndian    = 1 << (bits.UintSize - 1)
+	InitialLittleEndian int  = 1
+	InitialBigEndian    uint = 1 << (bits.UintSize - 1)
 )
 
 type BitReader struct { // copyable
