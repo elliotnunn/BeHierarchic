@@ -363,7 +363,7 @@ func stepSIT13(s SIT13Data, bitbuf int, remain int64) (rs decompressioncache.Ste
 	buf := s.Buffer3[:]
 
 	for {
-		bitbuf = s.br.More(bitbuf)
+		bitbuf = s.br.FillLittleEndian(bitbuf)
 		// now guaranteed 55 bits
 		k := uint32(bitbuf & (1<<12 - 1)) // not sure of type?
 		j := buf[k].bits
@@ -383,7 +383,7 @@ func stepSIT13(s SIT13Data, bitbuf int, remain int64) (rs decompressioncache.Ste
 				} else {
 					j = s.Buffer4[j].d1
 				}
-				bitbuf = s.br.More(bitbuf)
+				bitbuf = s.br.FillLittleEndian(bitbuf)
 			}
 			// now guaranteed 55 bits
 			l = uint32(s.Buffer4[j].freq)
@@ -437,7 +437,7 @@ func stepSIT13(s SIT13Data, bitbuf int, remain int64) (rs decompressioncache.Ste
 					} else {
 						j2 = uint32(s.Buffer4[j2].d1)
 					}
-					bitbuf = s.br.More(bitbuf)
+					bitbuf = s.br.FillLittleEndian(bitbuf)
 				}
 				// now guaranteed 55 bits
 				l = uint32(s.Buffer4[j2].freq)
@@ -474,7 +474,7 @@ func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) i
 	var bi int8 = 0
 
 	for i := uint16(0); i < num; i++ { // note the loop body changes i
-		bitbuf = s.br.More(bitbuf) // guaranteed 55 bits, enough for a loop iteration
+		bitbuf = s.br.FillLittleEndian(bitbuf) // guaranteed 55 bits, enough for a loop iteration
 
 		bits := bitbuf & (1<<12 - 1)
 		b = &Buffer1[bits]
@@ -550,7 +550,7 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		s.Buffer4[i].freq = -1
 	}
 
-	bitbuf := s.br.More(InitialBitBuffer)
+	bitbuf := s.br.FillLittleEndian(InitialLittleEndian)
 	j = uint32(bitbuf) & 0xff
 	bitbuf >>= 8
 	i = j >> 4
