@@ -23,7 +23,7 @@ func TestDecompressionCache(t *testing.T) {
 
 	permute(spans, func(spans []span) {
 		t.Run(fmt.Sprint(spans), func(t *testing.T) {
-			r := New(StartIrreg(), "irregular")
+			r := New(irreg{}, nil, 0, 255, "irreg")
 			for _, span := range spans {
 				bin := make([]byte, span.len)
 				n, err := r.ReadAt(bin, int64(span.offset))
@@ -39,7 +39,7 @@ func TestDecompressionCache(t *testing.T) {
 					expecterr = io.EOF
 				}
 				if expecterr != err {
-					t.Errorf("expected to return \"%g\" at offset %d, got \"%g\"",
+					t.Errorf("expected to return \"%v\" at offset %d, got \"%v\"",
 						expecterr, span.offset, err)
 				}
 
@@ -56,34 +56,34 @@ func TestDecompressionCache(t *testing.T) {
 	})
 }
 
-// Counts 0 to
-func StartIrreg() Stepper {
-	return func() (Stepper, []byte, error) { return stepIrreg(0) }
+type irreg struct{}
+
+func (irreg) Init(r io.ReaderAt, packsz int64, unpacksz int64) (sharedstate []byte, err error) {
+	return nil, nil
 }
 
-func stepIrreg(s int) (Stepper, []byte, error) {
-	var ret []byte
-
+func (irreg) Step(r io.ReaderAt, sharedstate []byte, priorstate []byte, wantnextstate bool) (unpack []byte, ownstate []byte, nextstate []byte, err error) {
+	i := byte(0)
+	if priorstate != nil {
+		i = priorstate[0]
+	}
+	var accum []byte
 	for {
-		ret = append(ret, byte(s))
-
-		isPrime := true
-		for fac := 2; ; fac++ {
-			if s%fac == 0 {
-				isPrime = false
-				break
-			} else if fac*fac > s {
-				break
-			}
+		accum = append(accum, i)
+		i++
+		if isPrime(int(i)) || i == 0 {
+			break
 		}
-		s++
+	}
+	return accum, nil, []byte{i}, nil
+}
 
-		// Freeze our state in a reusable closure
-		stepper := func() (Stepper, []byte, error) { return stepIrreg(s) }
-		if s == 255 {
-			return stepper, ret, io.EOF
-		} else if isPrime {
-			return stepper, ret, nil
+func isPrime(s int) bool {
+	for fac := 2; ; fac++ {
+		if s%fac == 0 {
+			return false
+		} else if fac*fac > s {
+			return true
 		}
 	}
 }
