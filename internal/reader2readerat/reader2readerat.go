@@ -101,7 +101,7 @@ func (r *Reader) goro() {
 			continue
 		}
 
-		n, err := r.r.Read(cmd.buf)
+		n, err := io.ReadFull(r.r, cmd.buf)
 		progress += int64(n)
 		r.rep <- reply{n, err}
 	}

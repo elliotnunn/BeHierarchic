@@ -40,8 +40,8 @@ func TestDecompressionCache(t *testing.T) {
 		if err != nil {
 			t.Errorf("got error %v", err)
 		}
-		if n < 0 || n > len(buf) {
-			t.Errorf("expected %d-%d bytes, got %d", 0, len(buf), n)
+		if n != len(buf) {
+			t.Errorf("expected %d bytes, got %d", len(buf), n)
 		}
 		for i, c := range buf[:n] {
 			if c != byte(offset)+byte(i) {
