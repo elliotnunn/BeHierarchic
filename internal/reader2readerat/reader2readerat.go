@@ -5,34 +5,42 @@ import (
 	"io/fs"
 )
 
-// If the io.Reader is an io.ReadCloser then it will be closed when I am closed
-func NewFromReader(f func() (io.Reader, error)) *Reader {
-	s := initCommon()
-	s.open = func() error {
-		r, err := f()
-		s.r = r
-		return err
-	}
-	s.close = func() {
-		if closer, ok := s.r.(io.Closer); ok {
-			closer.Close()
-		}
-		s.r = nil
-	}
-	return s
+type Reader struct {
+	r     io.Reader
+	open  func() error
+	close func()
+	req   chan request
+	rep   chan reply
 }
 
-func NewFromReadSeeker(r io.ReadSeeker) *Reader {
-	s := initCommon()
-	s.open = func() error {
-		_, err := r.Seek(0, io.SeekStart)
-		s.r = r
+// If the io.Reader is an io.ReadCloser then it will be closed when I am closed
+func NewFromReader(f func() (io.Reader, error)) *Reader {
+	r := initCommon()
+	r.open = func() error {
+		from, err := f()
+		r.r = from
 		return err
 	}
-	s.close = func() {
-		s.r = nil
+	r.close = func() {
+		if closer, ok := r.r.(io.Closer); ok {
+			closer.Close()
+		}
+		r.r = nil
 	}
-	return s
+	return r
+}
+
+func NewFromReadSeeker(from io.ReadSeeker) *Reader {
+	r := initCommon()
+	r.open = func() error {
+		_, err := from.Seek(0, io.SeekStart)
+		r.r = from
+		return err
+	}
+	r.close = func() {
+		r.r = nil
+	}
+	return r
 }
 
 func initCommon() *Reader {
@@ -42,14 +50,6 @@ func initCommon() *Reader {
 	}
 	go r.goro()
 	return r
-}
-
-type Reader struct {
-	r     io.Reader
-	open  func() error
-	close func()
-	req   chan request
-	rep   chan reply
 }
 
 type request struct {
