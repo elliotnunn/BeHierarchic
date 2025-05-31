@@ -8,8 +8,8 @@ import (
 
 	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
+	"github.com/elliotnunn/resourceform/internal/reader2readerat"
 	"github.com/elliotnunn/resourceform/internal/sit"
-	"github.com/elliotnunn/resourceform/internal/zipreaderat"
 )
 
 type w struct {
@@ -178,7 +178,7 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 		}
 	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
 		zr, err := zip.NewReader(file, size(file))
-		fsys := &zipreaderat.Archive{Reader: zr}
+		fsys := &reader2readerat.FS{FS: zr}
 		if err == nil {
 			return fsys, "ZIP archive"
 		}

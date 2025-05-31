@@ -1,38 +1,35 @@
-package zipreaderat
+package reader2readerat
 
 import (
-	"archive/zip"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"sync"
-
-	"github.com/elliotnunn/resourceform/internal/reader2readerat"
 )
 
-type keeptrack struct {
-	refcnt uintptr
-	ra     *reader2readerat.Reader
-}
-
-type Archive struct {
-	*zip.Reader
+type FS struct {
+	FS    fs.FS
 	reuse map[string]keeptrack
 	lock  sync.Mutex
 }
 
 type File struct {
-	ra   *reader2readerat.Reader
-	arch *Archive
+	ra   *Reader
+	arch *FS
 	name string
 	seek int64
 	stat fs.FileInfo
 }
 
+type keeptrack struct {
+	refcnt uintptr
+	ra     *Reader
+}
+
 // If opening a file, guaranteed to satisfy io.ReaderAt and io.SeekReader
-func (r *Archive) Open(name string) (fs.File, error) {
-	f, err := r.Reader.Open(name)
+func (r *FS) Open(name string) (fs.File, error) {
+	f, err := r.FS.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -56,9 +53,9 @@ func (r *Archive) Open(name string) (fs.File, error) {
 	saved, ok := r.reuse[name]
 	if !ok {
 		reopener := func() (io.Reader, error) {
-			return r.Reader.Open(name)
+			return r.FS.Open(name)
 		}
-		saved = keeptrack{ra: reader2readerat.NewFromReader(reopener)}
+		saved = keeptrack{ra: NewFromReader(reopener)}
 	}
 	saved.refcnt++
 	r.reuse[name] = saved
