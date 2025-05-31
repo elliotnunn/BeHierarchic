@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"io"
 	"io/fs"
 	"path"
@@ -176,7 +177,8 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 			return fsys, "Apple Partition Map"
 		}
 	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
-		fsys, err := zipreaderat.New(file, size(file))
+		zr, err := zip.NewReader(file, size(file))
+		fsys := &zipreaderat.Archive{Reader: zr}
 		if err == nil {
 			return fsys, "ZIP archive"
 		}
