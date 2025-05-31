@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -121,9 +122,9 @@ func mkAlgoTestCases() []testCase {
 		})
 	}
 
-	// sort.Slice(ret, func(a, b int) bool {
-	// 	return ret[a].String() < ret[b].String()
-	// })
+	sort.Slice(ret, func(a, b int) bool {
+		return ret[a].String() < ret[b].String()
+	})
 
 	return ret
 }
