@@ -15,7 +15,7 @@ type FS struct {
 }
 
 type File struct {
-	ra   *Reader
+	ra   *ReaderAt
 	arch *FS
 	name string
 	seek int64
@@ -24,7 +24,7 @@ type File struct {
 
 type keeptrack struct {
 	refcnt uintptr
-	ra     *Reader
+	ra     *ReaderAt
 }
 
 // If opening a file, guaranteed to satisfy io.ReaderAt and io.SeekReader

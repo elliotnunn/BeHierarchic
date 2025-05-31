@@ -5,7 +5,7 @@ import (
 	"io/fs"
 )
 
-type Reader struct {
+type ReaderAt struct {
 	r     io.Reader
 	open  func() error
 	close func()
@@ -14,7 +14,7 @@ type Reader struct {
 }
 
 // If the io.Reader is an io.ReadCloser then it will be closed when I am closed
-func NewFromReader(f func() (io.Reader, error)) *Reader {
+func NewFromReader(f func() (io.Reader, error)) *ReaderAt {
 	r := initCommon()
 	r.open = func() error {
 		from, err := f()
@@ -30,7 +30,7 @@ func NewFromReader(f func() (io.Reader, error)) *Reader {
 	return r
 }
 
-func NewFromReadSeeker(from io.ReadSeeker) *Reader {
+func NewFromReadSeeker(from io.ReadSeeker) *ReaderAt {
 	r := initCommon()
 	r.open = func() error {
 		_, err := from.Seek(0, io.SeekStart)
@@ -43,8 +43,8 @@ func NewFromReadSeeker(from io.ReadSeeker) *Reader {
 	return r
 }
 
-func initCommon() *Reader {
-	r := &Reader{
+func initCommon() *ReaderAt {
+	r := &ReaderAt{
 		req: make(chan request),
 		rep: make(chan reply),
 	}
@@ -62,7 +62,7 @@ type reply struct {
 	err error
 }
 
-func (r *Reader) ReadAt(buf []byte, off int64) (n int, err error) {
+func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, err error) {
 	func() {
 		r := recover()
 		if r != nil {
@@ -75,12 +75,12 @@ func (r *Reader) ReadAt(buf []byte, off int64) (n int, err error) {
 	return rep.n, rep.err
 }
 
-func (r *Reader) Close() error {
+func (r *ReaderAt) Close() error {
 	close(r.req)
 	return nil
 }
 
-func (r *Reader) goro() {
+func (r *ReaderAt) goro() {
 	progress := int64(0)
 	for cmd := range r.req {
 		if progress > cmd.offset || r.r == nil {
