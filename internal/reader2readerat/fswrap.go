@@ -27,22 +27,31 @@ type keeptrack struct {
 	ra     *ReaderAt
 }
 
-// If opening a file, guaranteed to satisfy io.ReaderAt and io.SeekReader
+type guarantee interface {
+	io.ReaderAt
+	io.Seeker
+}
+
+// If opening a file, guaranteed to satisfy io.ReaderAt and io.Seeker
 func (r *FS) Open(name string) (fs.File, error) {
 	f, err := r.FS.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close() // odd, I know, but bear with me...
 
+	if _, ok := f.(guarantee); ok { // already seekable, nothing to add here
+		return f, err
+	}
 	stat, err := f.Stat()
 	if err != nil {
+		f.Close()
 		return nil, fmt.Errorf("unable to stat an open zip file: %w", err)
 	}
 	if stat.IsDir() {
 		return f, err
 	}
 
+	defer f.Close() // odd, I know, but bear with me...
 	r.lock.Lock()
 	defer r.lock.Unlock()
 

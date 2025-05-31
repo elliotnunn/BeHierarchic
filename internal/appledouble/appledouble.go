@@ -1,7 +1,6 @@
 package appledouble
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -10,8 +9,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
 
 const (
@@ -32,53 +29,35 @@ const (
 	DIRECTORY_ID        = 15 // AFP directory ID.
 )
 
-// Synth AppleDouble sidecar file from provided info
-
-func Make(shortRecs map[int][]byte, longRecs map[int]multireaderat.SizeReaderAt) multireaderat.SizeReaderAt {
-	var k1 []int
+// Slightly peculiar
+func MakePrefix(rforkSize uint32, shortRecs map[int][]byte) []byte {
+	var keys []int
 	for k := range shortRecs {
-		k1 = append(k1, k)
+		keys = append(keys, k)
 	}
-	slices.Sort(k1)
-	var k2 []int
-	for k := range longRecs {
-		k1 = append(k1, k)
+	slices.Sort(keys)
+	if rforkSize > 0 {
+		keys = append(keys, RESOURCE_FORK)
 	}
-	slices.Sort(k2)
-	keys := append(k1, k2...)
 
 	buf := make([]byte, 26+12*len(keys))
-	copy(buf, "\x00\x05\x16\x00\x00\x02\x00\x00")
+	copy(buf, "\x00\x05\x16\x00\x00\x02\x00\x00") // magic number
 	binary.BigEndian.PutUint16(buf[24:], uint16(len(keys)))
 
-	offset := uint32(len(buf))
-	mrlist := []multireaderat.SizeReaderAt{nil}
 	for i, key := range keys {
 		recOffset := 26 + 12*i
 		binary.BigEndian.PutUint32(buf[recOffset:], uint32(key))
-		binary.BigEndian.PutUint32(buf[recOffset+4:], offset)
+		binary.BigEndian.PutUint32(buf[recOffset+4:], uint32(len(buf)))
 
-		var size uint32
-		if r, isLongReader := longRecs[key]; isLongReader {
-			size = uint32(r.Size())
-			if size > 0 {
-				mrlist = append(mrlist, r)
-			}
+		if key == RESOURCE_FORK {
+			binary.BigEndian.PutUint32(buf[recOffset+8:], rforkSize)
 		} else {
-			d := shortRecs[key]
-			size = uint32(len(d))
-			buf = append(buf, d...)
+			binary.BigEndian.PutUint32(buf[recOffset+8:], uint32(len(shortRecs[key])))
+			buf = append(buf, shortRecs[key]...)
 		}
-		binary.BigEndian.PutUint32(buf[recOffset+8:], size)
-		offset += size
 	}
-	mrlist[0] = bytes.NewReader(buf)
 
-	if len(mrlist) == 1 {
-		return mrlist[0]
-	} else {
-		return multireaderat.New(mrlist...)
-	}
+	return buf
 }
 
 var admap = map[int]string{

@@ -10,7 +10,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -30,15 +29,13 @@ func TestAlgorithms(t *testing.T) {
 		}
 
 		t.Run(x.String(), func(t *testing.T) {
-			r := readerFor(byte(x.algorithm), bytes.NewReader(x.packedData), x.unpackedSize, x.String())
-			got := make([]byte, x.unpackedSize)
-			gotn, goterr := r.ReadAt(got, 0)
-			got = got[:gotn]
+			r := readerFor(algid(x.algorithm), x.unpackedSize, bytes.NewReader(x.packedData))
+			got, goterr := io.ReadAll(r)
 			if goterr != nil && goterr != io.EOF {
 				t.Errorf("expected io.EOF or nil, got %v", goterr)
 			}
-			if gotn != int(x.unpackedSize) {
-				t.Errorf("expected %d bytes, got %d", x.unpackedSize, gotn)
+			if len(got) != int(x.unpackedSize) {
+				t.Errorf("expected %d bytes, got %d", x.unpackedSize, len(got))
 			}
 			if !bytes.Equal(got, x.unpackedData) && !sameTextFile(got, x.unpackedData) {
 				t.Error(logMismatch(got, x.unpackedData, x.packedData, x.stuffitPath, x.path))
@@ -50,11 +47,12 @@ func TestAlgorithms(t *testing.T) {
 type testCase struct {
 	stuffitPath  string
 	path         string
+	backing      io.ReaderAt
 	whichFork    string // "data"/"resource"
-	algorithm    int
-	offset       int64
-	packedSize   int64
-	unpackedSize int64
+	algorithm    int8
+	offset       uint32
+	packedSize   uint32
+	unpackedSize uint32
 
 	packedData, unpackedData []byte
 }
@@ -101,13 +99,9 @@ func mkAlgoTestCases() []testCase {
 			if err != nil {
 				panic(err)
 			}
-			stat, err := f.Stat()
-			if err != nil {
-				panic(err)
-			}
-			forks := stat.Sys().([2]ForkDebug)
+			entry := f.(*openfile).s.e
 
-			for i, fork := range forks[:1] { // only data, we only care about tests
+			for i, fork := range entry.forks { // only data, we only care about tests
 				if _, ok := known[path.Base(p)]; !ok {
 					continue
 				}
@@ -115,11 +109,11 @@ func mkAlgoTestCases() []testCase {
 					stuffitPath:  sitPath,
 					path:         p,
 					whichFork:    [2]string{"data", "resource"}[i],
-					algorithm:    fork.Algorithm,
-					offset:       fork.PackOffset,
-					packedSize:   fork.PackSize,
-					unpackedSize: fork.UnpackSize,
-					packedData:   sitBytes[fork.PackOffset:][:fork.PackSize],
+					algorithm:    int8(fork.algo),
+					offset:       fork.packofst,
+					packedSize:   fork.packsz,
+					unpackedSize: fork.unpacksz,
+					packedData:   sitBytes[fork.packofst:][:fork.packsz],
 					unpackedData: known[path.Base(p)],
 				})
 			}
@@ -127,14 +121,14 @@ func mkAlgoTestCases() []testCase {
 		})
 	}
 
-	sort.Slice(ret, func(a, b int) bool {
-		return ret[a].String() < ret[b].String()
-	})
+	// sort.Slice(ret, func(a, b int) bool {
+	// 	return ret[a].String() < ret[b].String()
+	// })
 
 	return ret
 }
 
-func algoName(method int) string {
+func algoName(method int8) string {
 	switch method {
 	case 0:
 		return "nocompress"

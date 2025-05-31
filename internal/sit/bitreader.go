@@ -5,51 +5,12 @@ import (
 	"math/bits"
 )
 
-type ByteGetter interface {
-	GetBytes(offset int64) ([]byte, error)
-}
-
-type MyByteGetter struct {
-	reader io.ReaderAt
-}
-
-func NewByteGetter(from io.ReaderAt) ByteGetter {
-	if already, ok := from.(ByteGetter); ok {
-		return already
-	} else {
-		return MyByteGetter{reader: from}
-	}
-}
-
-func (b MyByteGetter) GetBytes(offset int64) ([]byte, error) {
-	ret := make([]byte, 4096)
-	n, err := b.reader.ReadAt(ret, offset)
-	ret = ret[:n]
-	return ret, err
-}
-
 const (
 	InitialLittleEndian int  = 1
 	InitialBigEndian    uint = 1 << (bits.UintSize - 1)
 )
 
-type BitReader struct { // copyable
-	buf        []byte
-	nextoffset int64
-	Error      error
-	bg         ByteGetter // not at all constant
-}
-
-func NewBitReader(bg ByteGetter) BitReader {
-	return BitReader{bg: bg}
-}
-
-func (b *BitReader) SacrificeBuffer() {
-	b.nextoffset -= int64(len(b.buf))
-	b.buf = nil
-}
-
-func (b *BitReader) FillLittleEndian(bbuf int) int {
+func FillLittleEndian(bbuf int, r io.ByteReader) int {
 	// leadingzeros + 1 + goodbits = UintSize
 	// unless leadingzeros = 0, in which case we don't know goodbits
 	lz := bits.LeadingZeros(uint(bbuf))
@@ -60,15 +21,11 @@ func (b *BitReader) FillLittleEndian(bbuf int) int {
 	goodbits := bits.UintSize - lz - 1
 	bbuf &= ^(1 << goodbits) // clear the marker bit
 	for {
-		if len(b.buf) == 0 {
-			if b.Error != nil {
-				return int(uint(bbuf) | 1<<(bits.UintSize-1)) // poison the top bit
-			}
-			b.buf, b.Error = b.bg.GetBytes(b.nextoffset)
-			b.nextoffset += int64(len(b.buf))
+		bite, err := r.ReadByte()
+		if err != nil {
+			break
 		}
-		bbuf |= int(b.buf[0]) << goodbits
-		b.buf = b.buf[1:]
+		bbuf |= int(bite) << goodbits
 		goodbits += 8
 		if goodbits+10 > bits.UintSize {
 			break
@@ -79,7 +36,7 @@ func (b *BitReader) FillLittleEndian(bbuf int) int {
 }
 
 // This one is slightly trickier because we can't use the right-shift-sign-bit trick
-func (b *BitReader) FillBigEndian(bbuf uint) uint {
+func FillBigEndian(bbuf uint, r io.ByteReader) uint {
 	// goodbits + 1 + trailingzeros = UintSize
 	// unless leadingzeros = 0, in which case we don't know goodbits
 	tz := bits.TrailingZeros(bbuf)
@@ -89,16 +46,12 @@ func (b *BitReader) FillBigEndian(bbuf uint) uint {
 
 	bbuf &= ^(1 << tz) // clear the marker bit
 	for {
-		if len(b.buf) == 0 {
-			if b.Error != nil {
-				break
-			}
-			b.buf, b.Error = b.bg.GetBytes(b.nextoffset)
-			b.nextoffset += int64(len(b.buf))
+		bite, err := r.ReadByte()
+		if err != nil {
+			break
 		}
 		tz -= 8
-		bbuf |= uint(b.buf[0]) << (tz + 1)
-		b.buf = b.buf[1:]
+		bbuf |= uint(bite) << (tz + 1)
 		if tz < 8 {
 			break
 		}
