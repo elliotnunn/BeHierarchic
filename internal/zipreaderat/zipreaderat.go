@@ -108,16 +108,18 @@ func (f *File) Size() int64 {
 }
 
 func (f *File) Close() error {
+	var err error
 	f.arch.lock.Lock()
 	defer f.arch.lock.Unlock()
 	saved := f.arch.reuse[f.name]
 	saved.refcnt--
 	if saved.refcnt == 0 {
+		err = saved.ra.Close()
 		delete(f.arch.reuse, f.name)
 	} else {
 		f.arch.reuse[f.name] = saved
 	}
-	return nil
+	return err
 }
 
 var errWhence = errors.New("Seek: invalid whence")
