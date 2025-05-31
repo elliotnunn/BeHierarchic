@@ -28,6 +28,13 @@ hierarchy of saveable state...
 and remember, it is okay to evict any kind of chunk, and we can do some weighting later...
 eviction likely to be a "worst of a handful of randomly chosen keys" job
 
+This design is quite good for random access... problems abound though...
+What if we just had a limited number of decompressor-goroutines for each file? Or even just one goroutine for the whole file?
+Would require some funky channel stuff but it would be entirely *outside* of the file
+And we could independently-recompress the chunks if we were super keen to keep them cached.
+
+This might be a bit less efficient in space but also allow us access to a much, much wider catalogue of compression algorithms,
+and those would be implemented in relatively-idiomatic Go.
 */
 
 type SpanDecompressor interface {
@@ -52,6 +59,11 @@ type SpanDecompressor interface {
 		nextstate []byte,
 		err error,
 	)
+}
+
+type Packable interface {
+	MemUsed() int
+	Serialize(io.Writer) error
 }
 
 func New(d SpanDecompressor, packed io.ReaderAt, packsz, unpacksz int64, debugName string) Reader {

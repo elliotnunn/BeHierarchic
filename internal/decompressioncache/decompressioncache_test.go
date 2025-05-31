@@ -56,6 +56,23 @@ func TestDecompressionCache(t *testing.T) {
 	})
 }
 
+/*
+Question now is, who is responsible for serialising the struct?
+Because we plan to flatten it to RAM and even compress it
+
+examples include a Huffman tree, one of those nasty Arsenic "models"
+
+so... how to flatten the model? or should it merely be *saved*? I tend to think saved, because that's a proven-good flattening format.
+(This x 1000, we need a good cooperation to save the reader state down-to-the-bit)
+It *might* be that we just need to use reflection, and opportunistically squish any byte-slices that we find
+Or an extension-interface with a Shrink() method
+Or an extension-interface with a Serialize() method
+
+BTW, should a BitReader be passed in? It's a messy structure, not always a useful one.
+
+God these compression formats are a squalid nuisance.
+*/
+
 type irreg struct{}
 
 func (irreg) Init(r io.ReaderAt, packsz int64, unpacksz int64) (sharedstate []byte, err error) {
