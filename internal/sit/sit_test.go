@@ -3,6 +3,7 @@ package sit
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -36,7 +37,9 @@ func TestAlgorithms(t *testing.T) {
 			}
 			defer f.Close()
 			got, err := io.ReadAll(f)
-			if err != nil {
+			if errors.Is(err, ErrPassword) && strings.Contains(x.stuffitPath, "password") {
+				t.Skipf("skipping password protected file")
+			} else if err != nil {
 				t.Fatalf("expected io.EOF or nil, got %v", err)
 			}
 

@@ -33,6 +33,11 @@ type ForkDebug struct {
 	CRC16                            uint16
 }
 
+var (
+	ErrPassword = errors.New("password protected StuffIt archive")
+	ErrAlgo     = errors.New("unknown StuffIt compression algorithm")
+)
+
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (*FS, error) {
 	var buf [80]byte
@@ -292,13 +297,13 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	if e.isdir && forkid == dfork {
 		return &opendir{s: s}, nil
 	} else if e.password {
-		return &errorfile{s: s, err: errors.New("password protected")}, nil
+		return &errorfile{s: s, err: ErrPassword}, nil
 	} else if fk.algo == 0 {
 		return &passthrufile{s: s, r: io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz))}, nil
 	} else if (algosupport>>fk.algo)&1 != 0 {
 		return &openfile{s: s}, nil
 	} else {
-		return &errorfile{s: s, err: fmt.Errorf("unsupported compression algorithm %d", fk.algo)}, nil
+		return &errorfile{s: s, err: fmt.Errorf("%w number %d", ErrAlgo, fk.algo)}, nil
 	}
 }
 
