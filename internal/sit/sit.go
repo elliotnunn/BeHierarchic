@@ -299,7 +299,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	} else if e.password {
 		return &errorfile{s: s, err: ErrPassword}, nil
 	} else if fk.algo == 0 {
-		return &passthrufile{s: s, r: io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz))}, nil
+		return &passthrufile{s: s, r: *io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz))}, nil
 	} else if (algosupport>>fk.algo)&1 != 0 {
 		return &openfile{s: s}, nil
 	} else {
@@ -374,8 +374,8 @@ type openfile struct {
 	s stat
 }
 
-type passthrufile struct {
-	r *io.SectionReader
+type passthrufile struct { // not copyable...
+	r io.SectionReader // so no need for this to be a pointer
 	s stat
 }
 
