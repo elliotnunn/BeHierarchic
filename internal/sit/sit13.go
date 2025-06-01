@@ -400,13 +400,13 @@ func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) i
 	return bitbuf
 }
 
-func sit13(r io.Reader, dstsize int64) io.ReadCloser {
+func sit13(r io.Reader, dstsize uint32) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go sit13copy(pw, r, dstsize)
 	return pr
 }
 
-func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize int64) {
+func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	defer func() {
 		if r := recover(); r != nil {
 			dst.CloseWithError(fmt.Errorf("internal StuffIt panic: %v", r))

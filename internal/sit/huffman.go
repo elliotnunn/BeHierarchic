@@ -43,13 +43,13 @@ type node struct {
 	byte      uint8
 }
 
-func huffman(r io.Reader, dstsize int64) io.ReadCloser { // should it be possible to return an error?
+func huffman(r io.Reader, dstsize uint32) io.ReadCloser { // should it be possible to return an error?
 	pr, pw := io.Pipe()
 	go huffcopy(pw, r, dstsize)
 	return pr
 }
 
-func huffcopy(dst io.WriteCloser, src io.Reader, dstsize int64) {
+func huffcopy(dst io.WriteCloser, src io.Reader, dstsize uint32) {
 	defer dst.Close()
 	br := bufio.NewReaderSize(src, 1024)
 	bw := bufio.NewWriterSize(dst, 1024)
