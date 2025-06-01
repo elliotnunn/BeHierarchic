@@ -540,7 +540,7 @@ func (s stat) Info() (fs.FileInfo, error) {
 	return s, nil
 }
 
-const algosupport = 0b0010_0000_0000_1001
+const algosupport = 0b1010_0000_0000_1001
 
 func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might also be ReadCloser
 	// corpus includes algo 0, 2, 3, 5, 13, 15
@@ -556,9 +556,9 @@ func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might al
 	// case 8: // Miller-Wegman encoding
 	case 13: // anonymous
 		return sit13(r, int64(unpacksz))
-		// case 14: // anonymous
-		// case 15: // Arsenic
-		// 	return decompressioncache.New(InitArsenic(compr, size), size, name)
+	// case 14: // anonymous
+	case 15: // Arsenic
+		return arsenic(r, unpacksz)
 	default:
 		panic("should not attempt readerFor on unsupported algo... update algosupport")
 	}
