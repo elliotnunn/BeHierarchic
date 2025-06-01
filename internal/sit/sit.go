@@ -12,18 +12,19 @@ import (
 	"time"
 
 	"github.com/elliotnunn/resourceform/internal/appledouble"
-	"github.com/elliotnunn/resourceform/internal/decompressioncache"
-	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
+
+type forkid int8
+
+const (
+	dfork   forkid = 0
+	adouble forkid = 1
+)
+
+type algid int8
 
 type FS struct {
 	root *entry
-}
-
-// fs.FileInfo.Sys() method returns [2]ForkDebug for data/resource
-type ForkDebug struct {
-	PackOffset, PackSize, UnpackSize int64
-	Algorithm                        int
 }
 
 // Create a new FS from an HFS volume
@@ -52,13 +53,13 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		isdir: true,
 	}
 	type j struct {
-		next   int64 // offset into the file
-		remain int   // in this directory
+		next   uint32 // offset into the file
+		remain int    // in this directory
 		parent *entry
 	}
 	stack := []j{
 		{
-			next:   int64(binary.BigEndian.Uint32(buf[0:])),
+			next:   binary.BigEndian.Uint32(buf[0:]),
 			remain: int(buf[5]),
 			parent: root,
 		},
@@ -73,7 +74,7 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 
 		// Progressive disclosure of the header struct
 		base := job.next
-		r := bufio.NewReaderSize(io.NewSectionReader(disk, base, 0x100000000), 512)
+		r := bufio.NewReaderSize(io.NewSectionReader(disk, int64(base), 0x100000000), 512)
 		var hdr1 [48]byte
 		if _, err := io.ReadFull(r, hdr1[:]); err != nil {
 			goto trunc
@@ -83,12 +84,13 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		ptr := len(hdr1)
 		version := hdr1[4]
 		isDir := hdr1[9]&0x40 != 0
-		siblingOffset := int64(binary.BigEndian.Uint32(hdr1[22:]))
+		siblingOffset := binary.BigEndian.Uint32(hdr1[22:])
 		nameLen := int(binary.BigEndian.Uint16(hdr1[30:]))
-		dChildOffset := int64(binary.BigEndian.Uint32(hdr1[34:]))
+		dChildOffset := binary.BigEndian.Uint32(hdr1[34:])
 		dCount := int(hdr1[47])
-		fDFUnpacked, fDFPacked := int64(binary.BigEndian.Uint32(hdr1[34:])), int64(binary.BigEndian.Uint32(hdr1[38:]))
-		fDFFmt := hdr1[46]
+		fDFUnpacked, fDFPacked := binary.BigEndian.Uint32(hdr1[34:]), binary.BigEndian.Uint32(hdr1[38:])
+		fDFCRC := binary.BigEndian.Uint16(hdr1[42:])
+		fDFFmt := algid(hdr1[46])
 
 		if !isDir { // only files have password data
 			discardPassword := int(hdr1[47])
@@ -129,13 +131,15 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			}
 			ptr += len(hdr3)
 		}
-		fRFUnpacked, fRFPacked := int64(binary.BigEndian.Uint32(hdr3[0:])), int64(binary.BigEndian.Uint32(hdr3[4:]))
-		fRFFmt := hdr3[12]
+		fRFUnpacked, fRFPacked := binary.BigEndian.Uint32(hdr3[0:]), binary.BigEndian.Uint32(hdr3[4:])
+		fRFCRC := binary.BigEndian.Uint16(hdr3[8:])
+		fRFFmt := algid(hdr3[12])
 
 		e := &entry{
+			r:       disk,
 			isdir:   isDir,
 			name:    strings.ReplaceAll(string(name), "/", ":"),
-			modtime: time.Unix(int64(binary.BigEndian.Uint32(hdr1[14:]))-2082844800, 0).UTC(),
+			mactime: binary.BigEndian.Uint32(hdr1[14:]),
 		}
 		job.remain--
 		if job.parent.childMap == nil {
@@ -148,33 +152,34 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 			hdr2[12] &^= 0x02 // aoceLetter bit can be falsely set -- why?
 			hdr2[13] &^= 0xe0 // same with requireSwitchLaunch, isShared, hasNoINITs
 			stack = append(stack, j{next: dChildOffset, remain: dCount, parent: e})
-			e.fork = [2]multireaderat.SizeReaderAt{
-				nil, // no data fork for directories
-				appledouble.Make(
-					map[int][]byte{
-						appledouble.FINDER_INFO:     append(hdr2[4:14:14], make([]byte, 22)...), // location/finderflags
-						appledouble.FILE_DATES_INFO: append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
-					},
-					nil,
-				),
+
+			e.forks[adouble] = fork{
+				prefix: appledouble.MakePrefix(0, map[int][]byte{
+					appledouble.FINDER_INFO:     append(hdr2[4:14:14], make([]byte, 22)...), // location/finderflags
+					appledouble.FILE_DATES_INFO: append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
+				}),
 			}
 		} else {
-			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(fDFFmt, io.NewSectionReader(disk, job.next+int64(ptr)+fRFPacked, fDFPacked), fDFUnpacked, e.name),
-				appledouble.Make(
+			e.forks[dfork] = fork{
+				algo:     fDFFmt,
+				packofst: job.next + uint32(ptr) + fRFPacked,
+				packsz:   fDFPacked,
+				unpacksz: fDFUnpacked,
+				crc:      fDFCRC,
+			}
+
+			e.forks[adouble] = fork{
+				prefix: appledouble.MakePrefix(fRFUnpacked,
 					map[int][]byte{
 						appledouble.MACINTOSH_FILE_INFO: {hdr1[9] & 0x80, 0, 0, 0},                  // lock bit
 						appledouble.FINDER_INFO:         append(hdr2[4:14:14], make([]byte, 22)...), // type/creator/finderflags
 						appledouble.FILE_DATES_INFO:     append(hdr1[10:18:18], make([]byte, 8)...), // cr/md/bk/acc
-					},
-					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(fRFFmt, io.NewSectionReader(disk, job.next+int64(ptr), fRFPacked), fRFUnpacked, e.name+".rsrc"),
-					},
-				),
-			}
-			e.dbg = [2]ForkDebug{
-				{PackOffset: job.next + int64(ptr) + fRFPacked, PackSize: fDFPacked, UnpackSize: fDFUnpacked, Algorithm: int(fDFFmt)},
-				{PackOffset: job.next + int64(ptr), PackSize: fRFPacked, UnpackSize: fRFUnpacked, Algorithm: int(fRFFmt)},
+					}),
+				algo:     fRFFmt,
+				packofst: job.next + uint32(ptr),
+				packsz:   fRFPacked,
+				unpacksz: fRFUnpacked,
+				crc:      fRFCRC,
 			}
 		}
 		job.next = siblingOffset
@@ -191,10 +196,10 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 		isdir: true,
 	}}
 
-	offset := int64(22)
+	offset := uint32(22)
 	for {
 		var hdr [112]byte
-		_, err := disk.ReadAt(hdr[:], offset)
+		_, err := disk.ReadAt(hdr[:], int64(offset))
 		if errors.Is(err, io.EOF) {
 			break // normal end of file
 		} else if err != nil {
@@ -215,7 +220,7 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 		e := &entry{
 			isdir:   hdr[0] == 32,
 			name:    strings.ReplaceAll(stringFromRoman(hdr[3:66][:min(63, hdr[2])]), "/", ":"),
-			modtime: time.Unix(int64(binary.BigEndian.Uint32(hdr[80:]))-2082844800, 0).UTC(),
+			mactime: binary.BigEndian.Uint32(hdr[80:]),
 		}
 		parent := stack[len(stack)-1]
 		if parent.childMap == nil {
@@ -226,37 +231,41 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 
 		if e.isdir {
 			stack = append(stack, e)
-			e.fork = [2]multireaderat.SizeReaderAt{
-				nil, // no data fork for directories
-				appledouble.Make(
-					map[int][]byte{
-						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
-						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
-					},
-					nil,
-				),
+
+			e.forks[adouble] = fork{
+				prefix: appledouble.MakePrefix(0, map[int][]byte{
+					appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
+					appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
+				}),
 			}
 		} else {
-			ralgo, dalgo := hdr[0], hdr[1]
-			rpacked, dpacked := int64(binary.BigEndian.Uint32(hdr[92:])), int64(binary.BigEndian.Uint32(hdr[96:]))
-			runpacked, dunpacked := int64(binary.BigEndian.Uint32(hdr[84:])), int64(binary.BigEndian.Uint32(hdr[88:]))
+			ralgo, dalgo := algid(hdr[0]), algid(hdr[1])
+			rpacked, dpacked := binary.BigEndian.Uint32(hdr[92:]), binary.BigEndian.Uint32(hdr[96:])
+			runpacked, dunpacked := binary.BigEndian.Uint32(hdr[84:]), binary.BigEndian.Uint32(hdr[88:])
+			rcrc, dcrc := binary.BigEndian.Uint16(hdr[100:]), binary.BigEndian.Uint16(hdr[102:])
 			roffset, doffset := offset, offset+rpacked
-			e.fork = [2]multireaderat.SizeReaderAt{
-				readerFor(dalgo, io.NewSectionReader(disk, doffset, dpacked), dunpacked, e.name),
-				appledouble.Make(
+
+			e.forks[dfork] = fork{
+				algo:     dalgo,
+				packofst: doffset,
+				packsz:   dpacked,
+				unpacksz: dunpacked,
+				crc:      dcrc,
+			}
+
+			e.forks[adouble] = fork{
+				prefix: appledouble.MakePrefix(runpacked,
 					map[int][]byte{
 						appledouble.FINDER_INFO:     append(hdr[66:76:76], make([]byte, 22)...),
 						appledouble.FILE_DATES_INFO: append(hdr[76:84:84], make([]byte, 8)...), // cr/md/bk/acc
-					},
-					map[int]multireaderat.SizeReaderAt{
-						appledouble.RESOURCE_FORK: readerFor(ralgo, io.NewSectionReader(disk, roffset, rpacked), runpacked, e.name),
-					},
-				),
+					}),
+				algo:     ralgo,
+				packofst: roffset,
+				packsz:   rpacked,
+				unpacksz: runpacked,
+				crc:      rcrc,
 			}
-			e.dbg = [2]ForkDebug{
-				{PackOffset: doffset, PackSize: dpacked, UnpackSize: dunpacked, Algorithm: int(dalgo)},
-				{PackOffset: roffset, PackSize: rpacked, UnpackSize: runpacked, Algorithm: int(ralgo)},
-			}
+
 			offset += rpacked + dpacked
 		}
 	}
@@ -264,105 +273,132 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 }
 
 // To satisfy fs.FS
-func (fsys FS) Open(name string) (fs.File, error) {
+func (fsys *FS) Open(name string) (fs.File, error) {
+	e, forkid, err := fsys.lookupName(name)
+	if err != nil {
+		return nil, err
+	}
+	s := stat{e: e, fork: forkid}
+	if e.isdir && forkid == dfork {
+		return &opendir{s: s}, nil
+	} else {
+		return &openfile{s: s}, nil
+	}
+}
+
+func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
+	e, forkid, err := fsys.lookupName(name)
+	if err != nil {
+		return nil, err
+	}
+	return &stat{e: e, fork: forkid}, nil
+}
+
+func (fsys *FS) lookupName(name string) (e *entry, f forkid, err error) {
 	components := strings.Split(name, "/")
 	if name == "." {
 		components = nil
 	} else if name == "" {
-		return nil, fs.ErrNotExist
+		return nil, 0, fs.ErrNotExist
 	}
 
-	sidecar := false
+	fork := dfork
 	if len(components) > 0 {
-		components[len(components)-1], sidecar = strings.CutPrefix(components[len(components)-1], "._")
+		var isAD bool
+		components[len(components)-1], isAD = strings.CutPrefix(components[len(components)-1], "._")
+		if isAD {
+			fork = adouble
+		}
 	}
 
-	e := fsys.root
+	e = fsys.root
 	for _, c := range components {
 		child, ok := e.childMap[c]
 		if !ok {
-			return nil, fmt.Errorf("%w: %s", fs.ErrNotExist, name)
+			return nil, 0, fs.ErrNotExist
 		}
 		e = child
 	}
-	return open(e, sidecar), nil
-}
-
-func open(e *entry, sidecar bool) *openfile {
-	f := openfile{e: e, sidecar: sidecar}
-	if sidecar {
-		f.rsrs = io.NewSectionReader(e.fork[1], 0, e.fork[1].Size())
-	} else if !e.isdir {
-		f.rsrs = io.NewSectionReader(e.fork[0], 0, e.fork[0].Size())
-	} else {
-		f.rsrs = bytes.NewReader(nil)
-	}
-	return &f
+	return e, fork, nil
 }
 
 type entry struct {
+	r          io.ReaderAt
 	name       string
-	modtime    time.Time
+	mactime    uint32
 	isdir      bool
-	fork       [2]multireaderat.SizeReaderAt // {datafork, appledouble}
+	forks      [2]fork
 	childSlice []*entry
 	childMap   map[string]*entry
-	dbg        [2]ForkDebug
+}
+
+type fork struct {
+	prefix   []byte
+	algo     algid
+	packsz   uint32
+	unpacksz uint32
+	packofst uint32
+	crc      uint16
+}
+
+type stat struct { // both fs.FileInfo and fs.DirEntry
+	e    *entry
+	fork forkid
 }
 
 type openfile struct {
-	rsrs
-	e          *entry // for Name/Mode/Type/ModTime/Sys
-	sidecar    bool   // for IsDir
-	listOffset int    // for ReadDir
+	r io.Reader
+	c io.Closer
+	s stat
 }
 
-type rsrs interface {
-	Read([]byte) (int, error)
-	Seek(offset int64, whence int) (int64, error)
-	ReadAt([]byte, int64) (int, error)
-	Size() int64
+type opendir struct {
+	i int
+	s stat
 }
 
-func (f *openfile) Name() string { // implements fs.FileInfo and fs.DirEntry
-	if f.sidecar {
-		return "._" + f.e.name
-	} else {
-		return f.e.name
+func (f *openfile) Stat() (fs.FileInfo, error) {
+	return &f.s, nil
+}
+
+func (f *openfile) Read(p []byte) (int, error) {
+	if f.r == nil {
+		fk := &f.s.e.forks[f.s.fork]
+		f.r = readerFor(fk.algo, fk.unpacksz, io.NewSectionReader(f.s.e.r, int64(fk.packofst), int64(fk.packsz)))
+		if closer, ok := f.r.(io.Closer); ok {
+			f.c = closer
+		}
+		if len(fk.prefix) != 0 {
+			f.r = io.MultiReader(bytes.NewReader(fk.prefix), f.r)
+		}
 	}
+	return f.r.Read(p)
 }
 
-func (f *openfile) Mode() fs.FileMode { // implements fs.FileInfo
-	if f.IsDir() {
-		return fs.ModeDir
-	} else {
-		return 0
+func (f *openfile) Close() error {
+	if f.r != nil {
+		if closer, ok := f.r.(io.Closer); ok {
+			return closer.Close()
+		}
 	}
+	return nil
 }
 
-func (f *openfile) Type() fs.FileMode { // implements fs.DirEntry
-	if f.IsDir() {
-		return fs.ModeDir
-	} else {
-		return 0
-	}
+func (f *opendir) Stat() (fs.FileInfo, error) {
+	return &f.s, nil
 }
 
-func (f *openfile) ModTime() time.Time { // implements fs.FileInfo
-	return f.e.modtime
+func (f *opendir) Read(p []byte) (int, error) {
+	return 0, io.EOF
 }
 
-func (f *openfile) Sys() any { // implements fs.FileInfo
-	return f.e.dbg
-}
-
-func (f *openfile) IsDir() bool { // implements fs.FileInfo and fs.DirEntry
-	return f.e.isdir && !f.sidecar
+func (f *opendir) Close() error {
+	return nil
 }
 
 // To satisfy fs.ReadDirFile, has slightly tricky partial-listing semantics
-func (f *openfile) ReadDir(count int) ([]fs.DirEntry, error) {
-	n := len(f.e.childSlice)*2 - f.listOffset
+func (f *opendir) ReadDir(count int) ([]fs.DirEntry, error) {
+	n := len(f.s.e.childSlice)*2 - f.i
 	if n == 0 && count > 0 {
 		return nil, io.EOF
 	}
@@ -371,44 +407,86 @@ func (f *openfile) ReadDir(count int) ([]fs.DirEntry, error) {
 	}
 	list := make([]fs.DirEntry, n)
 	for i := range list {
-		actualFile := f.e.childSlice[(f.listOffset+i)/2]
-		isSidecar := (f.listOffset+i)%2 == 1
-		list[i] = open(actualFile, isSidecar)
+		list[i] = &stat{
+			e:    f.s.e.childSlice[(f.i+i)/2],
+			fork: forkid((f.i + i) % 2),
+		}
 	}
-	f.listOffset += n
+	f.i += n
 	return list, nil
 }
 
-func (f *openfile) Info() (fs.FileInfo, error) { // implements fs.DirEntry
-	return f, nil
+// IsDir() bool
+// Name() string
+// Size() int64
+// Mode() FileMode
+// Type() FileMode
+// ModTime() time.Time
+// Sys() any
+// Info() (FileInfo, error)
+
+func (s stat) IsDir() bool {
+	return s.e.isdir && s.fork == dfork
 }
 
-func (f *openfile) Stat() (fs.FileInfo, error) { // implements fs.File
-	return f, nil
+func (s stat) Name() string {
+	if s.fork == dfork {
+		return s.e.name
+	} else {
+		return "._" + s.e.name
+	}
 }
 
-func (f *openfile) Close() error { // implements fs.File
+func (s stat) Size() int64 {
+	return int64(len(s.e.forks[s.fork].prefix)) + int64(s.e.forks[s.fork].unpacksz)
+}
+
+func (s stat) Mode() fs.FileMode {
+	if s.IsDir() {
+		return fs.ModeDir
+	} else {
+		return 0
+	}
+}
+
+func (s stat) Type() fs.FileMode {
+	if s.IsDir() {
+		return fs.ModeDir
+	} else {
+		return 0
+	}
+}
+
+func (s stat) ModTime() time.Time {
+	return time.Unix(int64(s.e.mactime)-2082844800, 0).UTC()
+}
+
+func (s stat) Sys() any {
 	return nil
 }
 
-func readerFor(method byte, compr multireaderat.SizeReaderAt, size int64, name string) multireaderat.SizeReaderAt {
+func (s stat) Info() (fs.FileInfo, error) {
+	return s, nil
+}
+
+func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might also be ReadCloser
 	// corpus includes algo 0, 2, 3, 5, 13, 15
-	switch method {
+	switch algo {
 	default:
-		return bytes.NewReader(make([]byte, size)) // dodgy temporary
+		return bytes.NewReader(make([]byte, unpacksz)) // dodgy temporary
 	case 0: // no compression
-		return compr
+		return r
 	case 3: // Huffman compression
-		return decompressioncache.New(InitHuffman(compr, size), size, name)
+		return huffman(r, int64(unpacksz))
 	// case 1: // RLE compression
 	// case 2: // LZC compression
 	// case 5: // LZ with adaptive Huffman
 	// case 6: // Fixed Huffman table
 	// case 8: // Miller-Wegman encoding
 	case 13: // anonymous
-		return decompressioncache.New(InitSIT13(compr, size), size, name)
-	// case 14: // anonymous
-	case 15: // Arsenic
-		return decompressioncache.New(InitArsenic(compr, size), size, name)
+		return sit13(r, int64(unpacksz))
+		// case 14: // anonymous
+		// case 15: // Arsenic
+		// 	return decompressioncache.New(InitArsenic(compr, size), size, name)
 	}
 }
