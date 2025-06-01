@@ -32,12 +32,10 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
+	"bufio"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
-
-	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
 
 type SIT13Buffer struct {
@@ -54,7 +52,7 @@ type SIT13Store struct {
 var Buffer1 [0x1000]SIT13Buffer
 
 type SIT13Data struct {
-	br       BitReader
+	br       *bufio.Reader
 	MaxBits  uint16
 	Buffer4  [0xE08]SIT13Store
 	Buffer2  [0x1000]SIT13Buffer
@@ -63,7 +61,6 @@ type SIT13Data struct {
 	Buffer5  [0x141]SIT13Buffer
 	TextBuf  [658]uint8
 	Window   [0x10000]uint8
-	out      []byte
 }
 
 func (s *SIT13Data) print() {
@@ -351,130 +348,13 @@ func SIT13InitInfo(s *SIT13Data, id uint8) {
 	}
 }
 
-func stepSIT13(s SIT13Data, bitbuf int, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
-	re = io.EOF
-	defer func() {
-		if recover() != nil {
-			fmt.Println("internal StuffIt panic")
-			re = errors.New("internal StuffIt panic")
-		}
-	}()
-	var wpos, l, size uint32
-	buf := s.Buffer3[:]
-
-	for {
-		bitbuf = s.br.FillLittleEndian(bitbuf)
-		// now guaranteed 55 bits
-		k := uint32(bitbuf & (1<<12 - 1)) // not sure of type?
-		j := buf[k].bits
-		if j <= 12 {
-			l = uint32(buf[k].data)
-			bitbuf >>= j
-			// now guaranteed 43 bits
-		} else {
-			bitbuf >>= 12
-
-			j := buf[k].data
-			for s.Buffer4[j].freq == -1 {
-				bit := bitbuf & 1
-				bitbuf >>= 1
-				if bit != 0 {
-					j = s.Buffer4[j].d2
-				} else {
-					j = s.Buffer4[j].d1
-				}
-				bitbuf = s.br.FillLittleEndian(bitbuf)
-			}
-			// now guaranteed 55 bits
-			l = uint32(s.Buffer4[j].freq)
-		}
-		// now guaranteed 43 bits
-		if l < 0x100 {
-			rb = append(rb, byte(l))
-			remain--
-			if remain == 0 {
-				goto done
-			}
-			s.Window[wpos] = byte(l)
-			wpos++
-			wpos &= 0xFFFF
-			buf = s.Buffer3[:]
-		} else {
-			buf = s.Buffer3b[:]
-			if l < 0x13E {
-				size = l - 0x100 + 3
-			} else {
-				if l == 0x13E {
-					size = uint32(bitbuf & (1<<10 - 1))
-					bitbuf >>= 10
-					// now guaranteed 33 bits
-				} else {
-					if l == 0x140 {
-						goto done
-					}
-					size = uint32(bitbuf & (1<<15 - 1))
-					bitbuf >>= 15
-					// now guaranteed 28 bits
-				}
-				size += 65
-			}
-			// now guaranteed 28 bits
-			j2 := uint32(bitbuf & (1<<12 - 1))
-			k = uint32(s.Buffer2[j2].bits)
-			if k <= 12 {
-				l = uint32(s.Buffer2[j2].data)
-				bitbuf >>= k
-				// now guaranteed 16 bits
-			} else {
-				bitbuf >>= k
-				// now guaranteed 16 bits
-				j2 = uint32(s.Buffer2[j2].data)
-				for s.Buffer4[j2].freq == -1 {
-					bit := bitbuf & 1
-					bitbuf >>= 1
-					if bit != 0 {
-						j2 = uint32(s.Buffer4[j2].d2)
-					} else {
-						j2 = uint32(s.Buffer4[j2].d1)
-					}
-					bitbuf = s.br.FillLittleEndian(bitbuf)
-				}
-				// now guaranteed 55 bits
-				l = uint32(s.Buffer4[j2].freq)
-			}
-			// now guaranteed 16 bits
-			k = 0
-			if l != 0 {
-				l--
-				k = (1 << l) | uint32((bitbuf & (1<<l - 1)))
-				bitbuf >>= l
-			}
-			l = wpos + 0x10000 - (k + 1)
-			for range size {
-				l &= 0xFFFF
-				rb = append(rb, s.Window[l])
-				remain--
-				if remain == 0 {
-					goto done
-				}
-				s.Window[wpos] = s.Window[l]
-				wpos++
-				l++
-				wpos &= 0xFFFF
-			}
-		} /* l >= 0x100 */
-	}
-done:
-	return // nakedly
-}
-
 func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) int {
 	var b *SIT13Buffer
 	var data uint16
 	var bi int8 = 0
 
 	for i := uint16(0); i < num; i++ { // note the loop body changes i
-		bitbuf = s.br.FillLittleEndian(bitbuf) // guaranteed 55 bits, enough for a loop iteration
+		bitbuf = FillLittleEndian(bitbuf, s.br) // guaranteed 55 bits, enough for a loop iteration
 
 		bits := bitbuf & (1<<12 - 1)
 		b = &Buffer1[bits]
@@ -520,23 +400,25 @@ func SIT13_CreateTree(s *SIT13Data, bitbuf int, buf []SIT13Buffer, num uint16) i
 	return bitbuf
 }
 
-func InitSIT13(r io.ReaderAt, unpack int64) decompressioncache.Stepper {
-	s := SIT13Data{
-		br: NewBitReader(NewByteGetter(r)),
-	}
-	return func() (decompressioncache.Stepper, []byte, error) {
-		return setupSIT13(s, unpack)
-	}
+func sit13(r io.Reader, dstsize int64) io.ReadCloser {
+	pr, pw := io.Pipe()
+	go sit13copy(pw, r, dstsize)
+	return pr
 }
 
-func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []byte, re error) {
+func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize int64) {
 	defer func() {
-		if recover() != nil {
-			fmt.Println("internal StuffIt panic")
-			re = errors.New("internal StuffIt panic")
-			rb = []byte("nah")
+		if r := recover(); r != nil {
+			dst.CloseWithError(fmt.Errorf("internal StuffIt panic: %v", r))
+		} else {
+			dst.Close()
 		}
 	}()
+
+	var s SIT13Data
+	s.br = bufio.NewReaderSize(src, 1024)
+	bw := bufio.NewWriterSize(dst, 1024)
+	defer bw.Flush()
 
 	var i, j uint32
 	s.MaxBits = 1
@@ -550,7 +432,7 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		s.Buffer4[i].freq = -1
 	}
 
-	bitbuf := s.br.FillLittleEndian(InitialLittleEndian)
+	bitbuf := FillLittleEndian(InitialLittleEndian, s.br)
 	j = uint32(bitbuf) & 0xff
 	bitbuf >>= 8
 	i = j >> 4
@@ -573,5 +455,113 @@ func setupSIT13(s SIT13Data, remain int64) (rs decompressioncache.Stepper, rb []
 		bitbuf = SIT13_CreateTree(&s, bitbuf, s.Buffer2[:], uint16(j))
 	}
 
-	return stepSIT13(s, bitbuf, remain)
+	var wpos, l, size uint32
+	buf := s.Buffer3[:]
+
+	for {
+		bitbuf = FillLittleEndian(bitbuf, s.br)
+		// now guaranteed 55 bits
+		k := uint32(bitbuf & (1<<12 - 1)) // not sure of type?
+		j := buf[k].bits
+		if j <= 12 {
+			l = uint32(buf[k].data)
+			bitbuf >>= j
+			// now guaranteed 43 bits
+		} else {
+			bitbuf >>= 12
+
+			j := buf[k].data
+			for s.Buffer4[j].freq == -1 {
+				bit := bitbuf & 1
+				bitbuf >>= 1
+				if bit != 0 {
+					j = s.Buffer4[j].d2
+				} else {
+					j = s.Buffer4[j].d1
+				}
+				bitbuf = FillLittleEndian(bitbuf, s.br)
+			}
+			// now guaranteed 55 bits
+			l = uint32(s.Buffer4[j].freq)
+		}
+		// now guaranteed 43 bits
+		if l < 0x100 {
+			if bw.WriteByte(byte(l)) != nil {
+				return
+			}
+			dstsize--
+			if dstsize == 0 {
+				return
+			}
+			s.Window[wpos] = byte(l)
+			wpos++
+			wpos &= 0xFFFF
+			buf = s.Buffer3[:]
+		} else {
+			buf = s.Buffer3b[:]
+			if l < 0x13E {
+				size = l - 0x100 + 3
+			} else {
+				if l == 0x13E {
+					size = uint32(bitbuf & (1<<10 - 1))
+					bitbuf >>= 10
+					// now guaranteed 33 bits
+				} else {
+					if l == 0x140 {
+						return
+					}
+					size = uint32(bitbuf & (1<<15 - 1))
+					bitbuf >>= 15
+					// now guaranteed 28 bits
+				}
+				size += 65
+			}
+			// now guaranteed 28 bits
+			j2 := uint32(bitbuf & (1<<12 - 1))
+			k = uint32(s.Buffer2[j2].bits)
+			if k <= 12 {
+				l = uint32(s.Buffer2[j2].data)
+				bitbuf >>= k
+				// now guaranteed 16 bits
+			} else {
+				bitbuf >>= k
+				// now guaranteed 16 bits
+				j2 = uint32(s.Buffer2[j2].data)
+				for s.Buffer4[j2].freq == -1 {
+					bit := bitbuf & 1
+					bitbuf >>= 1
+					if bit != 0 {
+						j2 = uint32(s.Buffer4[j2].d2)
+					} else {
+						j2 = uint32(s.Buffer4[j2].d1)
+					}
+					bitbuf = FillLittleEndian(bitbuf, s.br)
+				}
+				// now guaranteed 55 bits
+				l = uint32(s.Buffer4[j2].freq)
+			}
+			// now guaranteed 16 bits
+			k = 0
+			if l != 0 {
+				l--
+				k = (1 << l) | uint32((bitbuf & (1<<l - 1)))
+				bitbuf >>= l
+			}
+			l = wpos + 0x10000 - (k + 1)
+			for range size {
+				l &= 0xFFFF // this could very likely be optimised
+				if bw.WriteByte(s.Window[l]) != nil {
+					return
+				}
+				dstsize--
+				if dstsize == 0 {
+					return
+				}
+				s.Window[wpos] = s.Window[l]
+				wpos++
+				l++
+				wpos &= 0xFFFF
+			}
+		} /* l >= 0x100 */
+	}
 }

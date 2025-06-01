@@ -32,11 +32,10 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 package sit
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"math/bits"
-
-	"github.com/elliotnunn/resourceform/internal/decompressioncache"
 )
 
 type node struct {
@@ -44,19 +43,27 @@ type node struct {
 	byte      uint8
 }
 
-func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // should it be possible to return an error?
-	byteGetter := NewByteGetter(r)
-	bitReader := NewBitReader(byteGetter)
+func huffman(r io.Reader, dstsize int64) io.ReadCloser { // should it be possible to return an error?
+	pr, pw := io.Pipe()
+	go huffcopy(pw, r, dstsize)
+	return pr
+}
 
+func huffcopy(dst io.WriteCloser, src io.Reader, dstsize int64) {
+	defer dst.Close()
+	br := bufio.NewReaderSize(src, 1024)
+	bw := bufio.NewWriterSize(dst, 1024)
+	defer bw.Flush()
+
+	bitbuf := InitialBigEndian
 	var nodelist []node
 	numfreetree := 0
-	bitbuf := InitialBigEndian
 	for { /* removed recursion, optimized a lot */
 		var np int
 		for {
 			np = len(nodelist)
 			nodelist = append(nodelist, node{})
-			bitbuf = bitReader.FillBigEndian(bitbuf)
+			bitbuf = FillBigEndian(bitbuf, br)
 			bit := bitbuf&(1<<(bits.UintSize-1)) != 0
 			bitbuf <<= 1
 			if bit {
@@ -82,33 +89,24 @@ func InitHuffman(r io.ReaderAt, size int64) decompressioncache.Stepper { // shou
 		}
 	}
 
-	bitReader.SacrificeBuffer()
-	return func() (decompressioncache.Stepper, []byte, error) {
-		return stepHuffman(bitReader, bitbuf, nodelist, size)
-	}
-}
-
-func stepHuffman(br BitReader, bitbuf uint, huff []node, remain int64) (decompressioncache.Stepper, []byte, error) {
-	accum := make([]byte, 0, min(4096, int(remain)))
-	for range cap(accum) {
+	for range dstsize {
 		node := 0
-		bitbuf = br.FillBigEndian(bitbuf) // guaranteed to be enough bits for a whole huff code
-		for huff[node].one != -1 {
+		bitbuf = FillBigEndian(bitbuf, br) // guaranteed to be enough bits for a whole huff code
+		for nodelist[node].one != -1 {
 			bit := bitbuf&(1<<(bits.UintSize-1)) != 0
 			bitbuf <<= 1
 			if !bit {
-				node = huff[node].zero
+				node = nodelist[node].zero
 			} else {
-				node = huff[node].one
+				node = nodelist[node].one
 			}
 		}
-		accum = append(accum, huff[node].byte)
+		err := bw.WriteByte(nodelist[node].byte)
+		if err != nil {
+			return // nowhere to report this
+		}
 	}
 
-	br.SacrificeBuffer()
-	return func() (decompressioncache.Stepper, []byte, error) {
-		return stepHuffman(br, bitbuf, huff, remain-int64(len(accum)))
-	}, accum, nil
 }
 
 func printHuffmanTable(nodelist []node) {
