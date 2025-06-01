@@ -39,6 +39,10 @@ func TestAlgorithms(t *testing.T) {
 			got, err := io.ReadAll(f)
 			if errors.Is(err, ErrPassword) && strings.Contains(x.stuffitPath, "password") {
 				t.Skipf("skipping password protected file")
+			} else if errors.Is(err, ErrAlgo) {
+				save := path.Join(tempFor(x.stuffitPath, x.path), "packed")
+				os.WriteFile(save, x.packedData, 0o644)
+				t.Fatalf("unimplemented algo: saved at %s", save)
 			} else if err != nil {
 				t.Fatalf("expected io.EOF or nil, got %v", err)
 			}
@@ -213,13 +217,18 @@ func safeName(s string) string {
 	return string(ret)
 }
 
-func logMismatch(got, expect, packed []byte, name1, name2 string) string {
+func tempFor(name1, name2 string) string {
 	tmp := "/tmp"
 	if runtime.GOOS == "windows" {
 		tmp = `C:\Windows\Temp`
 	}
 	save := filepath.Join(tmp, safeName(name1), safeName(name2))
 	os.MkdirAll(save, 0o755)
+	return save
+}
+
+func logMismatch(got, expect, packed []byte, name1, name2 string) string {
+	save := tempFor(name1, name2)
 	os.WriteFile(filepath.Join(save, "expect"), expect, 0o644)
 	os.WriteFile(filepath.Join(save, "got"), got, 0o644)
 	os.WriteFile(filepath.Join(save, "packed"), packed, 0o644)
