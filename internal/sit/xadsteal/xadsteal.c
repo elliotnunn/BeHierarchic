@@ -954,13 +954,13 @@ struct SIT13Data {
 
 void printStores(char *name, struct SIT13Store *data, int n) {
     for (int i=0; i<n; i++) {
-        printf("%s[%d] = (%d,%04x,%04x)\n", name, i, data[i].freq, data[i].d1, data[i].d2);
+        printf("%s[%d] = (%d,%04x,%04x)\n", name, i, data[i].freq, 0xffff&data[i].d1, 0xffff&data[i].d2);
     }
 }
 
 void printBuffers(char *name, struct SIT13Buffer *data, int n) {
     for (int i=0; i<n; i++) {
-        printf("%s[%d] = (%04x,%02x)\n", name, i, data[i].data, data[i].bits);
+        printf("%s[%d] = (%04x,%02x)\n", name, i, 0xffff&data[i].data, 0xff&data[i].bits);
     }
 }
 
@@ -1080,7 +1080,11 @@ static const xadUINT8 SIT13Static[1655] = {
 
 static void SIT13_Func1(struct SIT13Data *s, struct SIT13Buffer *buf, xadUINT32 info, xadUINT16 bits, xadUINT16 num)
 {
-  xadUINT32 i, j;
+	// printf("info=%d bits=%d num=%d\n", info, bits, num);
+	// for (int i=0; i<num; i++) {
+	// 	printf("bufline[%d] = %d,%d\n", i, buf[i].bits, buf[i].data);
+	// }
+    xadUINT32 i, j;
 
   if(bits <= 12)
   {
@@ -1380,6 +1384,7 @@ static xadINT32 SIT_13(struct xadInOut *io)
     }
 
     j = xadIOGetChar(io);
+    printf("j = %02x\n", j);
     i = j>>4;
     if(i > 5)
       io->xio_Error = XADERR_ILLEGALDATA;
@@ -1400,7 +1405,7 @@ static xadINT32 SIT_13(struct xadInOut *io)
       j = (j&7)+10;
       SIT13_CreateTree(s, io, s->Buffer2, j);
     }
-    printSIT13Data(s);
+
     if(!io->xio_Error)
       SIT13_Extract(s, io);
     xadFreeObjectA(XADM s, 0);
