@@ -38,23 +38,37 @@ func TestAlgorithms(t *testing.T) {
 			if len(got) != int(x.unpackedSize) {
 				t.Errorf("expected %d bytes, got %d", x.unpackedSize, len(got))
 			}
-			if !bytes.Equal(got, x.unpackedData) && !sameTextFile(got, x.unpackedData) {
-				t.Error(logMismatch(got, x.unpackedData, x.packedData, x.stuffitPath, x.path))
+
+			if x.crc != 0 && x.algorithm != 15 { // compare CRC, but not for Arsenic
+				t.Run("CRC", func(t *testing.T) {
+					gotcrc := crc16(got)
+					if gotcrc != x.crc {
+						t.Errorf("expected CRC16 %04x, got %04x", x.crc, gotcrc)
+					}
+				})
+			}
+
+			if x.unpackedData != nil { // compare whole data
+				t.Run("KnownData", func(t *testing.T) {
+					if !bytes.Equal(got, x.unpackedData) && !sameTextFile(got, x.unpackedData) {
+						t.Error(logMismatch(got, x.unpackedData, x.packedData, x.stuffitPath, x.path))
+					}
+				})
 			}
 		})
 	}
 }
 
 type testCase struct {
-	stuffitPath  string
-	path         string
-	backing      io.ReaderAt
-	whichFork    string // "data"/"resource"
-	algorithm    int8
-	offset       uint32
-	packedSize   uint32
-	unpackedSize uint32
-
+	stuffitPath              string
+	path                     string
+	backing                  io.ReaderAt
+	whichFork                string // "data"/"resource"
+	algorithm                int8
+	offset                   uint32
+	packedSize               uint32
+	unpackedSize             uint32
+	crc                      uint16
 	packedData, unpackedData []byte
 }
 
@@ -103,10 +117,7 @@ func mkAlgoTestCases() []testCase {
 			entry := f.(*openfile).s.e
 
 			for i, fork := range entry.forks { // only data, we only care about tests
-				if _, ok := known[path.Base(p)]; !ok {
-					continue
-				}
-				ret = append(ret, testCase{
+				c := testCase{
 					stuffitPath:  sitPath,
 					path:         p,
 					whichFork:    [2]string{"data", "resource"}[i],
@@ -114,9 +125,15 @@ func mkAlgoTestCases() []testCase {
 					offset:       fork.packofst,
 					packedSize:   fork.packsz,
 					unpackedSize: fork.unpacksz,
+					crc:          fork.crc,
 					packedData:   sitBytes[fork.packofst:][:fork.packsz],
-					unpackedData: known[path.Base(p)],
-				})
+				}
+
+				if knownDataFork, ok := known[path.Base(p)]; i == 0 && ok {
+					c.unpackedData = knownDataFork
+				}
+
+				ret = append(ret, c)
 			}
 			return nil
 		})
@@ -206,4 +223,28 @@ func sameTextFile(a, b []byte) bool {
 		bytes.ReplaceAll(a, []byte("\r"), []byte("\n")),
 		bytes.ReplaceAll(b, []byte("\r"), []byte("\n")),
 	)
+}
+
+var crctab [256]uint16
+
+func init() {
+	for i := range uint16(256) {
+		k := i
+		for range 8 {
+			if k&1 != 0 {
+				k = (k >> 1) ^ 0xa001
+			} else {
+				k >>= 1
+			}
+		}
+		crctab[i] = k
+	}
+}
+
+func crc16(buf []byte) uint16 {
+	x := uint16(0)
+	for _, c := range buf {
+		x = crctab[byte(x)^c] ^ x>>8
+	}
+	return x
 }
