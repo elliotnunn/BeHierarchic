@@ -30,16 +30,23 @@ func TestAlgorithms(t *testing.T) {
 		}
 
 		t.Run(x.String(), func(t *testing.T) {
-			r := readerFor(algid(x.algorithm), x.unpackedSize, bytes.NewReader(x.packedData))
-			got, goterr := io.ReadAll(r)
-			if goterr != nil && goterr != io.EOF {
-				t.Errorf("expected io.EOF or nil, got %v", goterr)
+			f, err := x.fsys.Open(x.path)
+			if err != nil {
+				panic("should have been able to open that")
 			}
-			if len(got) != int(x.unpackedSize) {
-				t.Errorf("expected %d bytes, got %d", x.unpackedSize, len(got))
+			defer f.Close()
+			got, err := io.ReadAll(f)
+			if err != nil {
+				t.Fatalf("expected io.EOF or nil, got %v", err)
 			}
 
-			if x.crc != 0 && x.algorithm != 15 { // compare CRC, but not for Arsenic
+			got = got[len(got)-int(x.fk.UnpackSize):]
+
+			if len(got) != int(x.fk.UnpackSize) {
+				t.Errorf("expected %d bytes, got %d", x.fk.UnpackSize, len(got))
+			}
+
+			if x.crc != 0 && x.fk.Algorithm != 15 { // compare CRC, but not for Arsenic
 				t.Run("CRC", func(t *testing.T) {
 					gotcrc := crc16(got)
 					if gotcrc != x.crc {
@@ -61,20 +68,17 @@ func TestAlgorithms(t *testing.T) {
 
 type testCase struct {
 	stuffitPath              string
+	fsys                     fs.FS
 	path                     string
-	backing                  io.ReaderAt
 	whichFork                string // "data"/"resource"
-	algorithm                int8
-	offset                   uint32
-	packedSize               uint32
-	unpackedSize             uint32
+	fk                       ForkDebug
 	crc                      uint16
 	packedData, unpackedData []byte
 }
 
 func (t *testCase) String() string {
-	algo := algoName(t.algorithm)
-	if t.algorithm == 13 {
+	algo := algoName(t.fk.Algorithm)
+	if t.fk.Algorithm == 13 {
 		if t.packedData[0]&0xf0 == 0 {
 			algo += "dynamic"
 			if t.packedData[0]&8 == 0 {
@@ -97,44 +101,45 @@ func mkAlgoTestCases() []testCase {
 	var ret []testCase
 	known := fsToMap(sourcesFS)
 	for sitPath, sitBytes := range fsToMap(archivesFS) {
-		if strings.Contains(sitPath, "password") {
-			continue // we really need a better way here
-		}
 		sit, err := New(bytes.NewReader(sitBytes))
 		if err != nil {
 			continue
 		}
 
 		fs.WalkDir(sit, ".", func(p string, d fs.DirEntry, err error) error {
-			if d.IsDir() || strings.Contains(p, "._") {
+			if d.IsDir() {
 				return nil
+			}
+			fork := "data"
+			if strings.HasPrefix(path.Base(p), "._") {
+				fork = "resource"
 			}
 
 			f, err := sit.Open(p)
 			if err != nil {
 				panic(err)
 			}
-			entry := f.(*openfile).s.e
-
-			for i, fork := range entry.forks { // only data, we only care about tests
-				c := testCase{
-					stuffitPath:  sitPath,
-					path:         p,
-					whichFork:    [2]string{"data", "resource"}[i],
-					algorithm:    int8(fork.algo),
-					offset:       fork.packofst,
-					packedSize:   fork.packsz,
-					unpackedSize: fork.unpacksz,
-					crc:          fork.crc,
-					packedData:   sitBytes[fork.packofst:][:fork.packsz],
-				}
-
-				if knownDataFork, ok := known[path.Base(p)]; i == 0 && ok {
-					c.unpackedData = knownDataFork
-				}
-
-				ret = append(ret, c)
+			s, err := f.Stat()
+			if err != nil {
+				panic(err)
 			}
+			fk := s.Sys().(*ForkDebug)
+
+			c := testCase{
+				fsys:        sit,
+				stuffitPath: sitPath,
+				path:        p,
+				whichFork:   fork,
+				fk:          *fk,
+				crc:         fk.CRC16,
+				packedData:  sitBytes[fk.PackOffset:][:fk.PackSize],
+			}
+
+			if knownDataFork, ok := known[path.Base(p)]; fork == "data" && ok {
+				c.unpackedData = knownDataFork
+			}
+
+			ret = append(ret, c)
 			return nil
 		})
 	}

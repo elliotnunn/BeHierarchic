@@ -27,6 +27,12 @@ type FS struct {
 	root *entry
 }
 
+type ForkDebug struct {
+	PackOffset, PackSize, UnpackSize uint32
+	Algorithm                        int8
+	CRC16                            uint16
+}
+
 // Create a new FS from an HFS volume
 func New(disk io.ReaderAt) (*FS, error) {
 	var buf [80]byte
@@ -136,10 +142,11 @@ func newStuffIt5(disk io.ReaderAt) (*FS, error) {
 		fRFFmt := algid(hdr3[12])
 
 		e := &entry{
-			r:       disk,
-			isdir:   isDir,
-			name:    strings.ReplaceAll(string(name), "/", ":"),
-			mactime: binary.BigEndian.Uint32(hdr1[14:]),
+			r:        disk,
+			isdir:    isDir,
+			name:     strings.ReplaceAll(string(name), "/", ":"),
+			mactime:  binary.BigEndian.Uint32(hdr1[14:]),
+			password: !isDir && hdr1[47] != 0,
 		}
 		job.remain--
 		if job.parent.childMap == nil {
@@ -218,9 +225,11 @@ func newStuffItClassic(disk io.ReaderAt) (*FS, error) {
 		}
 
 		e := &entry{
-			isdir:   hdr[0] == 32,
-			name:    strings.ReplaceAll(stringFromRoman(hdr[3:66][:min(63, hdr[2])]), "/", ":"),
-			mactime: binary.BigEndian.Uint32(hdr[80:]),
+			r:        disk,
+			isdir:    hdr[0] == 32,
+			name:     strings.ReplaceAll(stringFromRoman(hdr[3:66][:min(63, hdr[2])]), "/", ":"),
+			mactime:  binary.BigEndian.Uint32(hdr[80:]),
+			password: hdr[0]&16 != 0,
 		}
 		parent := stack[len(stack)-1]
 		if parent.childMap == nil {
@@ -279,10 +288,17 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 	s := stat{e: e, fork: forkid}
+	fk := &e.forks[forkid]
 	if e.isdir && forkid == dfork {
 		return &opendir{s: s}, nil
-	} else {
+	} else if e.password {
+		return &errorfile{s: s, err: errors.New("password protected")}, nil
+	} else if fk.algo == 0 {
+		return &passthrufile{s: s, r: io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz))}, nil
+	} else if (algosupport>>fk.algo)&1 != 0 {
 		return &openfile{s: s}, nil
+	} else {
+		return &errorfile{s: s, err: fmt.Errorf("unsupported compression algorithm %d", fk.algo)}, nil
 	}
 }
 
@@ -327,6 +343,7 @@ type entry struct {
 	name       string
 	mactime    uint32
 	isdir      bool
+	password   bool
 	forks      [2]fork
 	childSlice []*entry
 	childMap   map[string]*entry
@@ -350,6 +367,16 @@ type openfile struct {
 	r io.Reader
 	c io.Closer
 	s stat
+}
+
+type passthrufile struct {
+	r *io.SectionReader
+	s stat
+}
+
+type errorfile struct {
+	err error
+	s   stat
 }
 
 type opendir struct {
@@ -381,6 +408,38 @@ func (f *openfile) Close() error {
 			return closer.Close()
 		}
 	}
+	return nil
+}
+
+func (f *passthrufile) Stat() (fs.FileInfo, error) {
+	return &f.s, nil
+}
+
+func (f *passthrufile) Read(p []byte) (int, error) {
+	return f.r.Read(p)
+}
+
+func (f *passthrufile) ReadAt(p []byte, off int64) (int, error) {
+	return f.r.ReadAt(p, off)
+}
+
+func (f *passthrufile) Seek(offset int64, whence int) (int64, error) {
+	return f.r.Seek(offset, whence)
+}
+
+func (f *passthrufile) Close() error {
+	return nil
+}
+
+func (f *errorfile) Stat() (fs.FileInfo, error) {
+	return &f.s, nil
+}
+
+func (f *errorfile) Read(p []byte) (int, error) {
+	return 0, f.err
+}
+
+func (f *errorfile) Close() error {
 	return nil
 }
 
@@ -462,18 +521,25 @@ func (s stat) ModTime() time.Time {
 }
 
 func (s stat) Sys() any {
-	return nil
+	fk := &s.e.forks[s.fork]
+	return &ForkDebug{
+		PackOffset: fk.packofst,
+		PackSize:   fk.packsz,
+		UnpackSize: fk.unpacksz,
+		Algorithm:  int8(fk.algo),
+		CRC16:      fk.crc,
+	}
 }
 
 func (s stat) Info() (fs.FileInfo, error) {
 	return s, nil
 }
 
+const algosupport = 0b0010_0000_0000_1001
+
 func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might also be ReadCloser
 	// corpus includes algo 0, 2, 3, 5, 13, 15
 	switch algo {
-	default:
-		return bytes.NewReader(make([]byte, unpacksz)) // dodgy temporary
 	case 0: // no compression
 		return r
 	case 3: // Huffman compression
@@ -488,5 +554,7 @@ func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might al
 		// case 14: // anonymous
 		// case 15: // Arsenic
 		// 	return decompressioncache.New(InitArsenic(compr, size), size, name)
+	default:
+		panic("should not attempt readerFor on unsupported algo... update algosupport")
 	}
 }
