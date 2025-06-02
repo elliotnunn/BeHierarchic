@@ -3,18 +3,16 @@ package sit
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"io"
 )
 
-func lzc(r io.Reader, dstsize uint32) io.ReadCloser { // should it be possible to return an error?
+func lzc(r io.Reader, dstsize uint32) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go lzccopy(pw, r, dstsize)
 	return pr
 }
 
 func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
-	println("outsize", dstsize)
 	var reterr error
 	br := bufio.NewReaderSize(src, 1024)
 	bw := bufio.NewWriterSize(dst, 1024)
@@ -25,7 +23,6 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 
 	var stack []byte
 	const maxbits = 14
-	const blockcomp = true
 	const maxmaxcode = 1 << maxbits
 	nbits := 9
 	maxcode := uint16(1<<nbits - 1)
@@ -39,13 +36,10 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 		suffixtab[i] = byte(i)
 	}
 
-	fmt.Println("hi!")
-
 	var buffer [16]byte // enough room to use LE loader instructions
 	boffset, bsize := 0, 0
 
 	getcode := func() (uint16, bool) {
-		fmt.Printf("precode maxcode %d free_ent %d\n", maxcode, free_ent)
 		needNewBuf := boffset >= bsize
 		if free_ent > maxcode {
 			nbits++
@@ -64,7 +58,6 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 		}
 
 		if needNewBuf {
-			clear(buffer[:]) // superfluous
 			n, err := io.ReadFull(br, buffer[:nbits])
 			if err == io.ErrUnexpectedEOF {
 				err = io.EOF
@@ -83,7 +76,6 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 			uint32(buffer[byteoffset+1])<<8 |
 			uint32(buffer[byteoffset+2])<<16) >> bitoffset) & (1<<nbits - 1)
 		boffset += nbits
-		fmt.Printf("code %d width %d\n", code, nbits)
 		return uint16(code), true
 	}
 
@@ -95,7 +87,6 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	if err := bw.WriteByte(finchar); err != nil {
 		return
 	}
-	fmt.Printf("writebyte %02x\n", finchar)
 	dstsize--
 	if dstsize == 0 {
 		return
@@ -140,7 +131,6 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 			if err := bw.WriteByte(stack[i]); err != nil {
 				return
 			}
-			fmt.Printf("writebyte %02x\n", stack[i])
 			dstsize--
 			if dstsize == 0 {
 				return
