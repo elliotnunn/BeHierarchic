@@ -14,6 +14,7 @@ func lzc(r io.Reader, dstsize uint32) io.ReadCloser { // should it be possible t
 }
 
 func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
+	println("outsize", dstsize)
 	br := bufio.NewReaderSize(src, 1024)
 	bw := bufio.NewWriterSize(dst, 1024)
 	defer bw.Flush()
@@ -52,6 +53,17 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 			nbits = 9
 			maxcode = 1<<nbits - 1
 			clearflag = false
+			fmt.Print("tryout: ")
+			for range 100 {
+				if bitbuf < 0 {
+					panic("bitbuf poisoned")
+				}
+				bitbuf = FillLittleEndian(bitbuf, br)
+				fmt.Printf("%d ", bitbuf&0x1ff)
+				bitbuf >>= 1
+			}
+			fmt.Println()
+			panic("as far as we get")
 		}
 
 		bitbuf = FillLittleEndian(bitbuf, br)
