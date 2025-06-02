@@ -283,6 +283,7 @@ struct UCompData {
 /* Read one code from input. If EOF, return -1. */
 static xadINT32 UCompgetcode(struct xadInOut *io, struct UCompData *cd)
 {
+	printf("precode maxcode %d free_ent %d\n", cd->maxcode, cd->free_ent);
   xadINT32 code, r_off, bits;
   xadUINT8 *bp = cd->buf;
 
@@ -309,8 +310,9 @@ static xadINT32 UCompgetcode(struct xadInOut *io, struct UCompData *cd)
     /* This reads maximum n_bits characters into buf */
     cd->size = 0;
     while(cd->size < cd->n_bits && !(io->xio_Flags
-    & (XADIOF_LASTINBYTE|XADIOF_ERROR)))
+    & (XADIOF_LASTINBYTE|XADIOF_ERROR))){
       cd->buf[cd->size++] = xadIOGetChar(io);
+    }
     if(cd->size <= 0)
       return -1;
 
@@ -323,10 +325,12 @@ static xadINT32 UCompgetcode(struct xadInOut *io, struct UCompData *cd)
   bits = cd->n_bits;
 
   /* Get to the first byte. */
+  // printf("bp += %d\n", r_off >> 3);
   bp += (r_off >> 3);
   r_off &= 7;
 
   /* Get first part (low order bits) */
+  // printf("bp %02x", 255&*bp);
   code = (*bp++ >> r_off);
   bits -= (8 - r_off);
   r_off = 8 - r_off;                    /* now, offset into code word */
@@ -334,15 +338,19 @@ static xadINT32 UCompgetcode(struct xadInOut *io, struct UCompData *cd)
   /* Get any 8 bit parts in the middle (<=1 for up to 16 bits). */
   if(bits >= 8)
   {
+    // printf(" %02x", 255&*bp);
     code |= *bp++ << r_off;
     r_off += 8;
     bits -= 8;
   }
 
   /* high order bits. */
+  // if (bits) printf(" %02x", 255&*bp);
   code |= (*bp & ((1<<bits)-1)) << r_off;
   cd->offset += cd->n_bits;
+  // printf("\n");
 
+  printf("code %d width %d\n", code, cd->n_bits);
   return code;
 }
 
@@ -350,7 +358,7 @@ static xadINT32 UCompgetcode(struct xadInOut *io, struct UCompData *cd)
  * "string" table on-the-fly; requiring no table to be stored in the
  * compressed file.
  */
-static xadINT32 xadIO_Compress(struct xadInOut *io, xadUINT8 bitinfo)
+static xadINT32 xadIO_Compress(struct xadInOut *io, xadUINT8 bitinfo, long size)
 {
   xadINT32 err = 0;
   struct UCompData *cd;
@@ -387,11 +395,15 @@ static xadINT32 xadIO_Compress(struct xadInOut *io, xadUINT8 bitinfo)
           cd->tab_suffixof[code] = (xadUINT8) code;
         }
 
-        if((finchar = oldcode = UCompgetcode(io, cd)) == -1)
+        finchar = oldcode = UCompgetcode(io, cd);
+        if(finchar == -1){
           err = 9999;
-        else
+        }else
         {
           xadIOPutChar(io, finchar); /* first code must be 8 bits = xadUINT8 */
+			  printf("writebyte %02x\n", 255&finchar);
+        size--;
+        if (size == 0) return 0;
 
           while((code = UCompgetcode(io, cd)) > -1)
           {
@@ -435,6 +447,9 @@ static xadINT32 xadIO_Compress(struct xadInOut *io, xadUINT8 bitinfo)
             do
             {
               xadIOPutChar(io, *(--stackp));
+			        printf("writebyte %02x\n", 255&*stackp);
+              size--;
+              if (size == 0) return 0;
             } while(stackp > stack);
 
             /* Generate the new entry. */
@@ -3461,7 +3476,7 @@ int main(int argc, char **argv) {
     printf("welcome to xadsteal.c\n");
     slurp(argv[1]);
     printf("slurped size %ld\n", bsize);
-    xadIO_Compress(&bigio, 14|UCOMPBLOCK_MASK);
+    xadIO_Compress(&bigio, 14|UCOMPBLOCK_MASK, 150096);
     printf("unpacked size %ld\n", outsize);
     
     FILE *out = fopen(argv[2], "wb");
