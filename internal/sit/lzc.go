@@ -15,17 +15,21 @@ func lzc(r io.Reader, dstsize uint32) io.ReadCloser { // should it be possible t
 
 func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	println("outsize", dstsize)
+	var reterr error
 	br := bufio.NewReaderSize(src, 1024)
 	bw := bufio.NewWriterSize(dst, 1024)
-	defer bw.Flush()
+	defer func() {
+		bw.Flush()
+		dst.CloseWithError(reterr)
+	}()
 
 	var stack []byte
 	const maxbits = 14
 	const blockcomp = true
 	const maxmaxcode = 1 << maxbits
 	nbits := 9
-	maxcode := 1<<nbits - 1
-	free_ent := int32(257)
+	maxcode := uint16(1<<nbits - 1)
+	free_ent := uint16(257)
 	clearflag := false
 
 	prefixtab := make([]uint16, maxmaxcode)
@@ -37,60 +41,80 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 
 	fmt.Println("hi!")
 
-	bitbuf := InitialLittleEndian
+	var buffer [16]byte // enough room to use LE loader instructions
+	boffset, bsize := 0, 0
 
-	getcode := func() int32 {
+	getcode := func() (uint16, bool) {
 		fmt.Printf("precode maxcode %d free_ent %d\n", maxcode, free_ent)
-		if free_ent > int32(maxcode) {
+		needNewBuf := boffset >= bsize
+		if free_ent > maxcode {
 			nbits++
 			if nbits == maxbits {
 				maxcode = maxmaxcode
 			} else {
 				maxcode = 1<<nbits - 1
 			}
+			needNewBuf = true
 		}
 		if clearflag {
 			nbits = 9
 			maxcode = 1<<nbits - 1
 			clearflag = false
-			fmt.Print("tryout: ")
-			for range 100 {
-				if bitbuf < 0 {
-					panic("bitbuf poisoned")
-				}
-				bitbuf = FillLittleEndian(bitbuf, br)
-				fmt.Printf("%d ", bitbuf&0x1ff)
-				bitbuf >>= 1
-			}
-			fmt.Println()
-			panic("as far as we get")
+			needNewBuf = true
 		}
 
-		bitbuf = FillLittleEndian(bitbuf, br)
-		code := int32(bitbuf & (1<<nbits - 1))
-		bitbuf >>= nbits
+		if needNewBuf {
+			clear(buffer[:]) // superfluous
+			n, err := io.ReadFull(br, buffer[:nbits])
+			if err == io.ErrUnexpectedEOF {
+				err = io.EOF
+			}
+			reterr = err
+			if n == 0 {
+				return 0, false
+			}
+			boffset = 0
+			bsize = n*8 - (nbits - 1) // ensure no over-reading
+		}
+
+		byteoffset := boffset / 8
+		bitoffset := boffset % 8
+		code := ((uint32(buffer[byteoffset]) |
+			uint32(buffer[byteoffset+1])<<8 |
+			uint32(buffer[byteoffset+2])<<16) >> bitoffset) & (1<<nbits - 1)
+		boffset += nbits
 		fmt.Printf("code %d width %d\n", code, nbits)
-		return code
+		return uint16(code), true
 	}
 
-	bitbuf = FillLittleEndian(bitbuf, br)
-	oldcode := getcode()
+	oldcode, ok := getcode()
+	if !ok {
+		return
+	}
 	finchar := byte(oldcode)
-	bw.WriteByte(finchar)
+	if err := bw.WriteByte(finchar); err != nil {
+		return
+	}
 	fmt.Printf("writebyte %02x\n", finchar)
 	dstsize--
+	if dstsize == 0 {
+		return
+	}
 
 	for {
-		code := getcode()
+		code, ok := getcode()
+		if !ok {
+			return
+		}
 
 		if code == 256 {
 			clear(prefixtab[:256])
 			// clear_flg stuff ignored
 			clearflag = true
 			free_ent = 256
-			code = getcode()
-			if code == -1 {
-				break
+			code, ok = getcode()
+			if !ok {
+				return
 			}
 		}
 		incode := code
@@ -107,18 +131,18 @@ func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 
 		for code >= 256 {
 			stack = append(stack, suffixtab[code])
-			code = int32(prefixtab[code])
+			code = prefixtab[code]
 		}
 		finchar = suffixtab[code]
 		stack = append(stack, finchar)
 
 		for i := len(stack) - 1; i >= 0; i-- {
-			bw.WriteByte(stack[i])
+			if err := bw.WriteByte(stack[i]); err != nil {
+				return
+			}
 			fmt.Printf("writebyte %02x\n", stack[i])
 			dstsize--
 			if dstsize == 0 {
-				bw.Flush()
-				dst.Close()
 				return
 			}
 		}
