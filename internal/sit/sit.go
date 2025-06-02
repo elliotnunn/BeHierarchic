@@ -540,7 +540,7 @@ func (s stat) Info() (fs.FileInfo, error) {
 	return s, nil
 }
 
-const algosupport = 0b1010_0000_0000_1001
+const algosupport = 0b1010_0000_0000_1101
 
 func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might also be ReadCloser
 	// corpus includes algo 0, 2, 3, 5, 13, 15
@@ -550,7 +550,8 @@ func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might al
 	case 3: // Huffman compression
 		return huffman(r, unpacksz)
 	// case 1: // RLE compression
-	// case 2: // LZC compression
+	case 2: // LZC compression
+		return lzc(r, unpacksz)
 	// case 5: // LZ with adaptive Huffman
 	// case 6: // Fixed Huffman table
 	// case 8: // Miller-Wegman encoding
