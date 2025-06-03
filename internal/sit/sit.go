@@ -547,11 +547,11 @@ func readerFor(algo algid, unpacksz uint32, r io.Reader) io.Reader { // might al
 	switch algo {
 	case 0: // no compression
 		return r
-	case 3: // Huffman compression
-		return huffman(r, unpacksz)
 	// case 1: // RLE compression
 	case 2: // LZC compression
 		return lzc(r, unpacksz)
+	case 3: // Huffman compression
+		return huffman(r, unpacksz)
 	// case 5: // LZ with adaptive Huffman
 	// case 6: // Fixed Huffman table
 	// case 8: // Miller-Wegman encoding
