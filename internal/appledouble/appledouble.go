@@ -82,7 +82,7 @@ func Dump(r io.Reader) (string, error) {
 	buf := make([]byte, 4096)
 	n, err := r.Read(buf)
 	if n < 26 || n < 26+12*int(binary.BigEndian.Uint16(buf[24:])) {
-		return "", fmt.Errorf("truncated appledouble: %w", err)
+		return "", fmt.Errorf("truncated appledouble (%d bytes): %w", n, err)
 	}
 	buf = buf[:n]
 
