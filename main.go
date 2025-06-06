@@ -35,7 +35,12 @@ func dumpFS(fsys fs.FS) {
 				panic(err)
 			}
 			defer f.Close()
-			fmt.Println(appledouble.Dump(f))
+			dmp, err := appledouble.Dump(f)
+			if err != nil {
+				fmt.Printf("AppleDouble dump error: %v\n", err)
+			} else {
+				fmt.Println(dmp)
+			}
 		}
 
 		return nil
@@ -48,8 +53,6 @@ func main() {
 	abstract := Wrapper(concrete)
 
 	go func() {
-		dumpFS(concrete)
-		fmt.Println("----")
 		dumpFS(abstract)
 	}()
 	http.ListenAndServe(":1993", http.FileServerFS(abstract))
