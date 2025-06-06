@@ -62,9 +62,6 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 		key := fmt.Sprintf("%s@%#x", r.uniq, base)
 		if b, ok := cache.Get(key); ok { // easy path
 			block = b.([]byte)
-			if len(block) < blocksize {
-				reterr = io.EOF
-			}
 		} else {
 			block = make([]byte, blocksize)
 			r.l.Lock()
@@ -96,7 +93,7 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 			break
 		}
 		n += copy(buf[n:], block[blockskip:])
-		if reterr != nil {
+		if reterr != nil || n == len(buf) {
 			break
 		}
 	}
