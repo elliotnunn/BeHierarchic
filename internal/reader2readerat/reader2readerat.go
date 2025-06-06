@@ -1,25 +1,25 @@
 package reader2readerat
 
 import (
+	"fmt"
 	"io"
-	"io/fs"
+	"sync"
+
+	"github.com/dgraph-io/ristretto"
 )
 
 type ReaderAt struct {
 	r     io.Reader
+	uniq  string
 	open  func() error
 	close func()
-	req   chan request
-	rep   chan reply
+	l     sync.Mutex
+	seek  int64
 }
 
-const (
-	Park int64 = -100
-)
-
 // If the io.Reader is an io.ReadCloser then it will be closed when I am closed
-func NewFromReader(f func() (io.Reader, error)) *ReaderAt {
-	r := initCommon()
+func NewFromReader(uniq string, f func() (io.Reader, error)) *ReaderAt {
+	r := initCommon(uniq)
 	r.open = func() error {
 		from, err := f()
 		r.r = from
@@ -34,8 +34,8 @@ func NewFromReader(f func() (io.Reader, error)) *ReaderAt {
 	return r
 }
 
-func NewFromReadSeeker(from io.ReadSeeker) *ReaderAt {
-	r := initCommon()
+func NewFromReadSeeker(uniq string, from io.ReadSeeker) *ReaderAt {
+	r := initCommon(uniq)
 	r.open = func() error {
 		_, err := from.Seek(0, io.SeekStart)
 		r.r = from
@@ -47,76 +47,85 @@ func NewFromReadSeeker(from io.ReadSeeker) *ReaderAt {
 	return r
 }
 
-func initCommon() *ReaderAt {
+func initCommon(uniq string) *ReaderAt {
 	r := &ReaderAt{
-		req: make(chan request),
-		rep: make(chan reply),
+		uniq: uniq,
 	}
-	go r.goro()
 	return r
 }
 
-type request struct {
-	buf    []byte
-	offset int64
-}
+func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
+	doCacheWait := false
+	for base := off / blocksize * blocksize; base < off+int64(len(buf)); base += blocksize {
+		var block []byte
 
-type reply struct {
-	n   int
-	err error
-}
+		key := fmt.Sprintf("%s@%#x", r.uniq, base)
+		if b, ok := cache.Get(key); ok { // easy path
+			block = b.([]byte)
+			if len(block) < blocksize {
+				reterr = io.EOF
+			}
+		} else {
+			block = make([]byte, blocksize)
+			r.l.Lock()
+			if r.seek > base || r.r == nil {
+				r.close()
+				if err := r.open(); err != nil {
+					return n, err
+				}
+			}
 
-func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, err error) {
-	func() {
-		r := recover()
-		if r != nil {
-			n = 0
-			err = fs.ErrClosed
+			for {
+				block = block[:blocksize]
+				bn, berr := io.ReadFull(r.r, block)
+				block = block[:bn]
+				r.seek += int64(bn)
+				cache.Set(key, block, int64(len(block)))
+				doCacheWait = true
+				reterr = berr
+				if r.seek-int64(bn) == base {
+					break
+				}
+			}
+			r.l.Unlock()
 		}
-	}()
-	r.req <- request{buf, off}
-	rep := <-r.rep
-	return rep.n, rep.err
+
+		blockskip := max(0, off-base)
+		if blockskip > int64(len(block)) {
+			reterr = io.EOF
+			break
+		}
+		n += copy(buf[n:], block[blockskip:])
+		if reterr != nil {
+			break
+		}
+	}
+	if doCacheWait {
+		cache.Wait()
+	}
+	return n, reterr
 }
 
 func (r *ReaderAt) Close() error {
-	close(r.req)
+	r.close()
 	return nil
 }
 
-func (r *ReaderAt) goro() {
-	progress := int64(0)
-	for cmd := range r.req {
-		if cmd.offset == Park { // save memory
-			if len(r.req) == 0 {
-				r.close()
-				progress = 0
-				r.rep <- reply{0, nil}
-				continue
-			}
-		}
+var cache *ristretto.Cache
 
-		if progress > cmd.offset || r.r == nil {
-			progress = 0
-			r.close()
-			if err := r.open(); err != nil {
-				r.rep <- reply{0, err}
-				r.close()
-				progress = 0
-				continue // make no further attempt to try to satisfy this one
-			}
-		}
+const (
+	blocksize = 4096
+	maxcache  = 1 << 30 // gigabyte
+)
 
-		n64, err := io.CopyN(io.Discard, r.r, cmd.offset-progress)
-		progress += n64
-		if err != nil {
-			r.rep <- reply{0, err}
-			continue
-		}
-
-		n, err := io.ReadFull(r.r, cmd.buf)
-		progress += int64(n)
-		r.rep <- reply{n, err}
+func init() {
+	c, err := ristretto.NewCache(&ristretto.Config{
+		NumCounters: maxcache / blocksize * 16,
+		MaxCost:     maxcache,
+		BufferItems: 64,
+	})
+	if err != nil {
+		panic(err)
 	}
-	r.close()
+	cache = c
 }

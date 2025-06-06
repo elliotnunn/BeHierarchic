@@ -300,7 +300,6 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	} else if e.password {
 		return &errorfile{s: s, err: ErrPassword}, nil
 	} else if fk.algo == 0 || fk.unpacksz == 0 {
-		fmt.Printf("3 %d %d\n", int64(fk.packofst), int64(fk.unpacksz))
 		r1 := bytes.NewReader(fk.prefix)                                       // appledouble header
 		r2 := io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz)) // fork data
 		if len(fk.prefix) != 0 && fk.unpacksz != 0 {

@@ -117,7 +117,7 @@ func (w *w) resolve(name string) (int, error) {
 	}
 
 tryAgainWithANewlyDiscoveredImage:
-	fsysNew, err = try1(fsys, pright(name, pathcut))
+	fsysNew, err = try1(fsys, pright(name, pathcut), name)
 	if err == nil {
 		if fsysNew == nil {
 			return pathcut, nil
@@ -129,7 +129,7 @@ tryAgainWithANewlyDiscoveredImage:
 
 	// Failed access, so every path component to the right of "pathcut" needs to be examined
 	for newcut := pathcut + 1; newcut < pathlen; newcut++ {
-		fsysNew, err = try1(fsys, pmid(name, pathcut, newcut))
+		fsysNew, err = try1(fsys, pmid(name, pathcut, newcut), name)
 		if err != nil { // this is a true FNF situation
 			return -1, err
 		} else if fsysNew != nil {
@@ -142,7 +142,7 @@ tryAgainWithANewlyDiscoveredImage:
 	return -1, fs.ErrNotExist
 }
 
-func try1(fsys fs.FS, name string) (fs.FS, error) {
+func try1(fsys fs.FS, name string, uniq string) (fs.FS, error) {
 	s, err := fs.Stat(fsys, name)
 	if err != nil {
 		return nil, err
@@ -162,7 +162,7 @@ func try1(fsys fs.FS, name string) (fs.FS, error) {
 		o.Close()
 		return nil, nil
 	}
-	subdir = &reader2readerat.FS{FS: subdir}
+	subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
 	return subdir, nil
 }
 
@@ -178,8 +178,7 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 			return fsys, "Apple Partition Map"
 		}
 	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
-		zr, err := zip.NewReader(file, size(file))
-		fsys := &reader2readerat.FS{FS: zr}
+		fsys, err := zip.NewReader(file, size(file))
 		if err == nil {
 			return fsys, "ZIP archive"
 		}
