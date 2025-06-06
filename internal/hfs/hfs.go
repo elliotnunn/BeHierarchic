@@ -108,18 +108,16 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 				modtime: macTime(val[0xe:]),
 				fork: [2]multireaderat.SizeReaderAt{
 					nil, // no data fork
-					appledouble.Make(
-						map[int][]byte{
-							appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
-							appledouble.FINDER_INFO:         val[0x16:0x36],
-							appledouble.FILE_DATES_INFO:     append(val[0xa:0x16:0x16], make([]byte, 4)...), // cr/md/bk/acc
-						},
-						nil,
-					),
+					bytes.NewReader(appledouble.MakePrefix(0, map[int][]byte{
+						appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
+						appledouble.FINDER_INFO:         val[0x16:0x36],
+						appledouble.FILE_DATES_INFO:     append(val[0xa:0x16:0x16], make([]byte, 4)...), // cr/md/bk/acc
+					})),
 				},
 			}
 		case 2: // file
 			cnid := binary.BigEndian.Uint32(val[0x14:])
+			rfSize := binary.BigEndian.Uint32(val[0x24:])
 			e = entry{
 				name:    strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":"),
 				cnid:    cnid,
@@ -130,20 +128,19 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 						chaseOverflow(overflow, cnid, false).
 						toBytes(drAlBlkSiz, drAlBlSt).
 						clipExtents(int64(binary.BigEndian.Uint32(val[0x1a:]))).
-						makeReader(disk),
-					appledouble.Make(
-						map[int][]byte{
-							appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
-							appledouble.FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
-							appledouble.FILE_DATES_INFO:     append(val[0x2c:0x38:0x38], make([]byte, 4)...), // cr/md/bk/acc
-						},
-						map[int]multireaderat.SizeReaderAt{
-							appledouble.RESOURCE_FORK: parseExtents(val[0x56:]).
-								chaseOverflow(overflow, cnid, true).
-								toBytes(drAlBlkSiz, drAlBlSt).
-								clipExtents(int64(binary.BigEndian.Uint32(val[0x24:]))).
-								makeReader(disk),
-						},
+						makeReader(disk), // the data fork
+					multireaderat.New(
+						bytes.NewReader(appledouble.MakePrefix(rfSize,
+							map[int][]byte{
+								appledouble.MACINTOSH_FILE_INFO: append(val[2:4:4], make([]byte, 2)...),
+								appledouble.FINDER_INFO:         append(val[0x4:0x14:0x14], val[0x38:0x48]...),
+								appledouble.FILE_DATES_INFO:     append(val[0x2c:0x38:0x38], make([]byte, 4)...), // cr/md/bk/acc
+							})), // the appledouble header
+						parseExtents(val[0x56:]).
+							chaseOverflow(overflow, cnid, true).
+							toBytes(drAlBlkSiz, drAlBlSt).
+							clipExtents(int64(binary.BigEndian.Uint32(val[0x24:]))).
+							makeReader(disk), // followed by the resource fork
 					),
 				},
 			}
