@@ -13,6 +13,10 @@ type ReaderAt struct {
 	rep   chan reply
 }
 
+const (
+	Park int64 = -100
+)
+
 // If the io.Reader is an io.ReadCloser then it will be closed when I am closed
 func NewFromReader(f func() (io.Reader, error)) *ReaderAt {
 	r := initCommon()
@@ -83,6 +87,15 @@ func (r *ReaderAt) Close() error {
 func (r *ReaderAt) goro() {
 	progress := int64(0)
 	for cmd := range r.req {
+		if cmd.offset == Park { // save memory
+			if len(r.req) == 0 {
+				r.close()
+				progress = 0
+				r.rep <- reply{0, nil}
+				continue
+			}
+		}
+
 		if progress > cmd.offset || r.r == nil {
 			progress = 0
 			r.close()
