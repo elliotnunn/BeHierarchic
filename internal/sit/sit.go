@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/resourceform/internal/appledouble"
+	"github.com/elliotnunn/resourceform/internal/multireaderat"
 )
 
 type forkid int8
@@ -298,8 +299,20 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return &opendir{s: s}, nil
 	} else if e.password {
 		return &errorfile{s: s, err: ErrPassword}, nil
-	} else if fk.algo == 0 {
-		return &passthrufile{s: s, r: *io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz))}, nil
+	} else if fk.algo == 0 || fk.unpacksz == 0 {
+		fmt.Printf("3 %d %d\n", int64(fk.packofst), int64(fk.unpacksz))
+		r1 := bytes.NewReader(fk.prefix)                                       // appledouble header
+		r2 := io.NewSectionReader(e.r, int64(fk.packofst), int64(fk.unpacksz)) // fork data
+		if len(fk.prefix) != 0 && fk.unpacksz != 0 {
+			mr := multireaderat.New(r1, r2)
+			return &passthrufile{s: s, r: io.NewSectionReader(mr, 0, mr.Size())}, nil
+		} else if len(fk.prefix) != 0 {
+			return &passthrufile{s: s, r: r1}, nil
+		} else if fk.unpacksz != 0 {
+			return &passthrufile{s: s, r: r2}, nil
+		} else {
+			return &errorfile{s: s, err: io.EOF}, nil
+		}
 	} else if (algosupport>>fk.algo)&1 != 0 {
 		return &openfile{s: s}, nil
 	} else {
@@ -374,8 +387,11 @@ type openfile struct {
 	s stat
 }
 
-type passthrufile struct { // not copyable...
-	r io.SectionReader // so no need for this to be a pointer
+type passthrufile struct {
+	r interface {
+		io.ReadSeeker
+		io.ReaderAt
+	}
 	s stat
 }
 
@@ -442,6 +458,14 @@ func (f *errorfile) Stat() (fs.FileInfo, error) {
 
 func (f *errorfile) Read(p []byte) (int, error) {
 	return 0, f.err
+}
+
+func (f *errorfile) ReadAt(p []byte, off int64) (int, error) {
+	return 0, f.err
+}
+
+func (f *errorfile) Seek(offset int64, whence int) (int64, error) {
+	return 0, nil
 }
 
 func (f *errorfile) Close() error {
