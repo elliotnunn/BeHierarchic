@@ -52,8 +52,6 @@ func main() {
 	concrete := os.DirFS(base)
 	abstract := Wrapper(concrete)
 
-	go func() {
-		dumpFS(abstract)
-	}()
+	go dumpFS(abstract)
 	http.ListenAndServe(":1993", http.FileServerFS(abstract))
 }
