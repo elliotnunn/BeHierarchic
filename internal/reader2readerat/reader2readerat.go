@@ -3,6 +3,7 @@ package reader2readerat
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync"
 
 	"github.com/dgraph-io/ristretto"
@@ -109,6 +110,21 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 
 func (r *ReaderAt) cacheKey(offset int64) string {
 	return fmt.Sprintf("%s@%#x", r.uniq, offset)
+}
+
+func dbgCacheState(uniq string, upToBase int64) {
+	matrix := make([]byte, upToBase/blocksize)
+	for base := int64(0); base < upToBase; base += blocksize {
+		key := fmt.Sprintf("%s@%#x", uniq, base)
+		_, ok := cache.GetTTL(key)
+		if ok {
+			matrix[base/blocksize] = '*'
+		} else {
+			matrix[base/blocksize] = '-'
+		}
+	}
+	os.Stdout.Write(matrix)
+	os.Stdout.WriteString("\n")
 }
 
 func (r *ReaderAt) Close() error {
