@@ -29,7 +29,7 @@ func NewFromReader(uniq string, f func() (io.Reader, error)) *ReaderAt {
 		if closer, ok := r.r.(io.Closer); ok {
 			closer.Close()
 		}
-		r.r = nil
+		r.closeCommon()
 	}
 	return r
 }
@@ -41,9 +41,7 @@ func NewFromReadSeeker(uniq string, from io.ReadSeeker) *ReaderAt {
 		r.r = from
 		return err
 	}
-	r.close = func() {
-		r.r = nil
-	}
+	r.close = r.closeCommon
 	return r
 }
 
@@ -52,6 +50,10 @@ func initCommon(uniq string) *ReaderAt {
 		uniq: uniq,
 	}
 	return r
+}
+
+func (r *ReaderAt) closeCommon() {
+	r.r, r.seek = nil, 0
 }
 
 func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
@@ -80,7 +82,7 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 				cache.Set(key, block, int64(len(block)))
 				doCacheWait = true
 				reterr = berr
-				if r.seek-int64(bn) == base {
+				if r.seek-int64(bn) == base || reterr != nil {
 					break
 				}
 			}
@@ -99,6 +101,9 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 	}
 	if doCacheWait {
 		cache.Wait()
+	}
+	if reterr != nil {
+		r.close()
 	}
 	return n, reterr
 }
