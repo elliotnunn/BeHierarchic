@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"sync"
 )
 
@@ -66,7 +65,7 @@ func (r *FS) Open(name string) (fs.File, error) {
 		reopener := func() (io.Reader, error) {
 			return r.FS.Open(name)
 		}
-		saved = keeptrack{ra: NewFromReader(path.Join(r.Uniq, name), reopener)}
+		saved = keeptrack{ra: NewFromReader(r.Uniq+"//"+name, reopener)}
 	}
 	saved.refcnt++
 	r.reuse[name] = saved
