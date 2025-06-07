@@ -61,8 +61,7 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 	for base := off / blocksize * blocksize; base < off+int64(len(buf)); base += blocksize {
 		var block []byte
 
-		key := fmt.Sprintf("%s@%#x", r.uniq, base)
-		if b, ok := cache.Get(key); ok { // easy path
+		if b, ok := cache.Get(r.cacheKey(base)); ok { // easy path
 			block = b.([]byte)
 		} else {
 			block = make([]byte, blocksize)
@@ -77,9 +76,9 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 			for {
 				block = block[:blocksize]
 				bn, berr := io.ReadFull(r.r, block)
+				cache.Set(r.cacheKey(r.seek), block, int64(len(block)))
 				block = block[:bn]
 				r.seek += int64(bn)
-				cache.Set(key, block, int64(len(block)))
 				doCacheWait = true
 				reterr = berr
 				if r.seek-int64(bn) == base || reterr != nil {
@@ -106,6 +105,10 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 		r.close()
 	}
 	return n, reterr
+}
+
+func (r *ReaderAt) cacheKey(offset int64) string {
+	return fmt.Sprintf("%s@%#x", r.uniq, offset)
 }
 
 func (r *ReaderAt) Close() error {
