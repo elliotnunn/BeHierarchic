@@ -92,7 +92,7 @@ func Dump(r io.Reader) (string, error) {
 	}
 
 	count := binary.BigEndian.Uint16(buf[24:])
-	s := ""
+	var bild strings.Builder
 	for i := range count {
 		kind := binary.BigEndian.Uint32(buf[26+12*i:])
 		offset := binary.BigEndian.Uint32(buf[26+12*i+4:])
@@ -114,9 +114,12 @@ func Dump(r io.Reader) (string, error) {
 				val = formatOtherInfo(data)
 			}
 		}
-		s += name + "=" + val + "\n"
+		if bild.Len() > 0 {
+			bild.WriteByte('\n')
+		}
+		fmt.Fprintf(&bild, "%s=%s", name, val)
 	}
-	return s, nil
+	return bild.String(), nil
 }
 
 func macdate(data []byte) string {
