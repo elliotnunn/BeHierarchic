@@ -39,7 +39,9 @@ func dumpFS(fsys fs.FS) {
 			if err != nil {
 				fmt.Printf("AppleDouble dump error: %v\n", err)
 			} else {
-				fmt.Println(dmp)
+				for _, l := range strings.Split(dmp, "\n") {
+					fmt.Printf("    %s\n", l)
+				}
 			}
 		}
 
