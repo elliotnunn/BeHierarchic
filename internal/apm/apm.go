@@ -92,7 +92,6 @@ func New(disk io.ReaderAt) (*FS, error) {
 			len:    int64(mapEntryStep) * int64(pmPartBlkCnt)})
 		fs.search[name] = &fs.list[len(fs.list)-1]
 	}
-	fmt.Println(fs.list)
 	return fs, nil
 }
 
