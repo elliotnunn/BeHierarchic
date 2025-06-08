@@ -16,6 +16,8 @@ type ReaderAt struct {
 	close func()
 	l     sync.Mutex
 	seek  int64
+	eof   int64
+	err   error
 }
 
 // If the io.Reader is an io.ReadCloser then it will be closed when I am closed
@@ -57,58 +59,77 @@ func (r *ReaderAt) closeCommon() {
 	r.r, r.seek = nil, 0
 }
 
+func (r *ReaderAt) advance(buf []byte) (n int, err error) {
+	key := r.cacheKey(r.seek)
+	n, err = io.ReadFull(r.r, buf)
+	// fmt.Printf("  subread %#x + %#x = %#x, %v\n", r.seek, len(buf), n, err)
+	// fmt.Println("     ", hex.EncodeToString(buf[:n]))
+	r.seek += int64(n)
+	if err == io.ErrUnexpectedEOF {
+		err = io.EOF
+	}
+	if err != nil {
+		r.eof, r.err = r.seek, err
+		r.close()
+	}
+	cache.Set(key, buf[:n], int64(n))
+	cache.Wait()
+	return n, err
+}
+
+// This just seems to be hopelessly buggy: it is saving corrupt data
 func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
-	doCacheWait := false
+	// fmt.Printf("%s: ReadAt %#x+%#x\n", r.uniq, off, len(buf))
 	for base := off / blocksize * blocksize; base < off+int64(len(buf)); base += blocksize {
 		var block []byte
 
 		if b, ok := cache.Get(r.cacheKey(base)); ok { // easy path
+			// fmt.Printf("%s: cache hit at %#x\n", r.uniq, base)
 			block = b.([]byte)
+			if base+int64(len(block)) == r.eof {
+				reterr = r.err
+			}
 		} else {
-			block = make([]byte, blocksize)
+			// fmt.Printf("%s: cache miss at %#x\n  already have: ", r.uniq, base)
+			// dbgCacheState(r.uniq, base)
+
 			r.l.Lock()
 			if r.seek > base || r.r == nil {
 				r.close()
 				if err := r.open(); err != nil {
+					r.l.Unlock()
 					return n, err
 				}
 			}
 
-			for {
-				block = block[:blocksize]
-				bn, berr := io.ReadFull(r.r, block)
-				cache.Set(r.cacheKey(r.seek), block, int64(len(block)))
-				block = block[:bn]
-				r.seek += int64(bn)
-				doCacheWait = true
-				reterr = berr
-				if r.seek-int64(bn) == base || reterr != nil {
-					break
-				}
+			block = make([]byte, blocksize)
+			var blkn int
+			for r.seek != base+blocksize && reterr == nil {
+				blkn, reterr = r.advance(block)
 			}
+			block = block[:blkn]
 			r.l.Unlock()
 		}
+		// fmt.Println(hex.EncodeToString(block))
 
-		blockskip := max(0, off-base)
-		if blockskip > int64(len(block)) {
-			reterr = io.EOF
-			break
+		blockskip := min(len(block), max(0, int(off-base)))
+		// fmt.Printf("copying file+%#x (block %#x + %#x, and blocksize is %#x) to buf+%#x\n", off+int64(n), base, blockskip, len(block), n)
+		src := block[blockskip:]
+		dst := buf[n:]
+		if len(src) > len(dst) {
+			reterr = nil // error is not applicable because it only attaches to the last byte of the block
 		}
-		n += copy(buf[n:], block[blockskip:])
+		n += copy(dst, src)
 		if reterr != nil || n == len(buf) {
 			break
 		}
 	}
-	if doCacheWait {
-		cache.Wait()
-	}
-	if reterr != nil {
-		r.close()
-	}
+	// fmt.Printf("n=%#x, err=%v\n", n, reterr)
 	return n, reterr
 }
 
 func (r *ReaderAt) cacheKey(offset int64) string {
+	// fmt.Printf("cachekey = %s\n", fmt.Sprintf("%s@%#x", r.uniq, offset))
 	return fmt.Sprintf("%s@%#x", r.uniq, offset)
 }
 
