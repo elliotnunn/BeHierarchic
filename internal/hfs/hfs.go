@@ -51,17 +51,8 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 		return nil, errors.New("HFS magic number absent")
 	}
 
-	drNmAlBlks := binary.BigEndian.Uint16(mdb[0x12:])
 	drAlBlkSiz := binary.BigEndian.Uint32(mdb[0x14:])
 	drAlBlSt := binary.BigEndian.Uint16(mdb[0x1c:])
-
-	// Ensure that the last block is readable before getting a sad surprise
-	var testsec [512]byte
-	minlen := int64(drAlBlSt)*512 + int64(drAlBlkSiz)*int64(drNmAlBlks)
-	_, err = disk.ReadAt(testsec[:], minlen-int64(len(testsec)))
-	if err != nil {
-		return nil, fmt.Errorf("volume should be %d bytes but is truncated", minlen)
-	}
 
 	// Open question: can the extents overflow file depend on extents stored in itself?
 	overflow :=
