@@ -44,7 +44,7 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 	var mdb [512]byte
 	_, err := disk.ReadAt(mdb[:], 0x400)
 	if err != nil {
-		return nil, fmt.Errorf("Master Directory Block unreadable: %w", err)
+		return nil, fmt.Errorf("HFS Master Directory Block unreadable: %w", err)
 	}
 
 	if mdb[0] != 'B' || mdb[1] != 'D' {
