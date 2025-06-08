@@ -350,6 +350,15 @@ func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	sa.br = bufio.NewReaderSize(src, 1024)
 	sa.bw = bufio.NewWriterSize(dst, 1024)
 
+	defer func() {
+		sa.bw.Flush()
+		if r := recover(); r != nil {
+			dst.CloseWithError(fmt.Errorf("internal StuffIt panic: %v", r))
+		} else {
+			dst.Close()
+		}
+	}()
+
 	sa.Range = 1 << 25
 	sa.bitbuf = FillBigEndian(InitialBigEndian, sa.br)
 	sa.Code = uint32(sa.bitbuf >> (bits.UintSize - 26))
@@ -430,8 +439,6 @@ func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 		dstsize = sa.writeAndUnrleAndUnrnd(dstsize, unsortedblock, int16(rnd))
 		eob := sa.getSym(&arsenicModels.initial_model)
 		if dstsize == 0 || eob != 0 {
-			sa.bw.Flush()
-			dst.Close()
 			return
 		}
 		sa.doUnmtf(-1)
