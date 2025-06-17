@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
@@ -20,6 +21,7 @@ const Special = "◆"
 type w struct {
 	root    fs.FS
 	burrows map[fs.FS]map[string]map[string]fs.FS // actually I don't care much for the string, but it's important for debuggability
+	lock    sync.Mutex
 }
 
 func Wrapper(fsys fs.FS) fs.FS {
@@ -57,6 +59,8 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 		f = &dirWithExtraChildren{
 			ReadDirFile: rdf,
 			extraChildren: func(realChildren []fs.DirEntry) (fakeChildren []fs.DirEntry) {
+				w.lock.Lock()
+				defer w.lock.Unlock()
 				for _, c := range realChildren {
 					fsyspaths, ok := w.burrows[fsys]
 					if !ok {
@@ -120,6 +124,8 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 	}
 
 	fsys = w.root
+	w.lock.Lock()
+	defer w.lock.Unlock()
 	for _, el := range warps {
 		fsyspaths, ok := w.burrows[fsys]
 		if !ok {
