@@ -10,10 +10,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/elliotnunn/resourceform/internal/apm"
-	"github.com/elliotnunn/resourceform/internal/hfs"
-	"github.com/elliotnunn/resourceform/internal/reader2readerat"
-	"github.com/elliotnunn/resourceform/internal/sit"
+	"github.com/elliotnunn/BeHierarchic/internal/apm"
+	"github.com/elliotnunn/BeHierarchic/internal/hfs"
+	"github.com/elliotnunn/BeHierarchic/internal/reader2readerat"
+	"github.com/elliotnunn/BeHierarchic/internal/sit"
 )
 
 const Special = "◆"

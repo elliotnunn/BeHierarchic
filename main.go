@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/elliotnunn/resourceform/internal/appledouble"
+	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 )
 
 func dumpFS(fsys fs.FS) {

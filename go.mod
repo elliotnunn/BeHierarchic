@@ -1,4 +1,4 @@
-module github.com/elliotnunn/resourceform
+module github.com/elliotnunn/BeHierarchic
 
 go 1.22
 

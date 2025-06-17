@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elliotnunn/resourceform/internal/appledouble"
-	"github.com/elliotnunn/resourceform/internal/multireaderat"
+	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
+	"github.com/elliotnunn/BeHierarchic/internal/multireaderat"
 )
 
 type FS struct {

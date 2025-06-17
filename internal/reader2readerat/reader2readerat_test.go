@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/elliotnunn/resourceform/internal/reader2readerat"
+	"github.com/elliotnunn/BeHierarchic/internal/reader2readerat"
 )
 
 type reader byte
