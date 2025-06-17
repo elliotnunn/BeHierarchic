@@ -15,11 +15,11 @@ import (
 	"github.com/elliotnunn/resourceform/internal/sit"
 )
 
-const Special = "∞"
+const Special = "◆"
 
 type w struct {
 	root    fs.FS
-	burrows map[fs.FS]map[string] /*filename*/ map[string] /*warptype*/ fs.FS // actually I don't care much for the string, but it's important for debuggability
+	burrows map[fs.FS]map[string]map[string]fs.FS // actually I don't care much for the string, but it's important for debuggability
 }
 
 func Wrapper(fsys fs.FS) fs.FS {
