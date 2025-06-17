@@ -2,9 +2,12 @@ package main
 
 import (
 	"archive/zip"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
+	"strings"
 
 	"github.com/elliotnunn/resourceform/internal/apm"
 	"github.com/elliotnunn/resourceform/internal/hfs"
@@ -12,15 +15,17 @@ import (
 	"github.com/elliotnunn/resourceform/internal/sit"
 )
 
+const Special = "∞"
+
 type w struct {
-	burrows map[string]fs.FS
+	root    fs.FS
+	burrows map[fs.FS]map[string] /*filename*/ map[string] /*warptype*/ fs.FS // actually I don't care much for the string, but it's important for debuggability
 }
 
 func Wrapper(fsys fs.FS) fs.FS {
 	return &w{
-		burrows: map[string]fs.FS{
-			".": fsys,
-		},
+		root:    fsys,
+		burrows: map[fs.FS]map[string]map[string]fs.FS{fsys: {}},
 	}
 }
 
@@ -35,138 +40,140 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 		return nil, fs.ErrInvalid
 	}
 
-	pathcut, err := w.resolve(name)
+	fsys, subdir, err := w.resolve(name)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", name, fs.ErrNotExist)
 	}
 
-	left, right := pcut(name, pathcut)
-	o, err := w.burrows[left].Open(right)
+	f, err := fsys.Open(subdir)
 	if err != nil {
-		return nil, err // rare case, because we already successfully statted
+		return nil, err // would be nice to make this more informative
 	}
 
 	// The returned object might be a directory and receive ReadDir calls.
 	// We need these ReadDir calls to know when a child file is a disk image,
 	// and make it look like a directory.
-	if _, mightBeDir := o.(fs.ReadDirFile); mightBeDir {
-		o = fileWithReadDirFilter{
-			ReadDirFile: o.(fs.ReadDirFile),
-			filter: func(e *fs.DirEntry) {
-				if (*e).IsDir() {
-					return
+	if rdf, mightBeDir := f.(fs.ReadDirFile); mightBeDir {
+		f = &dirWithExtraChildren{
+			ReadDirFile: rdf,
+			extraChildren: func(realChildren []fs.DirEntry) (fakeChildren []fs.DirEntry) {
+				for _, c := range realChildren {
+					fsyspaths, ok := w.burrows[fsys]
+					if !ok {
+						panic("every mountpoint should be in the mountpoint map")
+					}
+
+					childName := path.Join(subdir, c.Name())
+					pathwarps, ok := fsyspaths[childName]
+					if !ok {
+						pathwarps, err = exploreFile(fsys, childName, path.Join(name, c.Name()))
+						if err != nil {
+							continue // likely FNF, tidy this return up later
+						}
+						fsyspaths[childName] = pathwarps
+						for _, fsysToAddToMap := range pathwarps {
+							w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
+						}
+					}
+
+					for kind := range pathwarps {
+						fakeChildren = append(fakeChildren, &dirEntry{
+							name: c.Name() + Special + kind,
+						})
+					}
 				}
-				path := path.Join(name, (*e).Name())
-				pathlen := plen(path)
-				pathcut, _ := w.resolve(path)
-				if pathcut < pathlen {
-					return
-				}
-				stat, err := fs.Stat(w, path)
-				if err != nil {
-					return
-				}
-				*e = mountPointEntry{
-					diskImageStat: stat,
-				}
+				return fakeChildren
 			},
 		}
 	}
-
-	// If the returned File object is the root of a disk image,
-	// then its Stat should return info about the file EXCEPT pretend to be a directory
-	if pathcut > 0 && pathcut == plen(name) {
-		parentcut, err := w.resolve(pleft(name, pathcut-1))
-		if err != nil {
-			panic("inconsistency in the burrow list")
-		}
-		left, right := pcut(name, parentcut)
-		stat, err := fs.Stat(w.burrows[left], right)
-		if err != nil {
-			panic("unable to stat a file that certainly exists")
-		}
-
-		o = fileWithFileInfoOverride{
-			ReadDirFile: o.(fs.ReadDirFile),
-			stat: mountPointEntry{
-				diskImageStat: stat,
-			},
-		}
-	}
-	return o, nil
+	return f, nil
 }
 
-// We could use some seriously better caching
-// And are we particularly wedded to the idea of statting the file first?
-// (It's probably a boondoggle, could unfortunately lead to replication)
-func (w *w) resolve(name string) (int, error) {
-	// This is the fairly happy path
-	pathlen := plen(name)
-	var fsys, fsysNew fs.FS
-	var pathcut int
-	var err error
-
-	for pathcut = pathlen; pathcut >= 0; pathcut-- {
-		fsys = w.burrows[pleft(name, pathcut)]
-		if fsys != nil {
+func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
+	type element struct {
+		pathStart, pathEnd int // something like "a/b/c"
+		diveStart, diveEnd int // there is a "Special" between path and subpath
+	}
+	var warps []element
+	i := 0
+	for i < len(name) {
+		pathLen := strings.Index(name[i:], Special)
+		if pathLen == -1 {
 			break
 		}
-	}
-	if fsys == nil {
-		panic("fsys should have been found")
-	}
-
-tryAgainWithANewlyDiscoveredImage:
-	fsysNew, err = try1(fsys, pright(name, pathcut), name)
-	if err == nil {
-		if fsysNew == nil {
-			return pathcut, nil
+		diveLen := strings.IndexByte(name[i+pathLen+len(Special):], '/')
+		if diveLen == -1 { // last path element
+			warps = append(warps, element{
+				i, i + pathLen, // start/end of path part
+				i + pathLen + len(Special), len(name)}) // start/end of warp part
+			i = len(name)
 		} else {
-			w.burrows[name] = fsysNew
-			return pathlen, nil
+			warps = append(warps, element{
+				i, i + pathLen, // start/end of path part
+				i + pathLen + len(Special), i + pathLen + len(Special) + diveLen}) // start/end of warp part
+			i += pathLen + len(Special) + diveLen + 1
 		}
+	}
+	tail := name[i:]
+	if tail == "" {
+		tail = "."
 	}
 
-	// Failed access, so every path component to the right of "pathcut" needs to be examined
-	for newcut := pathcut + 1; newcut < pathlen; newcut++ {
-		fsysNew, err = try1(fsys, pmid(name, pathcut, newcut), name)
-		if err != nil { // this is a true FNF situation
-			return -1, err
-		} else if fsysNew != nil {
-			fsys = fsysNew
-			w.burrows[pleft(name, newcut)] = fsysNew
-			pathcut = newcut
-			goto tryAgainWithANewlyDiscoveredImage
+	fsys = w.root
+	for _, el := range warps {
+		fsyspaths, ok := w.burrows[fsys]
+		if !ok {
+			panic("every mountpoint should be in the mountpoint map")
+		}
+
+		pathwarps, ok := fsyspaths[name[el.pathStart:el.pathEnd]]
+		if !ok {
+			pathwarps, err = exploreFile(fsys,
+				name[el.pathStart:el.pathEnd], // for fsys.Open()
+				name[:el.pathEnd])             // unique cache key for reader2readerat
+			if err != nil {
+				return nil, "", err // likely FNF, tidy this return up later
+			}
+			fsyspaths[name[el.pathStart:el.pathEnd]] = pathwarps
+			for _, fsysToAddToMap := range pathwarps {
+				w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
+			}
+		}
+
+		fsys, ok = pathwarps[name[el.diveStart:el.diveEnd]]
+		if !ok {
+			return nil, "", fs.ErrNotExist
 		}
 	}
-	return -1, fs.ErrNotExist
+	return fsys, tail, nil
 }
 
-func try1(fsys fs.FS, name string, uniq string) (fs.FS, error) {
-	s, err := fs.Stat(fsys, name)
-	if err != nil {
-		return nil, err
-	}
-
-	if s.IsDir() {
-		return nil, nil
-	}
-
-	// Regular-file... could be a disk image?
+func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error) {
+	// Open data fork, could it possibly be an archive?
 	o, err := fsys.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	subdir, _ := couldItBe(o.(io.ReaderAt))
+	s, err := o.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if s.IsDir() {
+		return nil, errors.New("not a directory")
+	}
+
+	subdir, kind := exploreDataFork(o.(io.ReaderAt))
 	if subdir == nil { // nope, it's just a file
 		o.Close()
 		return nil, nil
 	}
 	subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
-	return subdir, nil
+
+	// TODO: resource forks
+	return map[string]fs.FS{kind: subdir}, nil
 }
 
-func couldItBe(file io.ReaderAt) (fs.FS, string) {
+func exploreDataFork(file io.ReaderAt) (fs.FS, string) {
 	var magic [16]byte
 	if n, _ := file.ReadAt(magic[:], 0); n < 16 {
 		return nil, ""
@@ -175,17 +182,17 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 	case string(magic[:2]) == "ER": // Apple Partition Map
 		fsys, err := apm.New(file)
 		if err == nil {
-			return fsys, "Apple Partition Map"
+			return fsys, "partitions"
 		}
 	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
 		fsys, err := zip.NewReader(file, size(file))
 		if err == nil {
-			return fsys, "ZIP archive"
+			return fsys, "files"
 		}
 	case string(magic[10:14]) == "rLau" || string(magic[:16]) == "StuffIt (c)1997-":
 		fsys, err := sit.New(file)
 		if err == nil {
-			return fsys, "StuffIt archive"
+			return fsys, "files"
 		}
 	}
 
@@ -195,7 +202,7 @@ func couldItBe(file io.ReaderAt) (fs.FS, string) {
 	if string(magic[:2]) == "BD" {
 		view, err := hfs.New(file)
 		if err == nil {
-			return view, "HFS"
+			return view, "files"
 		}
 	}
 	return nil, ""
