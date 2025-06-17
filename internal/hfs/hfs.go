@@ -60,7 +60,6 @@ func New(disk io.ReaderAt) (retfs *FS, reterr error) {
 	// Don't resort to an actual read, because the seek might be expensive.
 	minSize := int64(drAlBlSt)*512 + int64(drAlBlkSiz)*int64(drNmAlBlks)
 	if actualSize, ok := tryGetSizeCheaply(disk); ok {
-		fmt.Println("actualsize =", actualSize)
 		if actualSize < minSize {
 			return nil, fmt.Errorf("likely Disk Copy compressed HFS image: expected %db but got %db", minSize, actualSize)
 		}
