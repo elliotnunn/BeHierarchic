@@ -42,7 +42,7 @@ func (*typeDir) Close() error {
 }
 
 func (s *typeDir) Name() string { // FileInfo + DirEntry
-	return string(s.t[:])
+	return stringFromType(s.t)
 }
 
 func (*typeDir) IsDir() bool { // FileInfo + DirEntry

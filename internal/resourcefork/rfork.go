@@ -2,6 +2,7 @@ package resourcefork
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"io/fs"
 	"strconv"
@@ -24,16 +25,17 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	t, id, n := readPath(name)
+	unitype, id, n := readPath(name)
 	if n < 0 {
 		return nil, fs.ErrNotExist
 	} else if n == 0 {
 		return &rootDir{fsys: fsys}, nil
 	}
+	fmt.Printf("%q %q %v %v\n", name, unitype, id, n)
 
 	fsys.once.Do(fsys.parse)
 
-	nOfType, offsetOfType := fsys.typeLookup(t)
+	t, nOfType, offsetOfType := fsys.typeLookup(unitype)
 	if nOfType == 0 {
 		return nil, fs.ErrNotExist
 	}
@@ -97,7 +99,7 @@ func (fsys *FS) listResources(list []fs.DirEntry, offset uint32) {
 
 // Read the resource map, which is hopefully cached.
 // TODO: try a binary search first
-func (fsys *FS) typeLookup(t [4]byte) (nOfType, offsetOfType uint32) {
+func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uint32) {
 	fsys.once.Do(fsys.parse)
 	tl := make([]byte, 8*fsys.nType)
 	_, err := fsys.appleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
@@ -106,7 +108,8 @@ func (fsys *FS) typeLookup(t [4]byte) (nOfType, offsetOfType uint32) {
 	}
 
 	for ; len(tl) > 0; tl = tl[8:] {
-		if string(t[:]) == string(tl[:4]) {
+		t = *(*[4]byte)(tl[:4])
+		if stringFromType(t) == unitype {
 			nOfType = uint32(binary.BigEndian.Uint16(tl[4:]) + 1)
 			offsetOfType = uint32(binary.BigEndian.Uint16(tl[6:])) + fsys.resTypeList
 			return
@@ -190,7 +193,7 @@ func (fsys *FS) parse() {
 	fsys.nType = typeCount
 }
 
-func readPath(p string) (t [4]byte, id int16, depth int) {
+func readPath(p string) (t string, id int16, depth int) {
 	const bad = -1
 	if p == "." {
 		return
@@ -201,11 +204,7 @@ func readPath(p string) (t [4]byte, id int16, depth int) {
 		depth = bad
 		return
 	}
-	t, ok := osType(split[0])
-	if !ok {
-		depth = bad
-		return
-	}
+	t = split[0]
 
 	if depth < 2 {
 		return
