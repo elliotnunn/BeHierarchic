@@ -59,40 +59,40 @@ func (r *ReaderAt) closeCommon() {
 	r.r, r.seek = nil, 0
 }
 
-func (r *ReaderAt) advance(buf []byte) (n int, err error) {
+func (r *ReaderAt) getNextBlock() ([]byte, error) {
+	buf := make([]byte, blocksize)
 	key := r.cacheKey(r.seek)
-	n, err = io.ReadFull(r.r, buf)
-	// fmt.Printf("  subread %#x + %#x = %#x, %v\n", r.seek, len(buf), n, err)
-	// fmt.Println("     ", hex.EncodeToString(buf[:n]))
+	n, err := io.ReadFull(r.r, buf)
 	r.seek += int64(n)
+
+	if n > blocksize/2 {
+		buf = buf[:n]
+	} else { // small tail, make a smaller allocation for it
+		buf = append(make([]byte, 0, n), buf[:n]...)
+	}
+
 	if err == io.ErrUnexpectedEOF {
 		err = io.EOF
 	}
-	if err != nil {
+	if err != nil { // the underlying nonseekable reader is exhausted
 		r.eof, r.err = r.seek, err
 		r.close()
 	}
-	cache.Set(key, buf[:n], int64(n))
-	cache.Wait()
-	return n, err
+	cache.Set(key, buf, int64(n))
+	return buf, err
 }
 
-// This just seems to be hopelessly buggy: it is saving corrupt data
 func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
-	// fmt.Printf("%s: ReadAt %#x+%#x\n", r.uniq, off, len(buf))
 	for base := off / blocksize * blocksize; base < off+int64(len(buf)); base += blocksize {
 		var block []byte
 
-		if b, ok := cache.Get(r.cacheKey(base)); ok { // easy path
-			// fmt.Printf("%s: cache hit at %#x\n", r.uniq, base)
+		k := r.cacheKey(base)
+		if b, ok := cache.Get(k); ok { // easy path
 			block = b.([]byte)
 			if base+int64(len(block)) == r.eof {
 				reterr = r.err
 			}
 		} else {
-			// fmt.Printf("%s: cache miss at %#x\n  already have: ", r.uniq, base)
-			// dbgCacheState(r.uniq, base)
-
 			r.l.Lock()
 			if r.seek > base || r.r == nil {
 				r.close()
@@ -102,18 +102,14 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 				}
 			}
 
-			block = make([]byte, blocksize)
-			var blkn int
 			for r.seek != base+blocksize && reterr == nil {
-				blkn, reterr = r.advance(block)
+				block, reterr = r.getNextBlock()
 			}
-			block = block[:blkn]
+			cache.Wait()
 			r.l.Unlock()
 		}
-		// fmt.Println(hex.EncodeToString(block))
 
 		blockskip := min(len(block), max(0, int(off-base)))
-		// fmt.Printf("copying file+%#x (block %#x + %#x, and blocksize is %#x) to buf+%#x\n", off+int64(n), base, blockskip, len(block), n)
 		src := block[blockskip:]
 		dst := buf[n:]
 		if len(src) > len(dst) {
@@ -124,12 +120,10 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 			break
 		}
 	}
-	// fmt.Printf("n=%#x, err=%v\n", n, reterr)
 	return n, reterr
 }
 
 func (r *ReaderAt) cacheKey(offset int64) string {
-	// fmt.Printf("cachekey = %s\n", fmt.Sprintf("%s@%#x", r.uniq, offset))
 	return fmt.Sprintf("%s@%#x", r.uniq, offset)
 }
 
