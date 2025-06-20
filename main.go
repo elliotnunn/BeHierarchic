@@ -3,12 +3,15 @@ package main
 import (
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
+	"github.com/elliotnunn/BeHierarchic/internal/webdavadapter"
+	"golang.org/x/net/webdav"
 )
 
 func dumpFS(fsys fs.FS) {
@@ -54,6 +57,19 @@ func main() {
 	concrete := os.DirFS(base)
 	abstract := Wrapper(concrete)
 
-	go dumpFS(abstract)
-	http.ListenAndServe(":1993", http.FileServerFS(abstract))
+	// go dumpFS(abstract)
+
+	_ = abstract
+
+	handler := &webdav.Handler{
+		FileSystem: &webdavadapter.FileSystem{Inner: abstract},
+		// FileSystem: webdav.Dir("/Users/elliotnunn/Downloads"),
+		LockSystem: webdav.NewMemLS(),
+		Logger: func(r *http.Request, err error) {
+			log.Printf("HTTP %s %q -> %v", r.Method, r.URL.String(), err)
+		},
+	}
+
+	err := http.ListenAndServe(":1993", handler)
+	panic(err)
 }
