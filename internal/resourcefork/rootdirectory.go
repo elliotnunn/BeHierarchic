@@ -1,0 +1,72 @@
+package resourcefork
+
+import (
+	"io"
+	"io/fs"
+	"time"
+)
+
+type rootDir struct {
+	fsys       *FS
+	listOffset int
+}
+
+func (*rootDir) Read([]byte) (n int, err error) {
+	return 0, io.EOF
+}
+
+func (d *rootDir) ReadDir(count int) ([]fs.DirEntry, error) {
+	d.fsys.once.Do(d.fsys.parse)
+	n := int(d.fsys.nType) - d.listOffset
+	if n == 0 && count > 0 {
+		return nil, io.EOF
+	}
+	if count > 0 && n > count {
+		n = count
+	}
+
+	list := make([]fs.DirEntry, n)
+	d.fsys.listTypes(list, d.fsys.resTypeList+2+uint32(8*d.listOffset))
+	d.listOffset += n
+	return list, nil
+}
+
+func (d *rootDir) Stat() (fs.FileInfo, error) {
+	return d, nil
+}
+
+func (*rootDir) Close() error {
+	return nil
+}
+
+func (s *rootDir) Name() string { // FileInfo + DirEntry
+	return "."
+}
+
+func (*rootDir) IsDir() bool { // FileInfo + DirEntry
+	return true
+}
+
+func (*rootDir) Type() fs.FileMode { // DirEntry
+	return fs.ModeDir
+}
+
+func (s *rootDir) Info() (fs.FileInfo, error) { // DirEntry
+	return s, nil
+}
+
+func (*rootDir) Size() int64 { // FileInfo
+	return 0
+}
+
+func (*rootDir) Mode() fs.FileMode { // FileInfo
+	return 0o777
+}
+
+func (d *rootDir) ModTime() time.Time { // FileInfo
+	return d.fsys.mtime()
+}
+
+func (s *rootDir) Sys() any { // FileInfo
+	return nil
+}
