@@ -65,7 +65,7 @@ func (*typeDir) Mode() fs.FileMode { // FileInfo
 }
 
 func (d *typeDir) ModTime() time.Time { // FileInfo
-	return d.fsys.mtime()
+	return d.fsys.ModTime
 }
 
 func (s *typeDir) Sys() any { // FileInfo

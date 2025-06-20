@@ -79,7 +79,7 @@ func (f *resourceFile) Mode() fs.FileMode { // FileInfo
 }
 
 func (f *resourceFile) ModTime() time.Time { // FileInfo
-	return f.fsys.mtime()
+	return f.fsys.ModTime
 }
 
 func (f *resourceFile) Sys() any { // FileInfo

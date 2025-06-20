@@ -238,7 +238,7 @@ func exploreResourceFork(file fs.File) (fs.FS, string) {
 		return nil, ""
 	}
 
-	forkFS := &resourcefork.FS{AppleDouble: file.(io.ReaderAt)}
+	forkFS := &resourcefork.FS{AppleDouble: file.(io.ReaderAt), ModTime: s.ModTime()}
 	return forkFS, "resources"
 }
 

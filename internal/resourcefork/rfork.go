@@ -12,6 +12,7 @@ import (
 
 type FS struct {
 	AppleDouble io.ReaderAt
+	ModTime     time.Time
 	once        sync.Once
 	resData     uint32
 	resTypeList uint32
@@ -133,10 +134,6 @@ func (fsys *FS) resourceLookup(id int16, nOfType uint16, offsetOfType uint32) (d
 		}
 	}
 	return // failed the resource lookup
-}
-
-func (fsys *FS) mtime() time.Time {
-	return time.Unix(0, 0) // TODO some real times
 }
 
 // Allows the resource fork to be AppleDouble-wrapped
