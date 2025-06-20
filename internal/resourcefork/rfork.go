@@ -62,8 +62,8 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 func (fsys *FS) listTypes(offset uint32, n uint16) ([]fs.DirEntry, error) {
 	fsys.once.Do(fsys.parse)
 	tl := make([]byte, 8*int(n))
-	_, err := fsys.AppleDouble.ReadAt(tl, int64(offset))
-	if err != nil {
+	nbyte, err := fsys.AppleDouble.ReadAt(tl, int64(offset))
+	if nbyte != len(tl) { // don't check err, an io.EOF is acceptable
 		return nil, err
 	}
 
@@ -82,8 +82,8 @@ func (fsys *FS) listTypes(offset uint32, n uint16) ([]fs.DirEntry, error) {
 func (fsys *FS) listResources(offset uint32, n uint16) ([]fs.DirEntry, error) {
 	fsys.once.Do(fsys.parse)
 	rl := make([]byte, 12*int(n))
-	_, err := fsys.AppleDouble.ReadAt(rl, int64(offset))
-	if err != nil {
+	nbyte, err := fsys.AppleDouble.ReadAt(rl, int64(offset))
+	if nbyte != len(rl) { // don't check err, an io.EOF is acceptable
 		return nil, err
 	}
 

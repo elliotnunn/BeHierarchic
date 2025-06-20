@@ -25,7 +25,7 @@ func (d *rootDir) ReadDir(count int) ([]fs.DirEntry, error) {
 		n = uint16(count)
 	}
 
-	list, err := d.fsys.listTypes(d.fsys.resTypeList+2+uint32(8*d.listOffset), n)
+	list, err := d.fsys.listTypes(d.fsys.resTypeList+2+uint32(d.listOffset)*8, n)
 	d.listOffset += uint16(len(list))
 	return list, err
 }
