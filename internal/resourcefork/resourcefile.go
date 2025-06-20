@@ -22,7 +22,7 @@ func (f *resourceFile) initReader() {
 		var s [4]byte
 		_, err := f.fsys.AppleDouble.ReadAt(s[:], int64(f.offset))
 		if err != nil {
-			panic("cannot tolerate this")
+			panic("unreadable resource")
 		}
 		f.reader = io.NewSectionReader(f.fsys.AppleDouble,
 			int64(f.offset)+4,
