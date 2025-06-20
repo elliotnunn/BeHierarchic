@@ -59,7 +59,7 @@ func (*rootDir) Size() int64 { // FileInfo
 }
 
 func (*rootDir) Mode() fs.FileMode { // FileInfo
-	return 0o777
+	return fs.ModeDir | 0o777
 }
 
 func (d *rootDir) ModTime() time.Time { // FileInfo
