@@ -1,18 +1,13 @@
 package resourcefork
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 )
 
 type FS struct {
@@ -182,13 +177,7 @@ func (fsys *FS) parse() {
 	}
 	dataOffset := binary.BigEndian.Uint32(rfHeader[0:])
 	if dataOffset != 256 {
-		dump := make([]byte, 17*1024*1024)
-		n, _ := fsys.AppleDouble.ReadAt(dump, 0)
-		dump = dump[:n]
-		os.WriteFile("/tmp/notrf", dump, 0o755)
-		s, _ := appledouble.Dump(bytes.NewReader(dump))
-		fmt.Println(s)
-		panic("probably a corrupt file! logged at /tmp/notrf")
+		return // probably a corrupt file
 	}
 	dataOffset += forkOffset
 	mapOffset := binary.BigEndian.Uint32(rfHeader[4:]) + forkOffset
