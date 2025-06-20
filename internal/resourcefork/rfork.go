@@ -223,11 +223,3 @@ func readPath(p string) (t string, id int16, depth int) {
 	id = int16(idInt)
 	return
 }
-
-// Temporary, obviously needs a fix
-func osType(s string) ([4]byte, bool) {
-	s += "    "
-	var ret [4]byte
-	copy(ret[:], s)
-	return ret, true
-}
