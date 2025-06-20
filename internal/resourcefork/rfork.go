@@ -1,18 +1,22 @@
 package resourcefork
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 )
 
 type FS struct {
-	appleDouble io.ReaderAt
+	AppleDouble io.ReaderAt
 	once        sync.Once
 	resData     uint32
 	resTypeList uint32
@@ -31,7 +35,6 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	} else if n == 0 {
 		return &rootDir{fsys: fsys}, nil
 	}
-	fmt.Printf("%q %q %v %v\n", name, unitype, id, n)
 
 	fsys.once.Do(fsys.parse)
 
@@ -63,7 +66,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 func (fsys *FS) listTypes(list []fs.DirEntry, offset uint32) {
 	fsys.once.Do(fsys.parse)
 	tl := make([]byte, 8*len(list))
-	_, err := fsys.appleDouble.ReadAt(tl, int64(offset))
+	_, err := fsys.AppleDouble.ReadAt(tl, int64(offset))
 	if err != nil {
 		return
 	}
@@ -79,22 +82,23 @@ func (fsys *FS) listTypes(list []fs.DirEntry, offset uint32) {
 	}
 }
 
-func (fsys *FS) listResources(list []fs.DirEntry, offset uint32) {
+func (fsys *FS) listResources(offset uint32, n uint32) []fs.DirEntry {
 	fsys.once.Do(fsys.parse)
-	rl := make([]byte, 12*len(list))
-	_, err := fsys.appleDouble.ReadAt(rl, int64(offset))
+	rl := make([]byte, 12*n)
+	_, err := fsys.AppleDouble.ReadAt(rl, int64(offset))
 	if err != nil {
-		return
+		return nil
 	}
 
+	ret := make([]fs.DirEntry, 0, n)
 	for ; len(rl) > 0; rl = rl[12:] {
-		list[0] = &resourceFile{
+		ret = append(ret, &resourceFile{
 			fsys:   fsys,
 			id:     int16(binary.BigEndian.Uint16(rl[0:])),
 			offset: binary.BigEndian.Uint32(rl[4:])&0xffffff + fsys.resData,
-		}
-		list = list[1:]
+		})
 	}
+	return ret
 }
 
 // Read the resource map, which is hopefully cached.
@@ -102,7 +106,7 @@ func (fsys *FS) listResources(list []fs.DirEntry, offset uint32) {
 func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uint32) {
 	fsys.once.Do(fsys.parse)
 	tl := make([]byte, 8*fsys.nType)
-	_, err := fsys.appleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
+	_, err := fsys.AppleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
 	if err != nil {
 		return
 	}
@@ -121,7 +125,7 @@ func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uin
 func (fsys *FS) resourceLookup(id int16, nOfType, offsetOfType uint32) (dataOffset uint32) {
 	fsys.once.Do(fsys.parse)
 	rl := make([]byte, 12*nOfType)
-	_, err := fsys.appleDouble.ReadAt(rl, int64(offsetOfType))
+	_, err := fsys.AppleDouble.ReadAt(rl, int64(offsetOfType))
 	if err != nil {
 		return
 	}
@@ -143,45 +147,60 @@ func (fsys *FS) mtime() time.Time {
 func (fsys *FS) parse() {
 	var forkOffset uint32
 	var adHeader [26]byte
-	_, err := fsys.appleDouble.ReadAt(adHeader[:], 0)
+	_, err := fsys.AppleDouble.ReadAt(adHeader[:], 0)
 	if err != nil {
 		return
 	} else if string(adHeader[:4]) == "\x00\x00\x01\x00" {
 		forkOffset = 0 // bare resource fork
-	} else if string(adHeader[:3]) != "\x00\x05\x16" {
+	} else if string(adHeader[:3]) == "\x00\x05\x16" {
 		// AppleDouble
 		nrec := binary.BigEndian.Uint16(adHeader[24:])
 		recList := make([]byte, 12*int(nrec))
-		_, err = fsys.appleDouble.ReadAt(recList, 26)
-		for len(recList) > 0 {
-			if binary.BigEndian.Uint32(recList) == 2 {
-				break
+		_, err = fsys.AppleDouble.ReadAt(recList, 26)
+		if err != nil {
+			return
+		}
+		for ; len(recList) > 0; recList = recList[12:] {
+			if binary.BigEndian.Uint32(recList) == 2 && binary.BigEndian.Uint32(recList[8:]) >= 286 {
+				forkOffset = binary.BigEndian.Uint32(recList[4:])
+				break // found resource fork record
 			}
-			recList = recList[12:]
+
 		}
 		if len(recList) == 0 { // no resourcefork record
 			return
 		}
-		forkOffset = binary.BigEndian.Uint32(recList[4:])
+	} else {
+		return // not a valid resource fork, so just be empty
 	}
 
 	var rfHeader [8]byte
-	_, err = fsys.appleDouble.ReadAt(rfHeader[:], int64(forkOffset))
+	_, err = fsys.AppleDouble.ReadAt(rfHeader[:], int64(forkOffset))
 	if err != nil {
 		return
 	}
-	dataOffset := binary.BigEndian.Uint32(rfHeader[0:]) + forkOffset
+	dataOffset := binary.BigEndian.Uint32(rfHeader[0:])
+	if dataOffset != 256 {
+		dump := make([]byte, 17*1024*1024)
+		n, _ := fsys.AppleDouble.ReadAt(dump, 0)
+		dump = dump[:n]
+		os.WriteFile("/tmp/notrf", dump, 0o755)
+		s, _ := appledouble.Dump(bytes.NewReader(dump))
+		fmt.Println(s)
+		panic("probably a corrupt file! logged at /tmp/notrf")
+	}
+	dataOffset += forkOffset
 	mapOffset := binary.BigEndian.Uint32(rfHeader[4:]) + forkOffset
 
 	var mapHeaderField [2]byte
-	_, err = fsys.appleDouble.ReadAt(mapHeaderField[:], int64(mapOffset+24))
+	_, err = fsys.AppleDouble.ReadAt(mapHeaderField[:], int64(mapOffset+24))
 	if err != nil {
 		return
 	}
 	typeListOffset := uint32(binary.BigEndian.Uint16(mapHeaderField[0:])) + mapOffset
 
 	var tlHeaderField [2]byte
-	_, err = fsys.appleDouble.ReadAt(tlHeaderField[:], int64(typeListOffset))
+	_, err = fsys.AppleDouble.ReadAt(tlHeaderField[:], int64(typeListOffset))
 	if err != nil {
 		return
 	}

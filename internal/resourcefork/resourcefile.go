@@ -20,11 +20,11 @@ type resourceFile struct {
 func (f *resourceFile) initReader() {
 	f.once.Do(func() {
 		var s [4]byte
-		_, err := f.fsys.appleDouble.ReadAt(s[:], int64(f.offset))
+		_, err := f.fsys.AppleDouble.ReadAt(s[:], int64(f.offset))
 		if err != nil {
 			panic("cannot tolerate this")
 		}
-		f.reader = io.NewSectionReader(f.fsys.appleDouble,
+		f.reader = io.NewSectionReader(f.fsys.AppleDouble,
 			int64(f.offset)+4,
 			int64(binary.BigEndian.Uint32(s[:])))
 	})

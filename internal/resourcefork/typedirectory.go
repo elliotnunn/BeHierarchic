@@ -27,9 +27,8 @@ func (d *typeDir) ReadDir(count int) ([]fs.DirEntry, error) {
 		n = count
 	}
 
-	list := make([]fs.DirEntry, n)
-	d.fsys.listResources(list, d.typeOffset+uint32(12*d.listOffset))
-	d.listOffset += n
+	list := d.fsys.listResources(d.typeOffset+uint32(12*d.listOffset), uint32(n))
+	d.listOffset += len(list)
 	return list, nil
 }
 

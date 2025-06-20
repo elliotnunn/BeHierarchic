@@ -13,6 +13,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/reader2readerat"
+	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 )
 
@@ -168,15 +169,32 @@ func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error)
 		return nil, errors.New("not a directory")
 	}
 
-	subdir, kind := exploreDataFork(o.(io.ReaderAt))
-	if subdir == nil { // nope, it's just a file
-		o.Close()
-		return nil, nil
-	}
-	subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
+	ret := make(map[string]fs.FS)
 
-	// TODO: resource forks
-	return map[string]fs.FS{kind: subdir}, nil
+	subdir, kind := exploreDataFork(o.(io.ReaderAt))
+	if subdir == nil {
+		o.Close()
+	} else {
+		subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
+		ret[kind] = subdir
+	}
+
+	appledouble := path.Join(path.Dir(name), "._"+path.Base(name))
+	rf, err := fsys.Open(appledouble)
+	if err == nil {
+		subdir, kind := exploreResourceFork(rf)
+		if subdir == nil {
+			rf.Close()
+		} else {
+			subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
+			ret[kind] = subdir
+		}
+	}
+
+	if len(ret) == 0 {
+		ret = nil
+	}
+	return ret, nil
 }
 
 func exploreDataFork(file io.ReaderAt) (fs.FS, string) {
@@ -212,6 +230,16 @@ func exploreDataFork(file io.ReaderAt) (fs.FS, string) {
 		}
 	}
 	return nil, ""
+}
+
+func exploreResourceFork(file fs.File) (fs.FS, string) {
+	s, err := file.Stat()
+	if err != nil || s.Size() < 324 { // smallest possible AppleDoubled resource fork
+		return nil, ""
+	}
+
+	forkFS := &resourcefork.FS{AppleDouble: file.(io.ReaderAt)}
+	return forkFS, "resources"
 }
 
 func size(f io.ReaderAt) int64 {
