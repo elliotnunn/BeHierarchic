@@ -63,31 +63,32 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	}, nil
 }
 
-func (fsys *FS) listTypes(list []fs.DirEntry, offset uint32) {
+func (fsys *FS) listTypes(offset uint32, n uint16) ([]fs.DirEntry, error) {
 	fsys.once.Do(fsys.parse)
-	tl := make([]byte, 8*len(list))
+	tl := make([]byte, 8*int(n))
 	_, err := fsys.AppleDouble.ReadAt(tl, int64(offset))
 	if err != nil {
-		return
+		return nil, err
 	}
 
+	ret := make([]fs.DirEntry, 0, n)
 	for ; len(tl) > 0; tl = tl[8:] {
-		list[0] = &typeDir{
+		ret = append(ret, &typeDir{
 			fsys:       fsys,
 			t:          *(*[4]byte)(tl[:4]),
 			nOfType:    binary.BigEndian.Uint16(tl[4:]) + 1,
 			typeOffset: uint32(binary.BigEndian.Uint16(tl[6:])) + fsys.resTypeList,
-		}
-		list = list[1:]
+		})
 	}
+	return ret, nil
 }
 
-func (fsys *FS) listResources(offset uint32, n uint16) []fs.DirEntry {
+func (fsys *FS) listResources(offset uint32, n uint16) ([]fs.DirEntry, error) {
 	fsys.once.Do(fsys.parse)
 	rl := make([]byte, 12*int(n))
 	_, err := fsys.AppleDouble.ReadAt(rl, int64(offset))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	ret := make([]fs.DirEntry, 0, n)
@@ -98,7 +99,7 @@ func (fsys *FS) listResources(offset uint32, n uint16) []fs.DirEntry {
 			offset: binary.BigEndian.Uint32(rl[4:])&0xffffff + fsys.resData,
 		})
 	}
-	return ret
+	return ret, nil
 }
 
 // Read the resource map, which is hopefully cached.

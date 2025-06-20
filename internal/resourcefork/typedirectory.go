@@ -27,9 +27,9 @@ func (d *typeDir) ReadDir(count int) ([]fs.DirEntry, error) {
 		n = uint16(count)
 	}
 
-	list := d.fsys.listResources(d.typeOffset+uint32(12*d.listOffset), n)
+	list, err := d.fsys.listResources(d.typeOffset+uint32(12*d.listOffset), n)
 	d.listOffset += uint16(len(list))
-	return list, nil
+	return list, err
 }
 
 func (d *typeDir) Stat() (fs.FileInfo, error) {
