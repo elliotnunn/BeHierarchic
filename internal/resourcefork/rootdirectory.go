@@ -8,7 +8,7 @@ import (
 
 type rootDir struct {
 	fsys       *FS
-	listOffset int
+	listOffset uint16
 }
 
 func (*rootDir) Read([]byte) (n int, err error) {
@@ -17,12 +17,12 @@ func (*rootDir) Read([]byte) (n int, err error) {
 
 func (d *rootDir) ReadDir(count int) ([]fs.DirEntry, error) {
 	d.fsys.once.Do(d.fsys.parse)
-	n := int(d.fsys.nType) - d.listOffset
+	n := d.fsys.nType - d.listOffset
 	if n == 0 && count > 0 {
 		return nil, io.EOF
 	}
-	if count > 0 && n > count {
-		n = count
+	if count > 0 && int(n) > count {
+		n = uint16(count)
 	}
 
 	list := make([]fs.DirEntry, n)

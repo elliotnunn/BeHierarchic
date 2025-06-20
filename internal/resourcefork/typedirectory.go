@@ -9,9 +9,9 @@ import (
 type typeDir struct {
 	fsys       *FS
 	t          [4]byte
-	nOfType    uint32
+	nOfType    uint16
+	listOffset uint16
 	typeOffset uint32
-	listOffset int
 }
 
 func (*typeDir) Read([]byte) (n int, err error) {
@@ -19,16 +19,16 @@ func (*typeDir) Read([]byte) (n int, err error) {
 }
 
 func (d *typeDir) ReadDir(count int) ([]fs.DirEntry, error) {
-	n := int(d.nOfType) - d.listOffset
+	n := d.nOfType - d.listOffset
 	if n == 0 && count > 0 {
 		return nil, io.EOF
 	}
-	if count > 0 && n > count {
-		n = count
+	if count > 0 && int(n) > count {
+		n = uint16(count)
 	}
 
-	list := d.fsys.listResources(d.typeOffset+uint32(12*d.listOffset), uint32(n))
-	d.listOffset += len(list)
+	list := d.fsys.listResources(d.typeOffset+uint32(12*d.listOffset), n)
+	d.listOffset += uint16(len(list))
 	return list, nil
 }
 

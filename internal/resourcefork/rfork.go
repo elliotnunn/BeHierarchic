@@ -20,7 +20,7 @@ type FS struct {
 	once        sync.Once
 	resData     uint32
 	resTypeList uint32
-	nType       uint32
+	nType       uint16
 }
 
 // pattern is "TYPE/ID"
@@ -75,16 +75,16 @@ func (fsys *FS) listTypes(list []fs.DirEntry, offset uint32) {
 		list[0] = &typeDir{
 			fsys:       fsys,
 			t:          *(*[4]byte)(tl[:4]),
-			nOfType:    uint32(binary.BigEndian.Uint16(tl[4:]) + 1),
+			nOfType:    binary.BigEndian.Uint16(tl[4:]) + 1,
 			typeOffset: uint32(binary.BigEndian.Uint16(tl[6:])) + fsys.resTypeList,
 		}
 		list = list[1:]
 	}
 }
 
-func (fsys *FS) listResources(offset uint32, n uint32) []fs.DirEntry {
+func (fsys *FS) listResources(offset uint32, n uint16) []fs.DirEntry {
 	fsys.once.Do(fsys.parse)
-	rl := make([]byte, 12*n)
+	rl := make([]byte, 12*int(n))
 	_, err := fsys.AppleDouble.ReadAt(rl, int64(offset))
 	if err != nil {
 		return nil
@@ -103,9 +103,9 @@ func (fsys *FS) listResources(offset uint32, n uint32) []fs.DirEntry {
 
 // Read the resource map, which is hopefully cached.
 // TODO: try a binary search first
-func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uint32) {
+func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType uint16, offsetOfType uint32) {
 	fsys.once.Do(fsys.parse)
-	tl := make([]byte, 8*fsys.nType)
+	tl := make([]byte, 8*int(fsys.nType))
 	_, err := fsys.AppleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
 	if err != nil {
 		return
@@ -114,7 +114,7 @@ func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uin
 	for ; len(tl) > 0; tl = tl[8:] {
 		t = *(*[4]byte)(tl[:4])
 		if stringFromType(t) == unitype {
-			nOfType = uint32(binary.BigEndian.Uint16(tl[4:]) + 1)
+			nOfType = binary.BigEndian.Uint16(tl[4:]) + 1
 			offsetOfType = uint32(binary.BigEndian.Uint16(tl[6:])) + fsys.resTypeList
 			return
 		}
@@ -122,9 +122,9 @@ func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType, offsetOfType uin
 	return // failed the type lookup
 }
 
-func (fsys *FS) resourceLookup(id int16, nOfType, offsetOfType uint32) (dataOffset uint32) {
+func (fsys *FS) resourceLookup(id int16, nOfType uint16, offsetOfType uint32) (dataOffset uint32) {
 	fsys.once.Do(fsys.parse)
-	rl := make([]byte, 12*nOfType)
+	rl := make([]byte, 12*int(nOfType))
 	_, err := fsys.AppleDouble.ReadAt(rl, int64(offsetOfType))
 	if err != nil {
 		return
@@ -204,7 +204,7 @@ func (fsys *FS) parse() {
 	if err != nil {
 		return
 	}
-	typeCount := uint32(binary.BigEndian.Uint16(tlHeaderField[0:]) + 1)
+	typeCount := binary.BigEndian.Uint16(tlHeaderField[0:]) + 1
 
 	// Setting these fields nonzero denotes success
 	fsys.resData = dataOffset
