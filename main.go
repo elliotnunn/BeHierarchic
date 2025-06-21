@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
-	"github.com/elliotnunn/BeHierarchic/internal/webdavadapter"
+	"github.com/shurcooL/webdavfs/webdavfs"
 	"golang.org/x/net/webdav"
 )
 
@@ -62,7 +62,7 @@ func main() {
 	_ = abstract
 
 	handler := &webdav.Handler{
-		FileSystem: &webdavadapter.FileSystem{Inner: abstract},
+		FileSystem: webdavfs.New(http.FS(abstract)),
 		// FileSystem: webdav.Dir("/Users/elliotnunn/Downloads"),
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(r *http.Request, err error) {
@@ -70,6 +70,12 @@ func main() {
 		},
 	}
 
-	err := http.ListenAndServe(":1993", handler)
-	panic(err)
+	go http.ListenAndServe(":1993", handler)
+
+	h2 := &webdav.Handler{
+		FileSystem: webdav.Dir("/Users/elliotnunn/Downloads"),
+		LockSystem: webdav.NewMemLS(),
+	}
+
+	http.ListenAndServe(":1994", h2)
 }

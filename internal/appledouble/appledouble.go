@@ -41,7 +41,8 @@ func MakePrefix(rforkSize uint32, shortRecs map[int][]byte) []byte {
 	}
 
 	buf := make([]byte, 26+12*len(keys))
-	copy(buf, "\x00\x05\x16\x00\x00\x02\x00\x00") // magic number
+	copy(buf, "\x00\x05\x16\x07\x00\x02\x00\x00") // magic number (modern macOS expects the 07 byte)
+	// copy(buf[8:], "Mac OS X        ")             // modern macOS puts this, doesn't seem to be necessary
 	binary.BigEndian.PutUint16(buf[24:], uint16(len(keys)))
 
 	for i, key := range keys {

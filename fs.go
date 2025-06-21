@@ -39,6 +39,10 @@ func Wrapper(fsys fs.FS) fs.FS {
 // We need to keep a positive list of files that correspond with a burrow
 // Do we need to keep a list of files that are not? Nah, too costly.
 func (w *w) Open(name string) (retf fs.File, reterr error) {
+	name = strings.Trim(name, "/") // TEMPORARY HACK TO GET WEBDAV WORKING!
+	if name == "" {
+		name = "."
+	}
 	if !fs.ValidPath(name) {
 		return nil, fs.ErrInvalid
 	}
