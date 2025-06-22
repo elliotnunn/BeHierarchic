@@ -1,81 +1,43 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"io/fs"
-	"log"
 	"net/http"
 	"os"
-	"path"
-	"strings"
 
-	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/shurcooL/webdavfs/webdavfs"
 	"golang.org/x/net/webdav"
 )
 
-func dumpFS(fsys fs.FS) {
-	const tfmt = "2006-01-02T15:04:05"
-	fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
-		fmt.Printf("%#v\n", p)
-		if d == nil {
-			fmt.Println("    nil info!")
-			return nil
-		}
-
-		i, err := d.Info()
-		if err != nil {
-			panic(err)
-		}
-
-		fmt.Printf("    %v size=%d modtime=%s\n",
-			i.Mode(), i.Size(), i.ModTime().Format(tfmt))
-
-		// AppleDouble file
-		if strings.HasPrefix(path.Base(p), "._") {
-			f, err := fsys.Open(p)
-			if err != nil {
-				panic(err)
-			}
-			defer f.Close()
-			dmp, err := appledouble.Dump(f)
-			if err != nil {
-				fmt.Printf("AppleDouble dump error: %v\n", err)
-			} else {
-				for _, l := range strings.Split(dmp, "\n") {
-					fmt.Printf("    %s\n", l)
-				}
-			}
-		}
-
-		return nil
-	})
-}
+const hello = "BeHierarchic: the Retrocomputing Archivist's File Server, by Elliot Nunn"
 
 func main() {
-	base := os.Args[1]
-	concrete := os.DirFS(base)
-	abstract := Wrapper(concrete)
+	err := cmdLine(os.Args)
+	fmt.Fprintf(os.Stderr, "%s\n", err)
+	os.Exit(1)
+}
 
-	// go dumpFS(abstract)
+func cmdLine(args []string) error {
+	if len(args) != 3 {
+		return errors.New(hello + "\n" + "Usage: BeHierarchic [INTERFACE:]PORT SHAREPOINT")
+	}
 
-	_ = abstract
+	port := args[1]
+
+	path := args[2]
+	s, err := os.Stat(path)
+	if err != nil {
+		return err
+	} else if !s.IsDir() {
+		return fmt.Errorf("%s: not a directory", path)
+	}
+	fsys := Wrapper(os.DirFS(path))
 
 	handler := &webdav.Handler{
-		FileSystem: webdavfs.New(http.FS(abstract)),
-		// FileSystem: webdav.Dir("/Users/elliotnunn/Downloads"),
-		LockSystem: webdav.NewMemLS(),
-		Logger: func(r *http.Request, err error) {
-			log.Printf("HTTP %s %q -> %v", r.Method, r.URL.String(), err)
-		},
-	}
-
-	go http.ListenAndServe(":1993", handler)
-
-	h2 := &webdav.Handler{
-		FileSystem: webdav.Dir("/Users/elliotnunn/Downloads"),
+		FileSystem: webdavfs.New(http.FS(fsys)),
 		LockSystem: webdav.NewMemLS(),
 	}
 
-	http.ListenAndServe(":1994", h2)
+	return http.ListenAndServe(port, handler)
 }
