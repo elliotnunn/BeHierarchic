@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 
+	_ "net/http/pprof"
+
 	"github.com/shurcooL/webdavfs/webdavfs"
 	"golang.org/x/net/webdav"
 )
@@ -34,10 +36,10 @@ func cmdLine(args []string) error {
 	}
 	fsys := Wrapper(os.DirFS(path))
 
-	handler := &webdav.Handler{
+	http.Handle("/", &webdav.Handler{
 		FileSystem: webdavfs.New(http.FS(fsys)),
 		LockSystem: webdav.NewMemLS(),
-	}
+	})
 
-	return http.ListenAndServe(port, handler)
+	return http.ListenAndServe(port, nil)
 }
