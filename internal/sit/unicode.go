@@ -1,3 +1,6 @@
+// Copyright (c) Elliot Nunn
+// Licensed under the MIT license
+
 package sit
 
 func stringFromRoman(mac []byte) string {

@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Elliot Nunn
+// Copyright (c) Elliot Nunn
 // Licensed under the MIT license
 
 package hfs

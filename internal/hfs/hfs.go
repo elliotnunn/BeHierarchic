@@ -1,4 +1,4 @@
-// Copyright (c) 2021, 2024 Elliot Nunn
+// Copyright (c) Elliot Nunn
 // Licensed under the MIT license
 
 // Implement fs.FS for Apple's very old Hierarchical File System

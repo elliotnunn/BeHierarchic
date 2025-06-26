@@ -1,3 +1,6 @@
+// Copyright (c) Elliot Nunn
+// Licensed under the MIT license
+
 package resourcefork
 
 func stringFromType(t [4]byte) string {

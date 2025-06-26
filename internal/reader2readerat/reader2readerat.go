@@ -1,3 +1,6 @@
+// Copyright (c) Elliot Nunn
+// Licensed under the MIT license
+
 package reader2readerat
 
 import (
@@ -58,6 +61,8 @@ func initCommon(uniq string) *ReaderAt {
 func (r *ReaderAt) closeCommon() {
 	r.r, r.seek = nil, 0
 }
+
+var n = 1
 
 func (r *ReaderAt) getNextBlock() ([]byte, error) {
 	buf := make([]byte, blocksize)
