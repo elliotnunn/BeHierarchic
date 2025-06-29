@@ -1,0 +1,9 @@
+This library is a Go port of part of the "eXternal Archive Decruncher" (XAD)
+Libary System, limited to the routines used for Aladdin StuffIt files (once a
+common archive format for Macintoshes).
+
+Like the original XAD, it is licensed under the LGPL-2.1-or-later.
+
+stuffit-test-files created by Stephan Sokolow (thank you!)
+
+There is an unmet need for test files that use other compression algorithms.

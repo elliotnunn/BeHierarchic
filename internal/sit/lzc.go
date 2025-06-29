@@ -1,7 +1,10 @@
 // UNIX Compress
 
 // XAD library system for archive handling
-// Copyright (C) 1998 and later by Dirk St�cker <soft@dstoecker.de>
+// Copyright (C) 1998 and later by Dirk Stoecker <soft@dstoecker.de>
+
+// ported to Go
+// Copyright (C) 2025 Elliot Nunn
 
 // This library is free software; you can redistribute it and/or
 // modify it under the terms of the GNU Lesser General Public
