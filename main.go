@@ -15,17 +15,21 @@ import (
 	"golang.org/x/net/webdav"
 )
 
-const hello = "BeHierarchic: the Retrocomputing Archivist's File Server, by Elliot Nunn"
+const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
+
+Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT`
 
 func main() {
 	err := cmdLine(os.Args)
-	fmt.Fprintf(os.Stderr, "%s\n", err)
-	os.Exit(1)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
+	}
 }
 
 func cmdLine(args []string) error {
 	if len(args) != 3 {
-		return errors.New(hello + "\n" + "Usage: BeHierarchic [INTERFACE:]PORT SHAREPOINT")
+		return errors.New(hello)
 	}
 
 	port := args[1]

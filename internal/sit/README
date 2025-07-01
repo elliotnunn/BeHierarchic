@@ -1,6 +1,5 @@
 This library is a Go port of part of the "eXternal Archive Decruncher" (XAD)
-Libary System, limited to the routines used for Aladdin StuffIt files (once a
-common archive format for Macintoshes).
+Libary System by Dirk Stoecker et al.
 
 Like the original XAD, it is licensed under the LGPL-2.1-or-later.
 
