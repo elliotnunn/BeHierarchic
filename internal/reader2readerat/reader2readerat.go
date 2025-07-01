@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sync"
 
 	"github.com/dgraph-io/ristretto"
@@ -160,8 +161,12 @@ const (
 )
 
 func init() {
+	maxcache := debug.SetMemoryLimit(-1) / 2 // get memory limit
+	if maxcache > 1<<48 {                    // huge means unset
+		maxcache = 1 << 30 // so fall back on 1gigabyte
+	}
 	c, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: maxcache / blocksize * 16,
+		NumCounters: maxcache / blocksize * 10,
 		MaxCost:     maxcache,
 		BufferItems: 64,
 	})
