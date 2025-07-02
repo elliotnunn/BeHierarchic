@@ -11,8 +11,7 @@ import (
 
 	_ "net/http/pprof"
 
-	"github.com/shurcooL/webdavfs/webdavfs"
-	"golang.org/x/net/webdav"
+	"github.com/elliotnunn/BeHierarchic/internal/webdavfs"
 )
 
 const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
@@ -43,10 +42,7 @@ func cmdLine(args []string) error {
 	}
 	fsys := Wrapper(os.DirFS(path))
 
-	http.Handle("/", &webdav.Handler{
-		FileSystem: webdavfs.New(http.FS(fsys)),
-		LockSystem: webdav.NewMemLS(),
-	})
+	http.Handle("/", &webdavfs.Handler{FS: fsys})
 
 	return http.ListenAndServe(port, nil)
 }
