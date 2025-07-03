@@ -16,7 +16,9 @@ import (
 
 const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
 
-Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT`
+Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT
+
+(use the BEGB environment variable to set the cache size in GiB)`
 
 func main() {
 	err := cmdLine(os.Args)
