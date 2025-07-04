@@ -106,8 +106,8 @@ func (fsys *FS) listResources(offset uint32, n uint16) ([]fs.DirEntry, error) {
 func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType uint16, offsetOfType uint32) {
 	fsys.once.Do(fsys.parse)
 	tl := make([]byte, 8*int(fsys.nType))
-	_, err := fsys.AppleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
-	if err != nil {
+	nbyte, _ := fsys.AppleDouble.ReadAt(tl, int64(fsys.resTypeList+2))
+	if nbyte != len(tl) { // don't check err, an io.EOF is acceptable
 		return
 	}
 
@@ -125,8 +125,8 @@ func (fsys *FS) typeLookup(unitype string) (t [4]byte, nOfType uint16, offsetOfT
 func (fsys *FS) resourceLookup(id int16, nOfType uint16, offsetOfType uint32) (dataOffset uint32) {
 	fsys.once.Do(fsys.parse)
 	rl := make([]byte, 12*int(nOfType))
-	_, err := fsys.AppleDouble.ReadAt(rl, int64(offsetOfType))
-	if err != nil {
+	nbyte, _ := fsys.AppleDouble.ReadAt(rl, int64(offsetOfType))
+	if nbyte != len(rl) { // don't check err, an io.EOF is acceptable
 		return
 	}
 
