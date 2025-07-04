@@ -58,12 +58,14 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 
 	// The returned object might be a directory and receive ReadDir calls.
 	// We need to intercept these to insert extra elements
-	if rdf, mightBeDir := f.(fs.ReadDirFile); mightBeDir {
-		if s, err := f.Stat(); err == nil && s.IsDir() {
-			f = &dirWithExtraChildren{
-				ReadDirFile: rdf,
-				parentTree:  w,
-				ownPath:     name,
+	if !strings.Contains(name, Special+"resources") { // resource forks don't contain zip files
+		if rdf, mightBeDir := f.(fs.ReadDirFile); mightBeDir {
+			if s, err := f.Stat(); err == nil && s.IsDir() {
+				f = &dirWithExtraChildren{
+					ReadDirFile: rdf,
+					parentTree:  w,
+					ownPath:     name,
+				}
 			}
 		}
 	}
