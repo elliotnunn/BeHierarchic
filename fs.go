@@ -88,10 +88,8 @@ func (w *w) listSpecialSiblings(name string) ([]string, error) {
 
 	pathwarps, ok := fsyspaths[subpath]
 	if !ok {
-		pathwarps, err = exploreFile(fsys, subpath, name)
-		if err != nil {
-			panic("this file existed a minute ago, what's the problem??")
-		}
+		// Ignore error in attempting to probe file
+		pathwarps, _ = exploreFile(fsys, subpath, name)
 		fsyspaths[subpath] = pathwarps
 		for _, fsysToAddToMap := range pathwarps {
 			w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
