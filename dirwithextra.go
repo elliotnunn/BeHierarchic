@@ -6,25 +6,36 @@ package main
 import (
 	"io"
 	"io/fs"
+	"path"
 )
 
 type dirWithExtraChildren struct {
 	fs.ReadDirFile
-	extraChildren func([]fs.DirEntry) []fs.DirEntry
-	listing       []fs.DirEntry
-	listOffset    int
+	parentTree *w
+	ownPath    string
+	listing    []fs.DirEntry
+	listOffset int
 }
 
-// Has slightly tricky partial-listing semantics
 func (f *dirWithExtraChildren) ReadDir(count int) ([]fs.DirEntry, error) {
 	if f.listOffset == 0 {
 		l, err := f.ReadDirFile.ReadDir(-1)
 		if err != nil {
 			return nil, err
 		}
-		f.listing = append(l, f.extraChildren(l)...)
+		for _, de := range l {
+			f.listing = append(f.listing, de) // the real one
+			more, err := f.parentTree.listSpecialSiblings(path.Join(f.ownPath, de.Name()))
+			if err != nil {
+				panic("why would this ever happen?")
+			}
+			for _, name := range more {
+				f.listing = append(f.listing, &dirEntry{name: name})
+			}
+		}
 	}
 
+	// Implement those tricky partial-listing semantics
 	n := len(f.listing) - f.listOffset
 	if n == 0 && count > 0 {
 		return nil, io.EOF

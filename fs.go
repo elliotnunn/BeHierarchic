@@ -5,7 +5,6 @@ package main
 
 import (
 	"archive/zip"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -23,8 +22,9 @@ import (
 const Special = "◆"
 
 type w struct {
+	// sub-fsys, to path-within-that-fs, then to special-dir-suffix, then to another sub-fsys
+	burrows map[fs.FS]map[string]map[string]fs.FS
 	root    fs.FS
-	burrows map[fs.FS]map[string]map[string]fs.FS // actually I don't care much for the string, but it's important for debuggability
 	lock    sync.Mutex
 }
 
@@ -57,47 +57,50 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 	}
 
 	// The returned object might be a directory and receive ReadDir calls.
-	// We need these ReadDir calls to know when a child file is a disk image,
-	// and make it look like a directory.
+	// We need to intercept these to insert extra elements
 	if rdf, mightBeDir := f.(fs.ReadDirFile); mightBeDir {
-		s, err := f.Stat()
-		if err == nil && s.IsDir() {
+		if s, err := f.Stat(); err == nil && s.IsDir() {
 			f = &dirWithExtraChildren{
 				ReadDirFile: rdf,
-				extraChildren: func(realChildren []fs.DirEntry) (fakeChildren []fs.DirEntry) {
-					w.lock.Lock()
-					defer w.lock.Unlock()
-					for _, c := range realChildren {
-						fsyspaths, ok := w.burrows[fsys]
-						if !ok {
-							panic("every mountpoint should be in the mountpoint map")
-						}
-
-						childName := path.Join(subdir, c.Name())
-						pathwarps, ok := fsyspaths[childName]
-						if !ok {
-							pathwarps, err = exploreFile(fsys, childName, path.Join(name, c.Name()))
-							if err != nil {
-								continue // likely FNF, tidy this return up later
-							}
-							fsyspaths[childName] = pathwarps
-							for _, fsysToAddToMap := range pathwarps {
-								w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
-							}
-						}
-
-						for kind := range pathwarps {
-							fakeChildren = append(fakeChildren, &dirEntry{
-								name: c.Name() + Special + kind,
-							})
-						}
-					}
-					return fakeChildren
-				},
+				parentTree:  w,
+				ownPath:     name,
 			}
 		}
 	}
 	return f, nil
+}
+
+func (w *w) listSpecialSiblings(name string) ([]string, error) {
+	fsys, subpath, err := w.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+
+	w.lock.Lock()
+	defer w.lock.Unlock()
+
+	fsyspaths, ok := w.burrows[fsys]
+	if !ok {
+		panic("every mountpoint should be in the mountpoint map")
+	}
+
+	pathwarps, ok := fsyspaths[subpath]
+	if !ok {
+		pathwarps, err = exploreFile(fsys, subpath, name)
+		if err != nil {
+			panic("this file existed a minute ago, what's the problem??")
+		}
+		fsyspaths[subpath] = pathwarps
+		for _, fsysToAddToMap := range pathwarps {
+			w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
+		}
+	}
+
+	ret := make([]string, 0, len(pathwarps))
+	for nameSuffix := range pathwarps {
+		ret = append(ret, path.Base(name)+Special+nameSuffix)
+	}
+	return ret, nil
 }
 
 func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
@@ -172,7 +175,7 @@ func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error)
 		return nil, err
 	}
 	if s.IsDir() {
-		return nil, errors.New("not a directory")
+		return nil, nil
 	}
 
 	ret := make(map[string]fs.FS)
