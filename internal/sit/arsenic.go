@@ -266,10 +266,10 @@ func (sa *arsenicData) doUnmtf(sym int32) int32 {
 	return result
 }
 
-func (sa *arsenicData) unblockSort(block []uint8, blocklen uint32, last_index uint32, outblock []uint8) {
+func (sa *arsenicData) unblockSort(block []uint8, last_index uint32) []uint8 {
 	var counts [256]uint32
 	var cumcounts [256]uint32
-	xform := make([]uint32, blocklen)
+	xform := make([]uint32, len(block))
 
 	for _, b := range block {
 		counts[b]++
@@ -288,11 +288,13 @@ func (sa *arsenicData) unblockSort(block []uint8, blocklen uint32, last_index ui
 	}
 
 	j := xform[last_index]
+	outblock := make([]uint8, len(block))
 	for i := range block {
 		outblock[i] = block[j]
 		//      block[j] = 0xa5; /* for debugging */
 		j = xform[j]
 	}
+	return outblock
 }
 
 func (sa *arsenicData) writeAndUnrleAndUnrnd(byteremain uint32, block []byte, rnd int16) uint32 {
@@ -351,7 +353,7 @@ func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	defer func() {
 		sa.bw.Flush()
 		if r := recover(); r != nil {
-			dst.CloseWithError(fmt.Errorf("internal StuffIt panic: %v", r))
+			dst.CloseWithError(fmt.Errorf("internal StuffIt/Arsenic panic: %v", r))
 		} else {
 			dst.Close()
 		}
@@ -366,23 +368,22 @@ func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	if sa.arithGetBits(&arsenicModels.initial_model, 8) != 0x41 ||
 		sa.arithGetBits(&arsenicModels.initial_model, 8) != 0x73 {
 		dst.CloseWithError(errors.New("arsenic data not starting with 'As'"))
+		return
 	}
 	sa.blockbits = uint16(sa.arithGetBits(&arsenicModels.initial_model, 4) + 9)
 
 	eob := sa.getSym(&arsenicModels.initial_model)
 	if eob != 0 {
-		dst.Close()
-	}
-
-	sa.reinitModel(&arsenicModels.selmodel)
-	for i := range 7 {
-		sa.reinitModel(&arsenicModels.mtfmodel[i])
+		return
 	}
 
 	for {
-		block := make([]byte, 0, 1<<sa.blockbits)
-		unsortedblock := make([]byte, 1<<sa.blockbits)
+		sa.reinitModel(&arsenicModels.selmodel)
+		for i := range 7 {
+			sa.reinitModel(&arsenicModels.mtfmodel[i])
+		}
 
+		block := make([]byte, 0, 1<<sa.blockbits)
 		rnd := sa.getSym(&arsenicModels.initial_model)
 		primary_index := int32(sa.arithGetBits(&arsenicModels.initial_model, int32(sa.blockbits)))
 		stopme, repeatstate, repeatcount := 0, 0, 0
@@ -433,7 +434,7 @@ func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 				block = append(block, byte(sa.doUnmtf(sym)))
 			}
 		}
-		sa.unblockSort(block, uint32(len(block)), uint32(primary_index), unsortedblock)
+		unsortedblock := sa.unblockSort(block, uint32(primary_index))
 		dstsize = sa.writeAndUnrleAndUnrnd(dstsize, unsortedblock, int16(rnd))
 		eob := sa.getSym(&arsenicModels.initial_model)
 		if dstsize == 0 || eob != 0 {

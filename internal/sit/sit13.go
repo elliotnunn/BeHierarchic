@@ -407,7 +407,7 @@ func sit13(r io.Reader, dstsize uint32) io.ReadCloser {
 func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	defer func() {
 		if r := recover(); r != nil {
-			dst.CloseWithError(fmt.Errorf("internal StuffIt panic: %v", r))
+			dst.CloseWithError(fmt.Errorf("internal StuffIt/SIT13 panic: %v", r))
 		} else {
 			dst.Close()
 		}
