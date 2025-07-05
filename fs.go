@@ -17,6 +17,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/reader2readerat"
 	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
+	"github.com/elliotnunn/BeHierarchic/internal/tarfs"
 )
 
 const Special = "◆"
@@ -224,6 +225,16 @@ func exploreDataFork(file io.ReaderAt) (fs.FS, string) {
 		}
 	case string(magic[10:14]) == "rLau" || string(magic[:16]) == "StuffIt (c)1997-":
 		fsys, err := sit.New(file)
+		if err == nil {
+			return fsys, "files"
+		}
+	}
+
+	var magicTar [8]byte
+	if n, _ := file.ReadAt(magicTar[:], 257); n < 8 {
+		return nil, ""
+	} else if string(magicTar[:]) == "ustar\x00\x30\x30" || string(magicTar[:]) == "ustar\x20\x20\x00" {
+		fsys, err := tarfs.New(file.(io.Reader))
 		if err == nil {
 			return fsys, "files"
 		}
