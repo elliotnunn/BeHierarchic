@@ -9,11 +9,11 @@ import (
 	"io"
 	"io/fs"
 	"sync"
+	"weak"
 )
 
 type FS struct {
 	FS    fs.FS
-	Uniq  string
 	reuse map[string]keeptrack
 	lock  sync.Mutex
 }
@@ -34,6 +34,11 @@ type keeptrack struct {
 type guarantee interface {
 	io.ReaderAt
 	io.Seeker
+}
+
+type unique struct {
+	fsys weak.Pointer[fs.FS]
+	path string
 }
 
 // If opening a file, guaranteed to satisfy io.ReaderAt and io.Seeker
@@ -65,10 +70,14 @@ func (r *FS) Open(name string) (fs.File, error) {
 
 	saved, ok := r.reuse[name]
 	if !ok {
+		unique := unique{
+			fsys: weak.Make(&r.FS),
+			path: name,
+		}
 		reopener := func() (io.Reader, error) {
 			return r.FS.Open(name)
 		}
-		saved = keeptrack{ra: NewFromReader(r.Uniq+"//"+name, reopener)}
+		saved = keeptrack{ra: NewFromReader(unique, reopener)}
 	}
 	saved.refcnt++
 	r.reuse[name] = saved

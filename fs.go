@@ -90,7 +90,7 @@ func (w *w) listSpecialSiblings(name string) ([]string, error) {
 	pathwarps, ok := fsyspaths[subpath]
 	if !ok {
 		// Ignore error in attempting to probe file
-		pathwarps, _ = exploreFile(fsys, subpath, name)
+		pathwarps, _ = exploreFile(fsys, subpath)
 		fsyspaths[subpath] = pathwarps
 		for _, fsysToAddToMap := range pathwarps {
 			w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
@@ -145,9 +145,7 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 
 		pathwarps, ok := fsyspaths[name[el.pathStart:el.pathEnd]]
 		if !ok {
-			pathwarps, err = exploreFile(fsys,
-				name[el.pathStart:el.pathEnd], // for fsys.Open()
-				name[:el.pathEnd])             // unique cache key for reader2readerat
+			pathwarps, err = exploreFile(fsys, name[el.pathStart:el.pathEnd])
 			if err != nil {
 				return nil, "", err // likely FNF, tidy this return up later
 			}
@@ -165,7 +163,7 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 	return fsys, tail, nil
 }
 
-func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error) {
+func exploreFile(fsys fs.FS, name string) (map[string]fs.FS, error) {
 	// Open data fork, could it possibly be an archive?
 	o, err := fsys.Open(name)
 	if err != nil {
@@ -185,7 +183,7 @@ func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error)
 	if subdir == nil {
 		o.Close()
 	} else {
-		subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
+		subdir = &reader2readerat.FS{FS: subdir}
 		ret[kind] = subdir
 	}
 
@@ -196,7 +194,7 @@ func exploreFile(fsys fs.FS, name string, uniq string) (map[string]fs.FS, error)
 		if subdir == nil {
 			rf.Close()
 		} else {
-			subdir = &reader2readerat.FS{FS: subdir, Uniq: uniq}
+			subdir = &reader2readerat.FS{FS: subdir}
 			ret[kind] = subdir
 		}
 	}

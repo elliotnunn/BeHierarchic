@@ -4,19 +4,20 @@
 package reader2readerat
 
 import (
-	"fmt"
 	"io"
 	"math"
 	"os"
 	"strconv"
 	"sync"
+	"weak"
 
 	"github.com/maypok86/otter/v2"
 )
 
 type ReaderAt struct {
 	r     io.Reader
-	uniq  string
+	uniq  any
+	path  string
 	open  func() error
 	close func()
 	l     sync.Mutex
@@ -26,7 +27,7 @@ type ReaderAt struct {
 }
 
 // If the io.Reader is an io.ReadCloser then it will be closed when I am closed
-func NewFromReader(uniq string, f func() (io.Reader, error)) *ReaderAt {
+func NewFromReader(uniq any, f func() (io.Reader, error)) *ReaderAt {
 	r := initCommon(uniq)
 	r.open = func() error {
 		from, err := f()
@@ -42,7 +43,7 @@ func NewFromReader(uniq string, f func() (io.Reader, error)) *ReaderAt {
 	return r
 }
 
-func NewFromReadSeeker(uniq string, from io.ReadSeeker) *ReaderAt {
+func NewFromReadSeeker(uniq any, from io.ReadSeeker) *ReaderAt {
 	r := initCommon(uniq)
 	r.open = func() error {
 		_, err := from.Seek(0, io.SeekStart)
@@ -53,9 +54,12 @@ func NewFromReadSeeker(uniq string, from io.ReadSeeker) *ReaderAt {
 	return r
 }
 
-func initCommon(uniq string) *ReaderAt {
+func initCommon(uniq any) *ReaderAt {
 	r := &ReaderAt{
 		uniq: uniq,
+	}
+	if r.uniq == nil {
+		r.uniq = weak.Make(r)
 	}
 	return r
 }
@@ -66,7 +70,7 @@ func (r *ReaderAt) closeCommon() {
 
 func (r *ReaderAt) getNextBlock() ([]byte, error) {
 	buf := make([]byte, blocksize)
-	key := r.cacheKey(r.seek)
+	key := cacheKey{r.uniq, r.seek}
 	n, err := io.ReadFull(r.r, buf)
 	r.seek += int64(n)
 
@@ -89,7 +93,7 @@ func (r *ReaderAt) getNextBlock() ([]byte, error) {
 
 func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 	for base := off / blocksize * blocksize; base < off+int64(len(buf)); base += blocksize {
-		k := r.cacheKey(base)
+		k := cacheKey{r.uniq, base}
 		keg, ok := cache.GetEntry(k)
 		var block []byte
 		if ok { // easy path
@@ -127,25 +131,6 @@ func (r *ReaderAt) ReadAt(buf []byte, off int64) (n int, reterr error) {
 	return n, reterr
 }
 
-func (r *ReaderAt) cacheKey(offset int64) string {
-	return fmt.Sprintf("%s@%#x", r.uniq, offset)
-}
-
-// func dbgCacheState(uniq string, upToBase int64) {
-// 	matrix := make([]byte, upToBase/blocksize)
-// 	for base := int64(0); base < upToBase; base += blocksize {
-// 		key := fmt.Sprintf("%s@%#x", uniq, base)
-// 		_, ok := Cache.GetTTL(key)
-// 		if ok {
-// 			matrix[base/blocksize] = '*'
-// 		} else {
-// 			matrix[base/blocksize] = '-'
-// 		}
-// 	}
-// 	os.Stdout.Write(matrix)
-// 	os.Stdout.WriteString("\n")
-// }
-
 func (r *ReaderAt) Close() error {
 	r.close()
 	return nil
@@ -155,7 +140,7 @@ func ClearCache() {
 	cache.InvalidateAll()
 }
 
-var cache = otter.Must(&otter.Options[string, []byte]{
+var cache = otter.Must(&otter.Options[cacheKey, []byte]{
 	MaximumSize: cacheMemLimit(),
 })
 
@@ -164,8 +149,7 @@ const (
 )
 
 type cacheKey struct {
-	path   string
-	name   string
+	file   any
 	offset int64
 }
 
