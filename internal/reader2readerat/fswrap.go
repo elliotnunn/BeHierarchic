@@ -19,7 +19,7 @@ type FS struct {
 }
 
 type File struct {
-	ra   *ReaderAt
+	ra   *ReaderAt // Close() nils this to prevent double-close
 	arch *FS
 	name string
 	seek int64
@@ -127,6 +127,9 @@ func (f *File) Size() int64 {
 }
 
 func (f *File) Close() error {
+	if f.ra == nil {
+		return fs.ErrClosed
+	}
 	var err error
 	f.arch.lock.Lock()
 	defer f.arch.lock.Unlock()
@@ -138,6 +141,7 @@ func (f *File) Close() error {
 	} else {
 		f.arch.reuse[f.name] = saved
 	}
+	f.ra = nil
 	return err
 }
 
