@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 
@@ -34,6 +35,13 @@ func Wrapper(fsys fs.FS) fs.FS {
 		root:    fsys,
 		burrows: map[fs.FS]map[string]map[string]fs.FS{fsys: {}},
 	}
+}
+
+// [w.Open] returns [fs.File] objects that additionally satisfy this interface (except directories)
+type File interface {
+	fs.File
+	io.Seeker
+	io.ReaderAt
 }
 
 // Okay, here's the tricky thing...
@@ -90,7 +98,7 @@ func (w *w) listSpecialSiblings(name string) ([]string, error) {
 	pathwarps, ok := fsyspaths[subpath]
 	if !ok {
 		// Ignore error in attempting to probe file
-		pathwarps, _ = exploreFile(fsys, subpath)
+		pathwarps = exploreFile(fsys, subpath)
 		fsyspaths[subpath] = pathwarps
 		for _, fsysToAddToMap := range pathwarps {
 			w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
@@ -145,10 +153,7 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 
 		pathwarps, ok := fsyspaths[name[el.pathStart:el.pathEnd]]
 		if !ok {
-			pathwarps, err = exploreFile(fsys, name[el.pathStart:el.pathEnd])
-			if err != nil {
-				return nil, "", err // likely FNF, tidy this return up later
-			}
+			pathwarps = exploreFile(fsys, name[el.pathStart:el.pathEnd])
 			fsyspaths[name[el.pathStart:el.pathEnd]] = pathwarps
 			for _, fsysToAddToMap := range pathwarps {
 				w.burrows[fsysToAddToMap] = make(map[string]map[string]fs.FS)
@@ -163,151 +168,108 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 	return fsys, tail, nil
 }
 
-func exploreFile(fsys fs.FS, name string) (map[string]fs.FS, error) {
-	// Open data fork, could it possibly be an archive?
-	o, err := fsys.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	s, err := o.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if s.IsDir() {
-		return nil, nil
+func exploreFile(fsys fs.FS, name string) map[string]fs.FS {
+	if strings.HasPrefix(path.Base(name), "._") { // don't explore AppleDouble files
+		return nil
 	}
 
-	ret := make(map[string]fs.FS)
+	specialSiblings := make(map[string]fs.FS)
 
-	subdir, kind := exploreDataFork(o.(io.ReaderAt))
-	if subdir == nil {
-		o.Close()
-	} else {
-		subdir = &reader2readerat.FS{FS: subdir}
-		ret[kind] = subdir
+	fsys2, suffix := makeFSFromArchive(fsys, name)
+	if fsys2 != nil {
+		specialSiblings[suffix] = fsys2
 	}
 
-	appledouble := path.Join(path.Dir(name), "._"+path.Base(name))
-	rf, err := fsys.Open(appledouble)
-	if err == nil {
-		subdir, kind := exploreResourceFork(rf)
-		if subdir == nil {
-			rf.Close()
-		} else {
-			subdir = &reader2readerat.FS{FS: subdir}
-			ret[kind] = subdir
-		}
+	fsysr := makeFSFromResourceFork(fsys, name)
+	if fsysr != nil {
+		specialSiblings["resources"] = fsysr
 	}
 
-	if len(ret) == 0 {
-		ret = nil
+	if len(specialSiblings) == 0 {
+		specialSiblings = nil
 	}
-	return ret, nil
+	for s := range specialSiblings {
+		specialSiblings[s] = &reader2readerat.FS{FS: specialSiblings[s]}
+	}
+	return specialSiblings
 }
 
-func exploreDataFork(file io.ReaderAt) (fs.FS, string) {
-	var magic [16]byte
-	if n, _ := file.ReadAt(magic[:], 0); n < 16 {
-		return nil, ""
+// What kind of FS to present for this file? (Sadly can be an expensive function)
+// Will leak an open file
+func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
+	baseFile, err := fsys.Open(name)
+	if err != nil {
+		return
 	}
+	defer func() {
+		if fsys2 == nil {
+			baseFile.Close()
+		}
+	}()
+
+	f, ok := baseFile.(File)
+	if !ok {
+		return
+	}
+
+	var header []byte
+	matchAt := func(s string, offset int) bool {
+		if len(header) < offset+len(s) && len(header) == cap(header) {
+			target := (offset + len(s) + 63) &^ 63
+			header = slices.Grow(header, target-len(header))
+			n, _ := io.ReadFull(f, header[len(header):cap(header)])
+			header = header[:len(header)+n]
+		}
+		return len(header) >= offset+len(s) && string(header[offset:][:len(s)]) == s
+	}
+
 	switch {
-	case string(magic[:2]) == "ER": // Apple Partition Map
-		fsys, err := apm.New(file)
-		if err == nil {
-			return fsys, "partitions"
-		}
-	case string(magic[:2]) == "PK": // Zip file (kinda, it's complicated)
-		fsys, err := zip.NewReader(file, size(file))
-		if err == nil {
-			return fsys, "files"
-		}
-	case string(magic[10:14]) == "rLau" || string(magic[:16]) == "StuffIt (c)1997-":
-		fsys, err := sit.New(file)
-		if err == nil {
-			return fsys, "files"
-		}
+	case matchAt("ER", 0): // Apple Partition Map
+		suffix = "partitions"
+		fsys2, _ = apm.New(f)
+	case matchAt("PK", 0): // Zip file
+		suffix = "archive"
+		fsys2, _ = zip.NewReader(f, statSize(f))
+	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
+		suffix = "archive"
+		fsys2, _ = sit.New(f)
+	case matchAt("ustar\x00\x30\x30", 0) || matchAt("ustar\x20\x20\x00", 0):
+		suffix = "archive"
+		fsys2, _ = tarfs.New(f)
+	case matchAt("BD", 1024):
+		suffix = "fs"
+		fsys2, _ = hfs.New(f)
 	}
-
-	var magicTar [8]byte
-	if n, _ := file.ReadAt(magicTar[:], 257); n < 8 {
-		return nil, ""
-	} else if string(magicTar[:]) == "ustar\x00\x30\x30" || string(magicTar[:]) == "ustar\x20\x20\x00" {
-		fsys, err := tarfs.New(file.(io.Reader))
-		if err == nil {
-			return fsys, "files"
-		}
-	}
-
-	if n, _ := file.ReadAt(magic[:2], 1024); n < 2 {
-		return nil, ""
-	}
-	if string(magic[:2]) == "BD" {
-		view, err := hfs.New(file)
-		if err == nil {
-			return view, "files"
-		}
-	}
-	return nil, ""
+	return
 }
 
-func exploreResourceFork(file fs.File) (fs.FS, string) {
-	s, err := file.Stat()
-	if err != nil || s.Size() < 324 { // smallest possible AppleDoubled resource fork
-		return nil, ""
+func makeFSFromResourceFork(fsys fs.FS, name string) (ret fs.FS) {
+	baseFile, err := fsys.Open(path.Join(path.Dir(name), "._"+path.Base(name)))
+	if err != nil {
+		return nil
+	}
+	defer func() {
+		if ret == nil {
+			baseFile.Close()
+		}
+	}()
+
+	f, ok := baseFile.(File)
+	if !ok {
+		return nil
 	}
 
-	forkFS := &resourcefork.FS{AppleDouble: file.(io.ReaderAt), ModTime: s.ModTime()}
-	return forkFS, "resources"
+	s, err := f.Stat()
+	if err != nil || s.Size() < 324 || s.Mode()&fs.ModeType != fs.ModeDir { // smallest possible AppleDoubled resource fork
+		return nil
+	}
+	return &resourcefork.FS{AppleDouble: f, ModTime: s.ModTime()}
 }
 
-func size(f io.ReaderAt) int64 {
-	type sizer interface {
-		Size() int64
+func statSize(f fs.File) int64 {
+	stat, err := f.Stat()
+	if err != nil {
+		return 0
 	}
-	switch as := f.(type) {
-	case sizer:
-		return as.Size()
-	case fs.File:
-		stat, err := as.Stat()
-		if err != nil {
-			panic("failed to stat an open file")
-		}
-		return stat.Size()
-	case io.Seeker:
-		prev, err := as.Seek(0, io.SeekCurrent)
-		if err != nil {
-			panic("failed to seek to current seek location")
-		}
-		size, err := as.Seek(0, io.SeekEnd)
-		if err != nil {
-			panic("failed to seek to end")
-		}
-		_, err = as.Seek(prev, io.SeekStart)
-		if err != nil {
-			panic("failed to undo our seeking")
-		}
-		return size
-	default: // binary-search for the size
-		var lbound, ubound int64
-		var buf [1]byte
-		for i := int64(0); ; i = max(i, 1) * 2 {
-			n, _ := f.ReadAt(buf[:], i)
-			if n == 1 {
-				lbound = i + 1
-			} else {
-				ubound = i
-				break
-			}
-		}
-		for lbound != ubound {
-			mid := lbound + (ubound-lbound)/2
-			n, _ := f.ReadAt(buf[:], mid)
-			if n == 1 {
-				lbound = mid + 1
-			} else {
-				ubound = mid
-			}
-		}
-		return lbound
-	}
+	return stat.Size()
 }
