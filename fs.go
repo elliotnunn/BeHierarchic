@@ -280,7 +280,8 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		suffix = "archive"
 		fsys2, err = sit.New(f)
-	case matchAt("ustar\x00\x30\x30", 257) || matchAt("ustar\x20\x20\x00", 257):
+	case matchAt("ustar\x00\x30\x30", 257), matchAt("ustar\x20\x20\x00", 257), // posix tar
+		strings.HasSuffix(name, ".tar"), !matchAt("\x00", 0) && matchAt("\x00", 99) && !matchAt("\x00", 100):
 		suffix = "archive"
 		fsys2, err = tarfs.New(f)
 	case matchAt("BD", 1024):
