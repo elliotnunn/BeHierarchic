@@ -9,7 +9,7 @@ Apple_Developer_Discs_1989-2009/
     1997/
         System Software/
             Dev.CD Nov 97 SSW.toast◆partitions/
-                Apple_HFS,TOAST 2.5 Partition◆files/
+                Apple_HFS,TOAST 2.5 Partition◆fs/
                     Dev.CD Nov 97 SSW/
                         Utilities/
                             SimpleText◆resources/
@@ -27,10 +27,12 @@ BeHierarchic :1997 ~/mysoftwarecollection
 On a Mac: ⌘K and connect to http://127.0.0.1:1997
 On Windows: navigate Windows Explorer to http://127.0.0.1:1997
 
-Supported archive/image types include:
+Supported compression/archive/image types include:
 
 - Zip
 - StuffIt
 - HFS (Apple's old old Mac filesystem)
 - resource forks
+- tar
+- gzip/bzip2/xz
 - more to come!
