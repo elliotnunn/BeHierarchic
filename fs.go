@@ -55,6 +55,8 @@ type File interface {
 // We need to keep a positive list of files that correspond with a burrow
 // Do we need to keep a list of files that are not? Nah, too costly.
 func (w *w) Open(name string) (retf fs.File, reterr error) {
+	name, suppressSpecialSiblings := checkAndDeleteComponent(name, ".nodeeper")
+
 	if !fs.ValidPath(name) {
 		return nil, fs.ErrInvalid
 	}
@@ -71,7 +73,7 @@ func (w *w) Open(name string) (retf fs.File, reterr error) {
 
 	// The returned object might be a directory and receive ReadDir calls.
 	// We need to intercept these to insert extra elements
-	if !strings.Contains(name, Special+"resources") { // resource forks don't contain zip files
+	if !suppressSpecialSiblings && !strings.Contains(name, Special+"resources") { // resource forks don't contain zip files
 		if rdf, mightBeDir := f.(fs.ReadDirFile); mightBeDir {
 			if s, err := f.Stat(); err == nil && s.IsDir() {
 				f = &dirWithExtraChildren{
@@ -327,4 +329,26 @@ func changeSuffix(s string, suffixes string) string {
 		}
 	}
 	return s
+}
+
+func checkAndDeleteComponent(name string, special string) (string, bool) {
+	foundSpecial := false
+	l := strings.Split(name, "/")
+	var l2 []string
+	for _, s := range l {
+		if s == ".nodeeper" {
+			foundSpecial = true
+		} else {
+			l2 = append(l2, s)
+		}
+	}
+	if foundSpecial {
+		if len(l2) == 0 {
+			return ".", true
+		} else {
+			return path.Join(l2...), true
+		}
+	} else {
+		return name, false
+	}
 }
