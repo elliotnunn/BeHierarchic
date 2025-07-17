@@ -226,19 +226,23 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 	switch {
 	case matchAt("ER", 0): // Apple Partition Map
 		suffix = "partitions"
-		fsys2, _ = apm.New(f)
+		fsys2, err = apm.New(f)
 	case matchAt("PK", 0): // Zip file
 		suffix = "archive"
-		fsys2, _ = zip.NewReader(f, statSize(f))
+		fsys2, err = zip.NewReader(f, statSize(f))
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		suffix = "archive"
-		fsys2, _ = sit.New(f)
+		fsys2, err = sit.New(f)
 	case matchAt("ustar\x00\x30\x30", 257) || matchAt("ustar\x20\x20\x00", 257):
 		suffix = "archive"
-		fsys2, _ = tarfs.New(f)
+		fsys2, err = tarfs.New(f)
 	case matchAt("BD", 1024):
 		suffix = "fs"
-		fsys2, _ = hfs.New(f)
+		fsys2, err = hfs.New(f)
+	}
+	if err != nil {
+		suffix = ""
+		fsys2 = nil // some of those functions might return a nil-valued-interface otherwise
 	}
 	return
 }
