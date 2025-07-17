@@ -5,6 +5,8 @@ package main
 
 import (
 	"archive/zip"
+	"compress/bzip2"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"io/fs"
@@ -17,8 +19,10 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/reader2readerat"
 	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
+	"github.com/elliotnunn/BeHierarchic/internal/singlefilefs"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tarfs"
+	"github.com/therootcompany/xz"
 )
 
 const Special = "◆"
@@ -202,7 +206,9 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 		return
 	}
 	defer func() {
-		if fsys2 == nil {
+		if err != nil || fsys2 == nil {
+			fsys2 = nil // protect against nil-interface values
+			suffix = ""
 			baseFile.Close()
 		}
 	}()
@@ -224,6 +230,45 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 	}
 
 	switch {
+	case matchAt("\x1f\x8b", 0): // gzip
+		suffix = "stream"
+		fsys2 = &singlefilefs.FS{
+			Name: changeSuffix(path.Base(name), ".gz .gzip .tgz=.tar"),
+			Size: -1, // calculate by reading (sadly!)
+			FileOpener: func() (io.Reader, error) {
+				_, err := f.Seek(0, io.SeekStart)
+				if err != nil {
+					return nil, err
+				}
+				return gzip.NewReader(f)
+			},
+		}
+	case matchAt("BZ", 0): // bzip2
+		suffix = "stream"
+		fsys2 = &singlefilefs.FS{
+			Name: changeSuffix(path.Base(name), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar"),
+			Size: -1, // calculate by reading (sadly!)
+			FileOpener: func() (io.Reader, error) {
+				_, err := f.Seek(0, io.SeekStart)
+				if err != nil {
+					return nil, err
+				}
+				return bzip2.NewReader(f), nil
+			},
+		}
+	case matchAt("\xfd7zXZ\x00", 0): // xz
+		suffix = "stream"
+		fsys2 = &singlefilefs.FS{
+			Name: changeSuffix(path.Base(name), ".xz .txz=.tar"),
+			Size: -1, // calculate by reading (sadly!)
+			FileOpener: func() (io.Reader, error) {
+				_, err := f.Seek(0, io.SeekStart)
+				if err != nil {
+					return nil, err
+				}
+				return xz.NewReader(f, xz.DefaultDictMax)
+			},
+		}
 	case matchAt("ER", 0): // Apple Partition Map
 		suffix = "partitions"
 		fsys2, err = apm.New(f)
@@ -239,10 +284,6 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 	case matchAt("BD", 1024):
 		suffix = "fs"
 		fsys2, err = hfs.New(f)
-	}
-	if err != nil {
-		suffix = ""
-		fsys2 = nil // some of those functions might return a nil-valued-interface otherwise
 	}
 	return
 }
@@ -276,4 +317,14 @@ func statSize(f fs.File) int64 {
 		return 0
 	}
 	return stat.Size()
+}
+
+func changeSuffix(s string, suffixes string) string {
+	for _, rule := range strings.Split(suffixes, " ") {
+		from, to, _ := strings.Cut(rule, "=")
+		if strings.HasSuffix(s, from) && len(s) > len(from) {
+			return s[:len(s)-len(from)] + to
+		}
+	}
+	return s
 }
