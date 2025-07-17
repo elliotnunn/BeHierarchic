@@ -217,7 +217,7 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 		if len(header) < offset+len(s) && len(header) == cap(header) {
 			target := (offset + len(s) + 63) &^ 63
 			header = slices.Grow(header, target-len(header))
-			n, _ := io.ReadFull(f, header[len(header):cap(header)])
+			n, _ := f.ReadAt(header[len(header):cap(header)], int64(len(header)))
 			header = header[:len(header)+n]
 		}
 		return len(header) >= offset+len(s) && string(header[offset:][:len(s)]) == s
@@ -233,7 +233,7 @@ func makeFSFromArchive(fsys fs.FS, name string) (fsys2 fs.FS, suffix string) {
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		suffix = "archive"
 		fsys2, _ = sit.New(f)
-	case matchAt("ustar\x00\x30\x30", 0) || matchAt("ustar\x20\x20\x00", 0):
+	case matchAt("ustar\x00\x30\x30", 257) || matchAt("ustar\x20\x20\x00", 257):
 		suffix = "archive"
 		fsys2, _ = tarfs.New(f)
 	case matchAt("BD", 1024):
