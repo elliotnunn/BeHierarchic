@@ -308,7 +308,6 @@ func makeFSFromResourceFork(fsys fs.FS, name string) (ret fs.FS) {
 
 	s, err := f.Stat()
 	if err != nil || s.Size() < 324 || s.Mode()&fs.ModeType != 0 { // smallest possible AppleDoubled resource fork
-		println("bad stat")
 		return nil
 	}
 	return &resourcefork.FS{AppleDouble: f, ModTime: s.ModTime()}
