@@ -204,30 +204,10 @@ func makePropstatResponse(href string, pstats []Propstat) *response {
 }
 
 func handlePropfindError(err error, info os.FileInfo) error {
-	var skipResp error = nil
-	if info != nil && info.IsDir() {
-		skipResp = filepath.SkipDir
-	}
-
-	if errors.Is(err, os.ErrPermission) {
-		// If the server cannot recurse into a directory because it is not allowed,
-		// then there is nothing more to say about it. Just skip sending anything.
-		return skipResp
-	}
-
-	if _, ok := err.(*os.PathError); ok {
-		// If the file is just bad, it couldn't be a proper WebDAV resource. Skip it.
-		return skipResp
-	}
-
-	// We need to be careful with other errors: there is no way to abort the xml stream
-	// part way through while returning a valid PROPFIND response. Returning only half
-	// the data would be misleading, but so would be returning results tainted by errors.
-	// The current behaviour by returning an error here leads to the stream being aborted,
-	// and the parent http server complaining about writing a spurious header. We should
-	// consider further enhancing this error handling to more gracefully fail, or perhaps
-	// buffer the entire response until we've walked the tree.
-	return err
+	// The x/net/webdav behaviour was to abort the PROPFIND on a Stat/ReadDir/etc error.
+	// This causes the client to miss out on a lot of useful information.
+	// Just skip the one directory instead.
+	return filepath.SkipDir
 }
 
 // http://www.webdav.org/specs/rfc4918.html#status.code.extensions.to.http11
