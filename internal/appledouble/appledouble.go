@@ -43,7 +43,7 @@ func MakePrefix(rforkSize uint32, shortRecs map[int][]byte) []byte {
 		keys = append(keys, RESOURCE_FORK)
 	}
 
-	buf := make([]byte, 26+12*len(keys))
+	buf := make([]byte, 26+12*len(keys), 8192)
 	copy(buf, "\x00\x05\x16\x07\x00\x02\x00\x00") // magic number (modern macOS expects the 07 byte)
 	// copy(buf[8:], "Mac OS X        ")             // modern macOS puts this, doesn't seem to be necessary
 	binary.BigEndian.PutUint16(buf[24:], uint16(len(keys)))
@@ -54,8 +54,13 @@ func MakePrefix(rforkSize uint32, shortRecs map[int][]byte) []byte {
 		binary.BigEndian.PutUint32(buf[recOffset+4:], uint32(len(buf)))
 
 		if key == RESOURCE_FORK {
+			buf = buf[:cap(buf)]
+			binary.BigEndian.PutUint32(buf[recOffset:], uint32(key))
+			binary.BigEndian.PutUint32(buf[recOffset+4:], uint32(cap(buf)))
 			binary.BigEndian.PutUint32(buf[recOffset+8:], rforkSize)
 		} else {
+			binary.BigEndian.PutUint32(buf[recOffset:], uint32(key))
+			binary.BigEndian.PutUint32(buf[recOffset+4:], uint32(len(buf)))
 			binary.BigEndian.PutUint32(buf[recOffset+8:], uint32(len(shortRecs[key])))
 			buf = append(buf, shortRecs[key]...)
 		}
