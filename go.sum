@@ -1,5 +1,7 @@
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
+github.com/dgryski/go-tinylfu v0.1.0 h1:+0Ifx7ESVQWfmPFXhqW8dMUW9R1Z1bC7mxlL5g2CGTo=
+github.com/dgryski/go-tinylfu v0.1.0/go.mod h1:f50PMO4C1x0o341KZt49XtmTpf4LP/JXjxzWuRQEMHw=
 github.com/maypok86/otter/v2 v2.1.0 h1:H+FO9NtLuSWYUlIUQ/kT6VNEpWSIF4w4GZJRDhxYb7k=
 github.com/maypok86/otter/v2 v2.1.0/go.mod h1:jX2xEKz9PrNVbDqnk8JUuOt5kURK8h7jd1kDYI5QsZk=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=

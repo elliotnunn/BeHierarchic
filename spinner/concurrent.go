@@ -1,162 +1,306 @@
+// Package spinner converts sequential byte streams ([fs.File])
+// to random-access byte collections ([io.ReaderAt]).
 package spinner
 
 import (
-	"fmt"
+	"hash/maphash"
 	"io"
-	"iter"
+	"io/fs"
+	"math"
+
+	"github.com/dgryski/go-tinylfu"
 )
 
-const blocksize = 1 << 10
+type ID struct {
+	fsys fs.FS
+	name string
+}
 
-type ID int
+// Create a new Pool with the specified properties.
+func New(blockShift int, nBlock int, nReader int) *Pool {
+	p := &Pool{
+		jobs:    make(chan []*job),
+		sizeQ:   make(chan sizeQuery),
+		shift:   blockShift,
+		readers: make(map[ID]*readerState),
+		dones:   make(chan ID),
+		bcache:  tinylfu.New[ckey, []byte](nBlock, nBlock*10, bhasher),
+	}
+	p.rcache = tinylfu.New[ID, struct{}](nReader, nReader*10, rhasher, tinylfu.OnEvict(p.evict))
+	go p.multiplexer()
+	return p
+}
 
+// A Pool shares a configurable amount of memory among multiple "ReaderAt"s
+// according to a caching algorithm.
+// A Pool is safe for concurrent use by multiple goroutines.
+type Pool struct {
+	jobs    chan []*job
+	sizeQ   chan sizeQuery
+	shift   int
+	readers map[ID]*readerState
+	dones   chan ID
+	bcache  *tinylfu.T[ckey, []byte]
+	rcache  *tinylfu.T[ID, struct{}]
+}
+
+// A ReaderAt is safe for concurrent use by multiple goroutines.
+func (p *Pool) ReaderAt(fsys fs.FS, name string) ReaderAt {
+	return ReaderAt{pool: p, id: ID{fsys, name}}
+}
+
+type ReaderAt struct {
+	pool *Pool
+	id   ID
+}
+
+func (r ReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	blksz := int64(1) << int64(r.pool.shift)
+	var list []*job
+	var b int64
+	for b = off & -blksz; b < off+int64(len(p)); b += blksz {
+		// for each block touching the request, PLUS one block!
+		bufstart := max(b-off, 0)
+		bufend := min(b+(1<<r.pool.shift)-off, int64(len(p)))
+		list = append(list, &job{
+			id:   r.id,
+			p:    p[bufstart:bufend],
+			off:  max(b, off),
+			wait: make(chan struct{}),
+		})
+	}
+	listPlusReadahead := append(list, &job{ // extra seek-ahead job
+		id:   r.id,
+		p:    make([]byte, 1),
+		off:  b,
+		wait: make(chan struct{}),
+	})
+	r.pool.jobs <- listPlusReadahead
+	for _, j := range list {
+		<-j.wait
+		n += j.n
+		if err == nil {
+			err = j.err
+			if err != nil {
+				break
+			}
+		}
+	}
+	return n, err
+}
+
+func (r ReaderAt) Size() int64 {
+	q := sizeQuery{r.id, make(chan int64)}
+
+	// Try to query our cache about the file size cheaply
+	r.pool.sizeQ <- q
+	if s := <-q.ret; s != -1 {
+		return s
+	}
+
+	// Then try reading to the end of the file
+	r.ReadAt(make([]byte, 1), math.MaxInt64-1000000) // prevents really unfortunate overflows
+
+	// Then query our cache again
+	r.pool.sizeQ <- q
+	if s := <-q.ret; s != -1 {
+		return s
+	} else {
+		return 0 // give up
+	}
+}
+
+type sizeQuery struct {
+	id  ID
+	ret chan int64
+}
+
+type ckey struct {
+	id     ID
+	offset int64
+}
+
+// Part of a ReadAt request touching a single block
 type job struct {
 	id   ID
-	p    []byte // never more than a
+	p    []byte
 	off  int64
 	n    int
 	err  error
 	wait chan struct{}
 }
 
-type result struct {
-	n   int
-	err error
+// Track according to int-key. Create, never destroy.
+type readerState struct {
+	// Shared mutable state here, be careful
+	fs.File
+	data []byte
+	err  error
+
+	// Belongs only to the multiplexer goroutine
+	busy    bool
+	knowlen bool // means len field is exact
+	diesoon bool // means remove from cache when done
+	seek    int64
+	len     int64 // lower bound on known length
+	pending map[int64][]*job
 }
 
-// Set this up with some injection...
-var OpenFunc func(id ID) (io.Reader /*can be ReadCloser*/, error)
-
-var (
-	jobs = make(chan []*job)
-)
-
-// Cancellation (e.g. with a Close) might be good here
-// Hang on, why don't I just submit a very large number of single-block jobs?
-// (Problem is that this would be somewhat racy, which is kind of a nuisance...)
-func (id ID) ReadAt(p []byte, off int64) (n int, err error) {
-	list := make([]*job, 0, nBlocks(off, len(p)))
-	for b := range listBlocks(off, len(p)) {
-		bufstart := max(b-off, 0)
-		bufend := min(b+blocksize-off, int64(len(p)))
-		list = append(list, &job{
-			id:   id,
-			p:    p[bufstart:bufend],
-			off:  max(b, off),
-			wait: make(chan struct{}),
-		})
-	}
-	println("len list", len(list))
-	jobs <- list
-	for _, j := range list {
-		<-j.wait
-		n += j.n
-		if j.n < len(j.p) {
-			err = j.err
-			if err == nil {
-				panic("err unexpectedly nil")
-			}
-			break
-		}
-	}
-	return n, err
-}
-
-// temporary simplification: the only error ever returned is io.eof, IFF the number of bytes is < the request
-// nah, all errors are permanent!
-func multiplexer() {
-	type readerState struct {
-		io.Reader
-		seek    int64
-		data    []byte
-		busy    bool
-		err     error
-		pending map[int64][]*job
-	}
-	type knownErr struct { // also provides backing for Size business (which is valuable information!)
-		err    error
-		offset int64
-	}
-	var (
-		dones   = make(chan ID)
-		readers = make(map[ID]*readerState)
-		// errors  = make(map[ID]knownErr)
-	)
-
-	startJob := func(id ID) {
-		r := readers[id]
-		r.busy = true
-
-		worthPushingOn := false
-		for offset := range r.pending {
-			if offset >= r.seek {
-				worthPushingOn = true
-				break
-			}
-		}
-
-		targetBlock := r.seek
-		if r.Reader == nil || !worthPushingOn {
-			targetBlock = 0
-		}
-
-		go func() {
-			defer func() { dones <- id }()
-
-			if r.Reader == nil || targetBlock == 0 && r.seek != 0 {
-				if closer, ok := r.Reader.(io.Closer); ok {
-					go closer.Close()
-				}
-				r.Reader, r.err = OpenFunc(id)
-				if r.err != nil {
-					return
-				}
-				r.seek = 0
-			}
-
-			var n int
-			r.data = make([]byte, blocksize)
-			n, r.err = io.ReadFull(r, r.data)
-			r.data = smooshBuffer(r.data[:n])
-		}()
-	}
-
+func (p *Pool) multiplexer() {
 	for {
 		select {
-		case joblist := <-jobs:
-			if len(joblist) == 0 {
-				panic("should never happen")
-			}
-			// short-circuit jobs where the error is known (but there is no data!)
-			r, ok := readers[joblist[0].id]
-			if !ok {
-				r = &readerState{pending: make(map[int64][]*job)}
-				readers[joblist[0].id] = r
-			}
+		case joblist := <-p.jobs: // a ReadAt call
 			for _, j := range joblist {
-				r.pending[j.off&-blocksize] = append(r.pending[j.off&-blocksize], j)
+				// ensure we have a reader
+				r := p.ensureReader(j.id)
+
+				if r.knowlen && r.len <= j.off { // totally unsatisfiable, reject
+					j.err, j.n = io.EOF, 0
+					close(j.wait)
+					continue
+				}
+
+				if canget := r.len - j.off; r.knowlen && canget < int64(len(j.p)) {
+					j.err = io.EOF
+				}
+
+				blk := j.off >> p.shift << p.shift
+				if got, ok := p.bcache.Get(ckey{j.id, blk}); ok {
+					j.n = copy(j.p, got[j.off-blk:])
+					close(j.wait)
+				} else {
+					if r.pending == nil {
+						r.pending = make(map[int64][]*job)
+					}
+					r.pending[blk] = append(r.pending[blk], j)
+					if !r.busy {
+						p.startJob(j.id)
+					}
+				}
 			}
-			if !r.busy {
-				startJob(joblist[0].id)
+		case q := <-p.sizeQ: // call to Size()
+			r := p.ensureReader(q.id)
+			if r.knowlen {
+				q.ret <- p.readers[q.id].len
+			} else {
+				q.ret <- -1
 			}
-		case id := <-dones:
-			r := readers[id]
-			fmt.Printf("satisfying %d jobs\n", len(r.pending[r.seek]))
-			for _, j := range r.pending[r.seek] {
+		case id := <-p.dones: // a Reader goroutine has returned
+			r := p.readers[id]
+			p.bcache.Add(ckey{id, r.seek}, r.data)
+
+			for _, j := range r.pending[r.seek] { // satisfy waiting ReaderAts
 				j.n = copy(j.p, r.data[j.off-r.seek:])
-				j.err = r.err
+				if j.n < len(j.p) {
+					j.err = r.err
+				}
 				close(j.wait)
 			}
 			delete(r.pending, r.seek)
-			r.seek += blocksize // is that actually reliable??
+
+			// and if there is an error, dissatisfy other waiting ReaderAts
+			if r.err != nil {
+				if r.err == io.EOF {
+					r.knowlen, r.len = true, r.seek+int64(len(r.data))
+				}
+				for offset, jobs := range r.pending {
+					if offset >= r.len {
+						for _, j := range jobs {
+							j.err, j.n = r.err, 0
+							close(j.wait)
+						}
+						delete(r.pending, offset)
+					}
+				}
+			}
+
+			r.seek += int64(len(r.data))
+			r.data = nil
 			r.busy = false
+
 			if len(r.pending) > 0 {
-				startJob(id)
+				p.startJob(id)
+			} else {
+				r.pending = nil
+				if r.diesoon {
+					go r.File.Close()
+					r.File, r.diesoon = nil, false
+				}
 			}
 		}
 	}
 }
 
+func (p *Pool) startJob(id ID) {
+	r, ok := p.readers[id]
+	if !ok {
+		panic("nonexistent reader")
+	}
+	r.busy, r.diesoon = true, false
+	p.rcache.Add(id, struct{}{})
+
+	worthPushingOn := false
+	for offset := range r.pending {
+		if offset >= r.seek {
+			worthPushingOn = true
+			break
+		}
+	}
+
+	targetBlock := r.seek
+	if r.File == nil || !worthPushingOn {
+		targetBlock = 0
+	}
+
+	go func() {
+		defer func() {
+			p.dones <- id
+		}()
+
+		if r.File == nil || targetBlock == 0 && r.seek != 0 {
+			if r.File != nil {
+				go r.File.Close()
+			}
+			r.File, r.err = id.fsys.Open(id.name)
+			if r.err != nil {
+				return
+			}
+			r.seek = 0
+		}
+
+		var n int
+		r.data = make([]byte, 1<<p.shift)
+		n, r.err = io.ReadFull(r, r.data)
+		if r.err == io.ErrUnexpectedEOF {
+			r.err = io.EOF
+		}
+		r.data = smooshBuffer(r.data[:n])
+	}()
+}
+
+// only ever called via startJob, so don't worry about sync
+func (p *Pool) evict(id ID, _ struct{}) {
+	r := p.readers[id]
+	if r.busy {
+		r.diesoon = true
+	} else {
+		if r.File != nil {
+			go r.File.Close()
+		}
+		r.File = nil
+	}
+}
+
+func (p *Pool) ensureReader(id ID) *readerState {
+	r, ok := p.readers[id]
+	if !ok {
+		r = new(readerState)
+		p.readers[id] = r
+	}
+	return r
+}
+
+// Use a smaller memory block
 func smooshBuffer(buf []byte) []byte {
 	if len(buf) == 0 {
 		return nil
@@ -167,20 +311,12 @@ func smooshBuffer(buf []byte) []byte {
 	}
 }
 
-func listBlocks(offset int64, length int) iter.Seq[int64] {
-	return func(yield func(int64) bool) {
-		for i := offset & -blocksize; i < offset+int64(length); i += blocksize {
-			if !yield(i) {
-				return
-			}
-		}
-	}
+var seed = maphash.MakeSeed()
+
+func bhasher(k ckey) uint64 {
+	return maphash.Comparable(seed, k)
 }
 
-func nBlocks(offset int64, length int) int {
-	return int((offset+int64(length)+blocksize-1)/blocksize - offset/blocksize)
-}
-
-func init() {
-	go multiplexer()
+func rhasher(k ID) uint64 {
+	return maphash.Comparable(seed, k)
 }

@@ -6,7 +6,6 @@ package singlefilefs
 import (
 	"io"
 	"io/fs"
-	"sync"
 	"time"
 )
 
@@ -15,8 +14,7 @@ type FS struct {
 	Name       string
 	FileOpener func() (io.Reader, error)
 	ModTime    time.Time
-	Size       int64 // set to negative to calculate size by reading whole file
-	once       sync.Once
+	Size       int64
 }
 
 type Dir struct {
@@ -25,9 +23,8 @@ type Dir struct {
 }
 
 type File struct {
-	fsys     *FS
-	data     io.Reader
-	calcSize int64
+	fsys *FS
+	data io.Reader
 }
 
 func (fsys *FS) Open(name string) (fs.File, error) {
@@ -86,30 +83,6 @@ func (f *File) Close() error {
 }
 
 func (f *File) Size() int64 {
-	f.fsys.once.Do(func() {
-		if f.fsys.Size >= 0 {
-			return
-		}
-
-		f.fsys.Size = 0
-
-		o, err := f.fsys.FileOpener()
-		if err != nil {
-			return
-		}
-		if closer, ok := o.(io.Closer); ok {
-			defer closer.Close()
-		}
-
-		for {
-			var buf [16 * 1024]byte
-			n, err := o.Read(buf[:])
-			f.fsys.Size += int64(n)
-			if err != nil {
-				break
-			}
-		}
-	})
 	return f.fsys.Size
 }
 

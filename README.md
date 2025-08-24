@@ -8,13 +8,11 @@ BeHierarchic exposes the inside of several Apple-adjacent archive types as a pla
 Apple_Developer_Discs_1989-2009/
     1997/
         System Software/
-            Dev.CD Nov 97 SSW.toast◆partitions/
-                Apple_HFS,TOAST 2.5 Partition◆fs/
+            Dev.CD Nov 97 SSW.toast◆/
+                Apple_HFS,TOAST 2.5 Partition◆/
                     Dev.CD Nov 97 SSW/
                         Utilities/
-                            SimpleText◆resources/
-                                CODE/
-                                    9
+                            SimpleText
 ```
 
 ## Get started
@@ -32,7 +30,6 @@ Supported compression/archive/image types include:
 - Zip
 - StuffIt
 - HFS (Apple's old old Mac filesystem)
-- resource forks
 - tar
 - gzip/bzip2/xz
 - more to come!
