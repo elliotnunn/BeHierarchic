@@ -15,7 +15,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/singlefilefs"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
-	"github.com/elliotnunn/BeHierarchic/internal/tarfs"
+	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
 )
 
@@ -83,7 +83,7 @@ func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		return func(r io.ReaderAt) (fs.FS, error) { return sit.New(r) }, nil
 	case matchAt("ustar\x00\x30\x30", 257), matchAt("ustar\x20\x20\x00", 257): // posix tar
-		return func(r io.ReaderAt) (fs.FS, error) { return tarfs.New(io.NewSectionReader(r, 0, math.MaxInt64)) }, nil
+		return func(r io.ReaderAt) (fs.FS, error) { return tar.New(io.NewSectionReader(r, 0, math.MaxInt64)) }, nil
 	case matchAt("BD", 1024):
 		return func(r io.ReaderAt) (fs.FS, error) { return hfs.New(r) }, nil
 	}
