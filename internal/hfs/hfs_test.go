@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"embed"
+	"encoding/binary"
 	"io"
 	"io/fs"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"testing/fstest"
+
+	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 )
 
 // - manyExtents has two files, each with many extents in the overflow file,
@@ -122,6 +125,7 @@ func TestComplex(t *testing.T) {
 		// The test image zeroes out every fork except the last byte
 		expectLastByte := byte(stat.Sys().(uint32)) // Last byte of fork = low byte of CNID
 		if strings.Contains("/"+p, "/._") {
+			data = appleDoubleResFork(data)
 			expectLastByte = ^expectLastByte // But ones-complement for resource forks
 		}
 		if len(data) > 0 && data[len(data)-1] != expectLastByte {
@@ -205,4 +209,22 @@ func BenchmarkNew(b *testing.B) {
 			})
 		}
 	}
+}
+
+func appleDoubleResFork(buf []byte) []byte {
+	if string(buf[:3]) != "\x00\x05\x16" || string(buf[4:8]) != "\x00\x02\x00\x00" {
+		return nil // not a valid appleDouble
+	}
+
+	count := binary.BigEndian.Uint16(buf[24:])
+	for i := range count {
+		kind := binary.BigEndian.Uint32(buf[26+12*i:])
+		offset := binary.BigEndian.Uint32(buf[26+12*i+4:])
+		size := binary.BigEndian.Uint32(buf[26+12*i+8:])
+		if kind == appledouble.RESOURCE_FORK {
+			return buf[offset:][:size]
+		}
+
+	}
+	return nil
 }
