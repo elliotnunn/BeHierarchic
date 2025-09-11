@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -98,7 +99,7 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 		return http.StatusNotFound, err
 	}
 	if fi.IsDir() {
-		return http.StatusMethodNotAllowed, nil
+		return dirList(w, f.(fs.ReadDirFile))
 	}
 	etag, err := findETag(h.FS, reqPath, fi)
 	if err != nil {
@@ -109,6 +110,43 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	http.ServeContent(w, r, "", fi.ModTime(), f.(io.ReadSeeker))
 	return 0, nil
 }
+
+func dirList(w http.ResponseWriter, d fs.ReadDirFile) (status int, err error) {
+	list, err := d.ReadDir(-1)
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	slices.SortFunc(list, func(i, j fs.DirEntry) int { return strings.Compare(i.Name(), j.Name()) })
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html>\n")
+	fmt.Fprintf(w, "<meta name=\"viewport\" content=\"width=device-width\">\n")
+	fmt.Fprintf(w, "<pre>\n")
+	for _, de := range list {
+		name := de.Name()
+		if de.IsDir() {
+			name += "/"
+		}
+		// name may contain '?' or '#', which must be escaped to remain
+		// part of the URL path, and not indicate the start of a query
+		// string or fragment.
+		url := url.URL{Path: name}
+		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", url.String(), htmlReplacer.Replace(name))
+	}
+	fmt.Fprintf(w, "</pre>\n")
+	return 0, nil
+}
+
+var htmlReplacer = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+	// "&#34;" is shorter than "&quot;".
+	`"`, "&#34;",
+	// "&#39;" is shorter than "&apos;" and apos was not in HTML until HTML5.
+	"'", "&#39;",
+)
 
 func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) (status int, err error) {
 	reqPath, status, err := pathConvert(r.URL.Path)
