@@ -83,8 +83,8 @@ func (w *w) tryToGetSize(fsys fs.FS, name string) (int64, error) {
 	}
 	size := stat.Size()
 	if size == sizeUnknown {
-		return size, nil
-	} else {
 		return w.rapool.ReaderAt(fsys, name).Size(), nil
+	} else {
+		return size, nil
 	}
 }
