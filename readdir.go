@@ -11,7 +11,7 @@ import (
 
 func (d *dir) ReadDir(count int) ([]fs.DirEntry, error) {
 	if d.lseek == 0 {
-		listing, err := d.w.ReadDir(d.name)
+		listing, err := d.fsys.ReadDir(d.name)
 		if err != nil {
 			return nil, err
 		}
@@ -33,16 +33,16 @@ func (d *dir) ReadDir(count int) ([]fs.DirEntry, error) {
 }
 
 type dirEntry struct {
-	w    *w
+	fsys *FS
 	name string
 }
 
 func (de *dirEntry) Name() string               { return path.Base(de.name) }
-func (de *dirEntry) Info() (fs.FileInfo, error) { return de.w.Stat(de.name) }
+func (de *dirEntry) Info() (fs.FileInfo, error) { return de.fsys.Stat(de.name) }
 func (de *dirEntry) Type() fs.FileMode          { return fs.ModeDir }
 func (de *dirEntry) IsDir() bool                { return true }
 
-func (w *w) ReadDir(name string) ([]fs.DirEntry, error) {
+func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 	// Cases to cover:
 	// - all files must implement io.ReaderAt
 	// - all directories must have mountpoints added to their listing
@@ -52,11 +52,11 @@ func (w *w) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	fsys, subpath, err := w.resolve(name)
+	subsys, subname, err := fsys.resolve(name)
 	if err != nil {
 		return nil, err
 	}
-	listing, err := fs.ReadDir(fsys, subpath)
+	listing, err := fs.ReadDir(subsys, subname)
 	if err != nil {
 		return nil, err
 	}
@@ -74,9 +74,9 @@ func (w *w) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 
 		go func() {
-			isar, _ := w.isArchive(fsys, path.Join(subpath, l.Name()))
+			isar, _ := fsys.isArchive(subsys, path.Join(subname, l.Name()))
 			if isar {
-				answers <- &dirEntry{w: w, name: path.Join(name, l.Name()+Special)}
+				answers <- &dirEntry{fsys: fsys, name: path.Join(name, l.Name()+Special)}
 			} else {
 				answers <- nil
 			}

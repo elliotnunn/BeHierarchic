@@ -14,7 +14,7 @@ import (
 
 const Special = "◆"
 
-type w struct {
+type FS struct {
 	bMu     sync.RWMutex
 	burrows map[key]*b
 
@@ -39,16 +39,16 @@ type b struct {
 type notAnArchive struct{}
 type fsysGenerator func(io.ReaderAt) (fs.FS, error)
 
-func Wrapper(fsys fs.FS) fs.FS {
+func Wrapper(fsys fs.FS) *FS {
 	const blockShift = 13 // 8 kb
-	return &w{
+	return &FS{
 		root:    fsys,
 		burrows: make(map[key]*b),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 }
 
-func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
+func (fsys *FS) resolve(name string) (subsys fs.FS, subname string, err error) {
 	warps := strings.Split(name, Special+"/")
 	if strings.HasSuffix(name, Special) {
 		warps[len(warps)-1] = strings.TrimSuffix(warps[len(warps)-1], Special)
@@ -56,17 +56,17 @@ func (w *w) resolve(name string) (fsys fs.FS, subpath string, err error) {
 	}
 	warps, name = warps[:len(warps)-1], warps[len(warps)-1]
 
-	fsys = w.root
+	subsys = fsys.root
 	for _, el := range warps {
-		fsys2, err := w.whatArchive(fsys, el)
+		subsubsys, err := fsys.whatArchive(subsys, el)
 		if err != nil {
 			return nil, "", err
-		} else if fsys2 == nil {
+		} else if subsubsys == nil {
 			return nil, "", fs.ErrNotExist
 		}
-		fsys = fsys2
+		subsys = subsubsys
 	}
-	return fsys, name, nil
+	return subsys, name, nil
 }
 
 func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, name string) (fs.FS, error) {
@@ -90,8 +90,8 @@ func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, n
 	return fsys2, nil
 }
 
-func (w *w) isArchive(fsys fs.FS, name string) (bool, error) {
-	b := w.getB(fsys, name)
+func (fsys *FS) isArchive(subsys fs.FS, subname string) (bool, error) {
+	b := fsys.getB(subsys, subname)
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -101,7 +101,7 @@ func (w *w) isArchive(fsys fs.FS, name string) (bool, error) {
 	case fsysGenerator, fs.FS:
 		return true, nil
 	default: // not yet decided
-		gen, err := w.probeArchive(fsys, name)
+		gen, err := fsys.probeArchive(subsys, subname)
 		if err != nil {
 			return false, err
 		}
@@ -115,8 +115,8 @@ func (w *w) isArchive(fsys fs.FS, name string) (bool, error) {
 	}
 }
 
-func (w *w) whatArchive(fsys fs.FS, name string) (fs.FS, error) {
-	b := w.getB(fsys, name)
+func (fsys *FS) whatArchive(subsys fs.FS, subname string) (fs.FS, error) {
+	b := fsys.getB(subsys, subname)
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -126,14 +126,14 @@ func (w *w) whatArchive(fsys fs.FS, name string) (fs.FS, error) {
 	case fs.FS:
 		return t, nil
 	case fsysGenerator:
-		fsys2, err := instantiate(t, w.rapool, fsys, name)
+		fsys2, err := instantiate(t, fsys.rapool, subsys, subname)
 		if err != nil { // should this be remembered as a permanent error?
 			return nil, err
 		}
 		b.data = fsys2
 		return fsys2, nil
 	default: // not yet decided
-		gen, err := w.probeArchive(fsys, name)
+		gen, err := fsys.probeArchive(subsys, subname)
 		if err != nil {
 			return nil, err
 		}
@@ -142,7 +142,7 @@ func (w *w) whatArchive(fsys fs.FS, name string) (fs.FS, error) {
 			return nil, nil
 		} else {
 			b.data = gen
-			fsys2, err := instantiate(gen, w.rapool, fsys, name)
+			fsys2, err := instantiate(gen, fsys.rapool, subsys, subname)
 			if err != nil { // should this be remembered as a permanent error?
 				return nil, err
 			}
@@ -152,22 +152,22 @@ func (w *w) whatArchive(fsys fs.FS, name string) (fs.FS, error) {
 	}
 }
 
-func (w *w) getB(fsys fs.FS, name string) *b {
-	w.bMu.RLock()
-	x, ok := w.burrows[key{fsys, name}]
-	w.bMu.RUnlock()
+func (fsys *FS) getB(subsys fs.FS, subname string) *b {
+	fsys.bMu.RLock()
+	x, ok := fsys.burrows[key{subsys, subname}]
+	fsys.bMu.RUnlock()
 
 	if ok {
 		return x
 	}
 
-	w.bMu.Lock()
-	x, ok = w.burrows[key{fsys, name}]
+	fsys.bMu.Lock()
+	x, ok = fsys.burrows[key{subsys, subname}]
 	if !ok { // recheck because we relinquished the lock
 		x = new(b)
-		w.burrows[key{fsys, name}] = x
+		fsys.burrows[key{subsys, subname}] = x
 	}
-	w.bMu.Unlock()
+	fsys.bMu.Unlock()
 
 	return x
 }

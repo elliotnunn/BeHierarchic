@@ -19,8 +19,8 @@ import (
 	"github.com/therootcompany/xz"
 )
 
-func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
-	f, err := fsys.Open(name)
+func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error) {
+	f, err := subsys.Open(subname)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func(r io.ReaderAt) (fs.FS, error) {
 			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(name), ".gz .gzip .tgz=.tar"),
+				Name: changeSuffix(path.Base(subname), ".gz .gzip .tgz=.tar"),
 				Size: sizeUnknown,
 				FileOpener: func() (io.Reader, error) {
 					return gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
@@ -55,7 +55,7 @@ func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
 	case matchAt("BZ", 0): // bzip2
 		return func(r io.ReaderAt) (fs.FS, error) {
 			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(name), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar"),
+				Name: changeSuffix(path.Base(subname), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar"),
 				Size: sizeUnknown,
 				FileOpener: func() (io.Reader, error) {
 					return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64)), nil
@@ -65,7 +65,7 @@ func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
 	case matchAt("\xfd7zXZ\x00", 0): // xz
 		return func(r io.ReaderAt) (fs.FS, error) {
 			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(name), ".xz .txz=.tar"),
+				Name: changeSuffix(path.Base(subname), ".xz .txz=.tar"),
 				Size: sizeUnknown,
 				FileOpener: func() (io.Reader, error) {
 					return xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
@@ -75,7 +75,7 @@ func (w *w) probeArchive(fsys fs.FS, name string) (fsysGenerator, error) {
 	case matchAt("ER", 0): // Apple Partition Map
 		return func(r io.ReaderAt) (fs.FS, error) { return apm.New(r) }, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := w.tryToGetSize(fsys, name)
+		s, err := fsys.tryToGetSize(subsys, subname)
 		if err != nil {
 			return nil, err
 		}

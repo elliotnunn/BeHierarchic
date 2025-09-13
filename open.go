@@ -11,7 +11,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/spinner"
 )
 
-func (w *w) Open(name string) (fs.File, error) {
+func (fsys *FS) Open(name string) (fs.File, error) {
 	// Cases to cover:
 	// - all files must implement io.ReaderAt
 	// - all directories must have mountpoints added to their listing
@@ -21,12 +21,12 @@ func (w *w) Open(name string) (fs.File, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	fsys, subpath, err := w.resolve(name)
+	subsys, subname, err := fsys.resolve(name)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := fsys.Open(subpath)
+	f, err := subsys.Open(subname)
 	if err != nil {
 		return nil, err // would be nice to make this more informative
 	}
@@ -40,11 +40,11 @@ func (w *w) Open(name string) (fs.File, error) {
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
-			f = &file{w: w, name: name, obj: f, rdr: w.rapool.ReaderAt(fsys, subpath)}
+			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(subsys, subname)}
 		}
 	case fs.ModeDir:
 		if !suppressSpecialSiblings {
-			f = &dir{obj: f.(fs.ReadDirFile), w: w, name: name}
+			f = &dir{obj: f.(fs.ReadDirFile), fsys: fsys, name: name}
 		}
 	}
 	return f, nil
@@ -52,7 +52,7 @@ func (w *w) Open(name string) (fs.File, error) {
 
 type dir struct {
 	obj   fs.ReadDirFile
-	w     *w
+	fsys  *FS
 	name  string
 	list  []fs.DirEntry
 	lseek int
@@ -63,7 +63,7 @@ func (d *dir) Read(p []byte) (int, error) { return 0, io.EOF }
 
 type file struct {
 	name string
-	w    *w
+	fsys *FS
 	obj  fs.File
 	rdr  spinner.ReaderAt
 	seek int64

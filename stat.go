@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-func (d *dir) Stat() (fs.FileInfo, error)  { return d.w.Stat(d.name) }
-func (f *file) Stat() (fs.FileInfo, error) { return f.w.Stat(f.name) }
+func (d *dir) Stat() (fs.FileInfo, error)  { return d.fsys.Stat(d.name) }
+func (f *file) Stat() (fs.FileInfo, error) { return f.fsys.Stat(f.name) }
 
-func (w *w) Stat(name string) (fs.FileInfo, error) {
+func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
 	// Special cases to cover:
 	// - a mountpoint: it should not return a name of "."
 	// - a file that doesn't know its own size (e.g. a gzip)
@@ -19,29 +19,29 @@ func (w *w) Stat(name string) (fs.FileInfo, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	fsys, subname, err := w.resolve(name)
+	subsys, subname, err := fsys.resolve(name)
 	if err != nil {
 		return nil, err
 	}
 	imgname, isMountpoint := strings.CutSuffix(name, Special)
 
 	if isMountpoint {
-		fsys, subname, err = w.resolve(imgname)
+		subsys, subname, err = fsys.resolve(imgname)
 		if err != nil {
 			panic("why can't I resolve an image that exists?")
 		}
-		imgStat, err := fs.Stat(fsys, subname)
+		imgStat, err := fs.Stat(subsys, subname)
 		if err != nil {
 			return nil, err
 		}
 		return mountpointStat{FileInfo: imgStat, name: path.Base(name)}, nil
 	} else {
-		stat, err := fs.Stat(fsys, subname)
+		stat, err := fs.Stat(subsys, subname)
 		if err != nil {
 			return nil, err
 		}
 		if stat.Size() == sizeUnknown {
-			return sizeDeferredStat{stat, w.rapool.ReaderAt(fsys, subname)}, nil
+			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(subsys, subname)}, nil
 		} else {
 			return stat, nil
 		}
@@ -76,14 +76,14 @@ type fileInfoWithoutSize interface {
 }
 
 // Slightly ugly, for when we need the size right away but have discarded the full path
-func (w *w) tryToGetSize(fsys fs.FS, name string) (int64, error) {
-	stat, err := fs.Stat(fsys, name)
+func (fsys *FS) tryToGetSize(subsys fs.FS, subname string) (int64, error) {
+	stat, err := fs.Stat(subsys, subname)
 	if err != nil {
 		return 0, err
 	}
 	size := stat.Size()
 	if size == sizeUnknown {
-		return w.rapool.ReaderAt(fsys, name).Size(), nil
+		return fsys.rapool.ReaderAt(subsys, subname).Size(), nil
 	} else {
 		return size, nil
 	}
