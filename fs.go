@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/elliotnunn/BeHierarchic/spinner"
+	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
 const Special = "◆"

@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/elliotnunn/BeHierarchic/spinner"
+	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
 func (fsys *FS) Open(name string) (fs.File, error) {
