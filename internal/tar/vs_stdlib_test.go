@@ -41,7 +41,7 @@ func TestVsStandardLibrary(t *testing.T) {
 			for name, theirValue := range theirFiles {
 				ourValue, ok := ourFiles[name]
 				if !ok {
-					t.Errorf("our implementation missing a %s: %q", strings.SplitN(ourValue, "=", 2)[0], name)
+					t.Errorf("our implementation missing a %s: %q", strings.SplitN(theirValue, "=", 2)[0], name)
 				} else if theirValue != ourValue {
 					if len(theirValue) > 100 {
 						theirValue = theirValue[:100] + "..."

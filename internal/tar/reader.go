@@ -28,8 +28,7 @@ func New(r io.ReaderAt) (*FS, error) {
 	var gnuLongName, gnuLongLink string
 	var rawHdr block
 	off := int64(0)
-	tree := make(map[any][]fskeleton.File)
-	phantoms := make(map[string]byte) // dirs to invent, &1 means want, &2 means got
+	fsys := fskeleton.New()
 
 	for {
 		n, err := r.ReadAt(rawHdr[:], off)
@@ -118,59 +117,32 @@ func New(r io.ReaderAt) (*FS, error) {
 				nextHeader = (nextHeader + blockSize - 1) & -blockSize
 			}
 
+			cleanPath := strings.TrimLeft(path.Clean(hdr.Name), "/")
+			if cleanPath == "" {
+				cleanPath = "."
+			}
+
 			// The two main differences from archive/tar: random access and io/fs support
 			reader, logisize := readerFromSparseHoles(r, off, hdr.Size, sph)
-			addToTree(tree, phantoms, hdr, reader, logisize)
+			switch hdr.Typeflag {
+			case TypeReg, TypeGNUSparse:
+				fsys.CreateRandomAccessFile(cleanPath, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+			case TypeDir:
+				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+			case TypeSymlink:
+				targ := path.Join(cleanPath, "..", hdr.Linkname)
+				if targ == ".." || strings.HasPrefix(targ, "../") {
+					targ = ""
+				}
+				fsys.CreateSymlink(cleanPath, targ, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+			}
 
 			gnuLongLink, gnuLongName, paxHdrs = "", "", nil
 		}
 		off = nextHeader
 	}
-
-	// tarballs can list files without their containing directories, fix this
-	for name, v := range phantoms {
-		if v == 1 {
-			dir, base := splitPath(name)
-			tree[dir] = append(tree[dir], fskeleton.File{Mode: fs.ModeDir, Name: base, MapKey: name})
-		}
-	}
-
-	tree[nil] = []fskeleton.File{{Mode: fs.ModeDir, MapKey: "."}}
-	return &FS{fskeleton.Make(tree)}, nil
-}
-
-func addToTree(tree map[any][]fskeleton.File, phantoms map[string]byte, hdr *Header, reader io.ReaderAt, size int64) {
-	fi := hdr.FileInfo()
-	cleanPath := strings.TrimLeft(path.Clean(hdr.Name), "/")
-	if cleanPath == "" {
-		return
-	}
-	phantoms[cleanPath] |= 2
-	dir, base := splitPath(cleanPath)
-	f := fskeleton.File{
-		Name:    base,
-		Mode:    fi.Mode(),
-		ModTime: fi.ModTime(),
-		Size:    size,
-		Sys:     hdr,
-	}
-
-	switch {
-	case fi.Mode().IsDir():
-		f.MapKey = cleanPath
-	case fi.Mode()&fs.ModeSymlink != 0:
-		f.Link = fskeleton.CleanLinkTarget(cleanPath, hdr.Linkname)
-	case fi.Mode().IsRegular():
-		f.FileOpener = opener{reader}
-	default:
-		return // unsupported
-	}
-	tree[dir] = append(tree[dir], f)
-
-	for dir != "." {
-		phantoms[dir] |= 1
-		dir, _ = splitPath(dir)
-	}
+	fsys.NoMore()
+	return &FS{fsys}, nil
 }
 
 // Split according to the io/fs rules:
