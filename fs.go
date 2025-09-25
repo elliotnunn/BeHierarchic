@@ -58,10 +58,10 @@ func (fsys *FS) resolve(name string) (subsys fs.FS, subname string, err error) {
 
 	subsys = fsys.root
 	for _, el := range warps {
-		subsubsys, err := fsys.whatArchive(subsys, el)
+		isar, subsubsys, err := fsys.getArchive(subsys, el, true)
 		if err != nil {
 			return nil, "", err
-		} else if subsubsys == nil {
+		} else if !isar {
 			return nil, "", fs.ErrNotExist
 		}
 		subsys = subsubsys
@@ -90,65 +90,38 @@ func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, n
 	return fsys2, nil
 }
 
-func (fsys *FS) isArchive(subsys fs.FS, subname string) (bool, error) {
+func (fsys *FS) getArchive(subsys fs.FS, subname string, needFS bool) (bool, fs.FS, error) {
 	b := fsys.getB(subsys, subname)
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	switch b.data.(type) {
-	case notAnArchive:
-		return false, nil
-	case fsysGenerator, fs.FS:
-		return true, nil
+again:
+	switch t := b.data.(type) {
 	default: // not yet decided
 		gen, err := fsys.probeArchive(subsys, subname)
 		if err != nil {
-			return false, err
+			return false, nil, err
 		}
 		if gen == nil {
 			b.data = notAnArchive{}
-			return false, nil
 		} else {
 			b.data = gen
-			return true, nil
 		}
-	}
-}
-
-func (fsys *FS) whatArchive(subsys fs.FS, subname string) (fs.FS, error) {
-	b := fsys.getB(subsys, subname)
-	b.lock.Lock()
-	defer b.lock.Unlock()
-
-	switch t := b.data.(type) {
+		goto again
 	case notAnArchive:
-		return nil, nil
+		return false, nil, nil
 	case fs.FS:
-		return t, nil
+		return true, t, nil
 	case fsysGenerator:
+		if !needFS {
+			return true, nil, nil
+		}
 		fsys2, err := instantiate(t, fsys.rapool, subsys, subname)
 		if err != nil { // should this be remembered as a permanent error?
-			return nil, err
+			return false, nil, err
 		}
 		b.data = fsys2
-		return fsys2, nil
-	default: // not yet decided
-		gen, err := fsys.probeArchive(subsys, subname)
-		if err != nil {
-			return nil, err
-		}
-		if gen == nil {
-			b.data = notAnArchive{}
-			return nil, nil
-		} else {
-			b.data = gen
-			fsys2, err := instantiate(gen, fsys.rapool, subsys, subname)
-			if err != nil { // should this be remembered as a permanent error?
-				return nil, err
-			}
-			b.data = fsys2
-			return fsys2, nil
-		}
+		goto again
 	}
 }
 
