@@ -49,17 +49,53 @@ func (fsys FS) CreateFile(name string, open OpenFunc, size int64, mode fs.FileMo
 	return fsys.create(name, nu)
 }
 
-// CreateRandomAccessFile is like CreateFile, but when opened, the [fs.File] will also satisfy [io.ReadSeeker] and [io.ReaderAt].
-func (fsys FS) CreateRandomAccessFile(name string, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+// CreateErrorFile creates a file that always returns the error of your choice on Read (but not on Close).
+func (fsys FS) CreateErrorFile(name string, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	fn := func(stub fs.File) (fs.File, error) {
-		return raFile{raMetadata: stub, raData: io.NewSectionReader(r, 0, size)}, nil
+		return rFile{metadata: stub, Reader: errorReader{err}}, nil
 	}
 	nu := &fileent{name: strings.Clone(path.Base(name)),
 		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
 	return fsys.create(name, nu)
 }
 
-type raMetadata interface {
+type errorReader struct{ err error }
+
+func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
+
+// CreateSequentialFile is like CreateFile, but sorts out the simple stuff for you.
+func (fsys FS) CreateSequentialFile(name string, r func() io.Reader, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	fn := func(stub fs.File) (fs.File, error) {
+		return rFile{metadata: stub, Reader: r()}, nil
+	}
+	nu := &fileent{name: strings.Clone(path.Base(name)),
+		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
+	return fsys.create(name, nu)
+}
+
+type rFile struct {
+	io.Reader
+	metadata
+}
+
+func (f rFile) Close() error {
+	if closer, ok := f.Reader.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+// CreateRandomAccessFile is like CreateFile, but when opened, the [fs.File] will also satisfy [io.ReadSeeker] and [io.ReaderAt].
+func (fsys FS) CreateRandomAccessFile(name string, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	fn := func(stub fs.File) (fs.File, error) {
+		return raFile{metadata: stub, raData: io.NewSectionReader(r, 0, size)}, nil
+	}
+	nu := &fileent{name: strings.Clone(path.Base(name)),
+		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
+	return fsys.create(name, nu)
+}
+
+type metadata interface {
 	Stat() (fs.FileInfo, error)
 }
 
@@ -70,7 +106,7 @@ type raData interface {
 }
 
 type raFile struct {
-	raMetadata
+	metadata
 	raData
 }
 
