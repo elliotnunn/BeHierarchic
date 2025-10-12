@@ -123,14 +123,15 @@ func TestComplex(t *testing.T) {
 		}
 
 		// The test image zeroes out every fork except the last byte
-		expectLastByte := byte(stat.Sys().(uint32)) // Last byte of fork = low byte of CNID
+		cnid := stat.Sys().(interface{ Inode() uint64 }).Inode()
+		expectLastByte := byte(cnid) // Last byte of fork = low byte of CNID
 		if strings.Contains("/"+p, "/._") {
 			data = appleDoubleResFork(data)
 			expectLastByte = ^expectLastByte // But ones-complement for resource forks
 		}
 		if len(data) > 0 && data[len(data)-1] != expectLastByte {
-			t.Errorf("%s: last byte expected %#02x got %#02x",
-				p, expectLastByte, data[len(data)-1])
+			t.Errorf("%s: last byte expected %#02x (derived from cnid %08x) got %#02x",
+				p, expectLastByte, cnid, data[len(data)-1])
 		}
 
 		return nil

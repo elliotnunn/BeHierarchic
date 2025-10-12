@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unique"
 )
 
 var _ node = new(dirent)
@@ -21,7 +22,7 @@ func newDir() *dirent {
 }
 
 type dirent struct {
-	name string
+	name unique.Handle[string]
 
 	iCond   *sync.Cond
 	iOK     bool
@@ -66,7 +67,7 @@ func (d *dirent) implicitSubdir(name string) (*dirent, error) {
 	if got, exist := d.chm[name]; !exist {
 		name = strings.Clone(name)
 		got := newDir()
-		got.name = name
+		got.name = unique.Make(name)
 		d.chm[name] = got
 		d.chs = append(d.chs, got)
 		d.cCond.Broadcast()
@@ -135,7 +136,7 @@ func (d *dirent) noMore(recursive bool) {
 }
 
 // common to fs.DirEntry and fs.FileInfo
-func (d *dirent) Name() string { return d.name }
+func (d *dirent) Name() string { return d.name.Value() }
 func (d *dirent) IsDir() bool  { return true }
 
 // fs.DirEntry

@@ -6,12 +6,13 @@ package fskeleton
 import (
 	"io/fs"
 	"time"
+	"unique"
 )
 
 var _ node = new(linkent) // check satisfies interface
 
 type linkent struct {
-	name    string
+	name    unique.Handle[string]
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
@@ -21,7 +22,7 @@ type linkent struct {
 func (l *linkent) open() (fs.File, error) { panic("never open symlink") }
 
 // common to fs.DirEntry and fs.FileInfo
-func (l *linkent) Name() string { return l.name }
+func (l *linkent) Name() string { return l.name.Value() }
 func (l *linkent) IsDir() bool  { return false }
 
 // fs.DirEntry

@@ -83,7 +83,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		return func(r io.ReaderAt) (fs.FS, error) { return sit.New(r) }, nil
 	case matchAt("ustar\x00\x30\x30", 257), matchAt("ustar\x20\x20\x00", 257): // posix tar
-		return func(r io.ReaderAt) (fs.FS, error) { return tar.New(r) }, nil
+		return func(r io.ReaderAt) (fs.FS, error) { return tar.New(r), nil }, nil
 	case matchAt("BD", 1024):
 		return func(r io.ReaderAt) (fs.FS, error) { return hfs.New(r) }, nil
 	}

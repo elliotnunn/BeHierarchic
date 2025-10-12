@@ -6,10 +6,14 @@ package main
 import (
 	"io"
 	"io/fs"
+	"log/slog"
+	"path"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
+	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
 const Special = "◆"
@@ -143,4 +147,31 @@ func (fsys *FS) getB(subsys fs.FS, subname string) *b {
 	fsys.bMu.Unlock()
 
 	return x
+}
+
+func (fsys *FS) Prefetch() {
+	slog.Info("prefetchStart")
+	fsys.prefetch(fsys.root, ".", runtime.NumCPU())
+	slog.Info("prefetchStop")
+}
+
+func (fsys *FS) prefetch(subsys fs.FS, infoname string, concurrency int) {
+	waysort, files := walk.FilesInDiskOrder(subsys)
+	slog.Info("prefetchDir", "path", infoname, "sortorder", waysort)
+
+	wg := new(sync.WaitGroup)
+	wg.Add(concurrency)
+	for range concurrency {
+		go func() {
+			for name := range files {
+				isar, subsubsys, _ := fsys.getArchive(subsys, name, true)
+				if isar {
+					subname := path.Join(infoname, name+Special)
+					fsys.prefetch(subsubsys, subname, 1) // no sub concurrency, is that a good idea?
+				}
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }

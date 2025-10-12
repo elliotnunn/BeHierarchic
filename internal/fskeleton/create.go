@@ -12,15 +12,20 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unique"
 )
 
-func New() FS {
-	fsys := FS{newDir()}
-	fsys.root.name = "."
-	return fsys
+func New() *FS {
+	fsys := FS{root: newDir()}
+	fsys.root.name = unique.Make(".")
+	fsys.walkstuff.init()
+	return &fsys
 }
 
-type FS struct{ root *dirent }
+type FS struct {
+	root *dirent
+	walkstuff
+}
 
 type OpenFunc func(fs.File) (fs.File, error)
 
@@ -30,9 +35,9 @@ type OpenFunc func(fs.File) (fs.File, error)
 // Implicit directories can later be made explicit (only once) with [FS.CreateDir].
 //
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys any) error {
+func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys any) error {
 	nu := newDir()
-	nu.name, nu.mode, nu.modtime, nu.sys = strings.Clone(path.Base(name)), mode, mtime, sys
+	nu.name, nu.mode, nu.modtime, nu.sys = unique.Make(path.Base(name)), mode, mtime, sys
 	nu.iOK = true
 	return fsys.create(name, nu)
 }
@@ -43,20 +48,23 @@ func (fsys FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys any
 // Implicit directories can later be made explicit (only once) with [FS.CreateDir].
 //
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys FS) CreateFile(name string, open OpenFunc, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	nu := &fileent{name: strings.Clone(path.Base(name)),
+func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	nu := &fileent{name: unique.Make(path.Base(name)),
 		size: size, mode: mode, modtime: mtime, sys: sys, opener: open}
-	return fsys.create(name, nu)
+	err := fsys.create(name, nu)
+	if err != nil {
+		return err
+	}
+	fsys.walkstuff.put(name, order)
+	return nil
 }
 
 // CreateErrorFile creates a file that always returns the error of your choice on Read (but not on Close).
-func (fsys FS) CreateErrorFile(name string, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+func (fsys *FS) CreateErrorFile(name string, order int64, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	fn := func(stub fs.File) (fs.File, error) {
 		return rFile{metadata: stub, Reader: errorReader{err}}, nil
 	}
-	nu := &fileent{name: strings.Clone(path.Base(name)),
-		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
-	return fsys.create(name, nu)
+	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
 }
 
 type errorReader struct{ err error }
@@ -64,13 +72,11 @@ type errorReader struct{ err error }
 func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
 
 // CreateSequentialFile is like CreateFile, but sorts out the simple stuff for you.
-func (fsys FS) CreateSequentialFile(name string, r func() io.Reader, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+func (fsys *FS) CreateSequentialFile(name string, order int64, r func() io.Reader, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	fn := func(stub fs.File) (fs.File, error) {
 		return rFile{metadata: stub, Reader: r()}, nil
 	}
-	nu := &fileent{name: strings.Clone(path.Base(name)),
-		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
-	return fsys.create(name, nu)
+	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
 }
 
 type rFile struct {
@@ -85,14 +91,12 @@ func (f rFile) Close() error {
 	return nil
 }
 
-// CreateRandomAccessFile is like CreateFile, but when opened, the [fs.File] will also satisfy [io.ReadSeeker] and [io.ReaderAt].
-func (fsys FS) CreateRandomAccessFile(name string, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+// CreateRandomAccessFile is like CreateSequentialFile, but when opened, the [fs.File] will also satisfy [io.ReadSeeker] and [io.ReaderAt].
+func (fsys *FS) CreateRandomAccessFile(name string, order int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	fn := func(stub fs.File) (fs.File, error) {
 		return raFile{metadata: stub, raData: io.NewSectionReader(r, 0, size)}, nil
 	}
-	nu := &fileent{name: strings.Clone(path.Base(name)),
-		size: size, mode: mode, modtime: mtime, sys: sys, opener: fn}
-	return fsys.create(name, nu)
+	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
 }
 
 type metadata interface {
@@ -121,11 +125,11 @@ func (raFile) Close() error { return nil }
 //
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
 // There is no need to set the the [fs.ModeSymlink] bit.
-func (fsys FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.Time, sys any) error {
+func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.Time, sys any) error {
 	if !fs.ValidPath(target) {
 		return fs.ErrInvalid
 	}
-	nu := &linkent{name: strings.Clone(path.Base(name)),
+	nu := &linkent{name: unique.Make(path.Base(name)),
 		target: target, mode: mode, modtime: mtime, sys: sys}
 	return fsys.create(name, nu)
 }
@@ -136,7 +140,7 @@ func (fsys FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.T
 // NoMoreChildren unblocks any blocked [fs.ReadDirFile.ReadDir] calls on the specified directory.
 //
 // As a special case, if ".." is specified, then CreateDir on the root "." will be ignored.
-func (fsys FS) NoMoreChildren(name string) error {
+func (fsys *FS) NoMoreChildren(name string) error {
 	if name == ".." {
 		fsys.root.iCond.L.Lock()
 		fsys.root.iOK = true
@@ -164,7 +168,8 @@ func (fsys FS) NoMoreChildren(name string) error {
 // NoMore prevents all future Create*() calls, which will fail with an error wrapping [fs.ErrPermission].
 //
 // NoMore unblocks any blocked [fs.ReadDirFile.ReadDir] calls.
-func (fsys FS) NoMore() {
+func (fsys *FS) NoMore() {
+	fsys.walkstuff.done()
 	fsys.root.iCond.L.Lock()
 	fsys.root.iOK = true
 	fsys.root.iCond.Broadcast()
@@ -178,7 +183,7 @@ type node interface {
 	open() (fs.File, error)
 }
 
-func (fsys FS) create(name string, node node) error {
+func (fsys *FS) create(name string, node node) error {
 	comps, err := checkSplit(name)
 	if err != nil {
 		return err

@@ -149,7 +149,7 @@ func expectStr(t *testing.T, want, got string) {
 }
 
 // appends "..." if the list function blocked
-func listDir(fsys fs.FS, name string) string {
+func listDir(fsys *FS.FS, name string) string {
 	f, err := fsys.Open(name)
 	if err != nil {
 		return "!" + err.Error()

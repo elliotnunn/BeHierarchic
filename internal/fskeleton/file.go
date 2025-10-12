@@ -7,12 +7,13 @@ import (
 	"io"
 	"io/fs"
 	"time"
+	"unique"
 )
 
 var _ node = new(fileent) // check satisfies interface
 
 type fileent struct {
-	name    string
+	name    unique.Handle[string]
 	size    int64
 	mode    fs.FileMode
 	modtime time.Time
@@ -23,7 +24,7 @@ type fileent struct {
 func (f *fileent) open() (fs.File, error) { return f.opener(f) }
 
 // common to fs.DirEntry and fs.FileInfo
-func (f *fileent) Name() string { return f.name }
+func (f *fileent) Name() string { return f.name.Value() }
 func (f *fileent) IsDir() bool  { return false }
 
 // fs.DirEntry

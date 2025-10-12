@@ -43,6 +43,7 @@ func cmdLine(args []string) error {
 		return fmt.Errorf("%s: not a directory", path)
 	}
 	fsys := Wrapper(os.DirFS(path))
+	go fsys.Prefetch()
 
 	http.Handle("/", &webdavfs.Handler{FS: fsys})
 

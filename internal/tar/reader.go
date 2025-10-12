@@ -17,18 +17,18 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 )
 
-type FS struct {
-	fskeleton.FS
+func New(r io.ReaderAt) fs.FS {
+	fsys := fskeleton.New()
+	go populate(fsys, r) // yes, discard the error
+	return fsys
 }
 
-func (fsys *FS) Open(name string) (fs.File, error) { return fsys.FS.Open(name) }
-
-func New(r io.ReaderAt) (*FS, error) {
+func populate(fsys *fskeleton.FS, r io.ReaderAt) error {
+	defer fsys.NoMore()
 	var paxHdrs map[string]string
 	var gnuLongName, gnuLongLink string
 	var rawHdr block
 	off := int64(0)
-	fsys := fskeleton.New()
 
 	for {
 		n, err := r.ReadAt(rawHdr[:], off)
@@ -36,7 +36,7 @@ func New(r io.ReaderAt) (*FS, error) {
 			if err == io.EOF {
 				break
 			} else {
-				return nil, err
+				return err
 			}
 		}
 		off += int64(len(rawHdr))
@@ -45,7 +45,7 @@ func New(r io.ReaderAt) (*FS, error) {
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			return nil, err
+			return err
 		}
 
 		size := hdr.Size
@@ -60,13 +60,13 @@ func New(r io.ReaderAt) (*FS, error) {
 		case TypeXHeader:
 			paxHdrs, err = parsePAX(io.NewSectionReader(r, off, size))
 			if err != nil {
-				return nil, err
+				return err
 			}
 			// This is a meta header affecting the next header
 		case TypeGNULongName, TypeGNULongLink:
 			realname, err := readSpecialFile(io.NewSectionReader(r, off, size))
 			if err != nil {
-				return nil, err
+				return err
 			}
 			var p parser
 			switch hdr.Typeflag {
@@ -81,7 +81,7 @@ func New(r io.ReaderAt) (*FS, error) {
 			// just a regular file with additional attributes.
 
 			if err := mergePAX(hdr, paxHdrs); err != nil {
-				return nil, err
+				return err
 			}
 			if gnuLongName != "" {
 				hdr.Name = gnuLongName
@@ -101,7 +101,7 @@ func New(r io.ReaderAt) (*FS, error) {
 			moreHdr := io.NewSectionReader(r, off, math.MaxInt64)
 			sph, err := getSparseHoles(hdr, &rawHdr, moreHdr)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			extendedHeader, _ := moreHdr.Seek(0, io.SeekCurrent)
 
@@ -126,7 +126,7 @@ func New(r io.ReaderAt) (*FS, error) {
 			reader, logisize := readerFromSparseHoles(r, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
-				fsys.CreateRandomAccessFile(cleanPath, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+				fsys.CreateRandomAccessFile(cleanPath, 0, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
 			case TypeDir:
 				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
 			case TypeSymlink:
@@ -141,8 +141,7 @@ func New(r io.ReaderAt) (*FS, error) {
 		}
 		off = nextHeader
 	}
-	fsys.NoMore()
-	return &FS{fsys}, nil
+	return nil
 }
 
 // Split according to the io/fs rules:
