@@ -3,7 +3,9 @@ package sit
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"path"
 	"strings"
@@ -125,15 +127,20 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 	}
 
 	for {
-		hdrdata, err := io.ReadAll(io.NewSectionReader(disk, offset, 112))
-		if err == nil && !checkCRC16(hdrdata, 110) {
+		hdrdata := make([]byte, 112)
+		n, err := disk.ReadAt(hdrdata, offset)
+		if n == len(hdrdata) {
+			err = nil
+		}
+		err = cvtEOF(err)
+		if err == nil && calcCRC16(hdrdata[:110]) != binary.BigEndian.Uint16(hdrdata[110:]) {
 			err = ErrChecksum
 		}
 
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			slog.Warn("StuffIt read error", "err", err)
+			slog.Warn("StuffIt read error", "err", err, "offset", offset)
 			return
 		}
 
@@ -151,4 +158,12 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 	for _, rec := range pass2 {
 		handleRecord(rec.offset, rec.hdr)
 	}
+}
+
+// ReadAt returns ErrInvalid when offset > filesize
+func cvtEOF(err error) error {
+	if errors.Is(err, fs.ErrInvalid) {
+		err = io.EOF
+	}
+	return err
 }

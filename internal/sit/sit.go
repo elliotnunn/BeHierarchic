@@ -69,7 +69,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		buf, err = creepTo(buf, r, 22)
 		if err != nil {
 			return nil, eof2formaterr(err)
-		} else if string(buf[10:14]) != "rLau" || string(buf[18:20]) != "\x00\x16" {
+		} else if string(buf[10:14]) != "rLau" {
 			return nil, ErrFormat
 		}
 		// seems to be a CRC16 at offset 20 but I cannot get it to match... no matter
@@ -92,11 +92,17 @@ func creepTo(buf []byte, reader io.Reader, to int) ([]byte, error) {
 }
 
 func creepBy(buf []byte, reader io.Reader, by int) ([]byte, error) {
+	if by < 0 {
+		return buf, errors.New("invalid structure length")
+	}
 	buf = slices.Grow(buf, by)
 	n, err := io.ReadFull(reader, buf[len(buf):len(buf)+by])
 	buf = buf[:len(buf)+n]
 	switch err {
 	case nil: //ok
+		if n != by {
+			panic("unreachable")
+		}
 		return buf, nil
 	case io.ErrUnexpectedEOF, io.EOF:
 		return buf, io.EOF

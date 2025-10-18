@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"path"
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
@@ -15,6 +16,7 @@ import (
 type file struct {
 	Offset         int64
 	Common         commonHeader
+	Comment        string
 	OS             any    // headerMac or headerWin or nil
 	DCrypt, RCrypt string // the arbitrary password data
 	Name           string
@@ -84,10 +86,12 @@ func newFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 	)
 	for {
 		f, err := headers(disk, offset)
+		err = cvtEOF(err)
 		if err == io.EOF {
 			break
 		} else if err != nil {
-			slog.Warn("StuffIt read error", "err", err)
+			slog.Warn("StuffIt read error", "err", err, "offset", offset)
+			return
 		}
 
 		ok := addToFS(fsys, f, disk, known)
@@ -117,6 +121,7 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 	var meta appledouble.AppleDouble
 	meta.CreateTime = appledouble.MacTime(f.Common.CrTime)
 	meta.ModTime = appledouble.MacTime(f.Common.ModTime)
+	meta.Comment = f.Comment
 
 	var macstuff headerMac
 	if m, ok := f.OS.(headerMac); ok {
@@ -172,46 +177,25 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 // Tricky and delicate task to read this variable-sized data structure
 func headers(r io.ReaderAt, offset int64) (f file, err error) {
 	f.Offset = offset
-	var buf, nubuf []byte
-	extend := func(tolen int) {
-		nubuf = make([]byte, tolen-len(buf))
-		n, myerr := 0, error(nil)
-		if len(nubuf) > 0 {
-			n, myerr = r.ReadAt(nubuf, offset+int64(len(buf)))
-		}
-		if n != len(nubuf) {
-			err = myerr
-			return
-		}
-		buf = append(buf, nubuf...)
-		err = nil
-	}
 
 	// The basic common buffer
-	extend(48)
+	reader := io.NewSectionReader(r, offset, math.MaxInt64)
+	buf, err := creepTo(nil, reader, 8)
 	if err != nil {
 		return
 	} else if string(buf[:4]) != "\xA5\xA5\xA5\xA5" {
-		err = fmt.Errorf("expected a file header at %#x", offset-int64(len(buf)))
+		err = ErrFormat
 		return
 	}
-	binary.Read(bytes.NewReader(buf), binary.BigEndian, &f.Common)
-
-	// The arbitrary bytes of encryption info (for the data fork)
-	if f.Common.Typ&0x40 == 0 {
-		extend(len(buf) + int(f.Common.Data.CryptBytes))
-		if err != nil {
-			return
-		}
-		f.DCrypt = string(nubuf)
+	structsize := int(binary.BigEndian.Uint16(buf[6:]))
+	if structsize < 48 {
+		err = ErrFormat
+		return
 	}
-
-	// The arbitrary name bytes
-	extend(len(buf) + int(f.Common.NameLen))
+	buf, err = creepTo(buf, reader, structsize)
 	if err != nil {
 		return
 	}
-	f.Name = string(nubuf)
 
 	// Checksum that encompasses both of these
 	if !checkCRC16(buf, 32) {
@@ -219,19 +203,49 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 		return
 	}
 
-	// Now reset the accumulator and read the OS-specific header
-	offset += int64(len(buf))
-	buf, nubuf = nil, nil
+	binary.Read(bytes.NewReader(buf), binary.BigEndian, &f.Common)
 
+	// The arbitrary bytes of encryption info (for the data fork)
+	tail := buf[48:]
+	if f.Common.Typ&0x40 == 0 {
+		if len(tail) < int(f.Common.Data.CryptBytes) {
+			err = ErrFormat
+			return
+		}
+		f.DCrypt = string(tail[:f.Common.Data.CryptBytes])
+		tail = tail[f.Common.Data.CryptBytes:]
+	}
+
+	// The arbitrary name bytes
+	if len(tail) < int(f.Common.NameLen) {
+		err = ErrFormat
+		return
+	}
+	f.Name = string(tail[:f.Common.NameLen])
+	tail = tail[f.Common.NameLen:]
+
+	// The comment (seems to be an afterthought)
+	if len(tail) > 4 {
+		commentsize := int(binary.BigEndian.Uint16(tail))
+		tail = tail[4:]
+		if commentsize > len(tail) {
+			err = ErrFormat
+			return
+		}
+		f.Comment = string(tail[:commentsize])
+	}
+
+	// Now reset the accumulator and read the OS-specific header
 	// Is there even going to be an OS-specific header?
+	f.HeaderEnd = f.Offset + int64(len(buf))
 	if f.Common.NameLen == 0 {
-		f.HeaderEnd = offset
 		return
 	}
 
 	switch f.Common.OS {
 	case 3: // windows
-		extend(32)
+		buf = nil
+		buf, err = creepTo(buf, reader, 32)
 		if err != nil {
 			return
 		}
@@ -242,25 +256,26 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 		var h2win headerWin
 		binary.Read(bytes.NewReader(buf), binary.BigEndian, &h2win)
 		f.OS = h2win
-		f.HeaderEnd = offset + int64(len(buf))
+		f.HeaderEnd += int64(len(buf))
 		return
 	case 1: // macintosh
-		extend(36)
+		buf = nil
+		buf, err = creepTo(buf, reader, 36)
 		if err != nil {
 			return
 		}
 		if buf[1]&1 != 0 { // we have a resource fork
-			extend(len(buf) + 14)
+			buf, err = creepTo(buf, reader, 50)
 			if err != nil {
 				return
 			}
 			// More arbitrary bytes of encryption info
-			if buf[49] != 0 {
-				extend(len(buf) + int(buf[49]))
+			if buf[47] != 0 {
+				buf, err = creepBy(buf, reader, int(buf[47]))
 				if err != nil {
 					return
 				}
-				f.RCrypt = string(nubuf)
+				f.RCrypt = string(buf[48:])
 			}
 		}
 		if !checkCRC16(buf, 2) {
@@ -270,7 +285,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 		var h2mac headerMac
 		binary.Read(bytes.NewReader(buf), binary.BigEndian, &h2mac)
 		f.OS = h2mac
-		f.HeaderEnd = offset + int64(len(buf))
+		f.HeaderEnd += int64(len(buf))
 		return
 	default:
 		err = fmt.Errorf("unknown OS code: %d", f.Common.OS)
