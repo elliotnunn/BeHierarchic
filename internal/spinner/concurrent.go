@@ -166,7 +166,9 @@ func (p *Pool) multiplexer() {
 
 				blk := j.off >> p.shift << p.shift
 				if got, ok := p.bcache.Get(ckey{j.id, blk}); ok {
-					j.n = copy(j.p, got[j.off-blk:])
+					if j.off < blk+int64(len(got)) {
+						j.n = copy(j.p, got[j.off-blk:])
+					}
 					close(j.wait)
 				} else {
 					if r.pending == nil {
@@ -190,7 +192,9 @@ func (p *Pool) multiplexer() {
 			p.bcache.Add(ckey{id, r.seek}, r.data)
 
 			for _, j := range r.pending[r.seek] { // satisfy waiting ReaderAts
-				j.n = copy(j.p, r.data[j.off-r.seek:])
+				if j.off < r.seek+int64(len(r.data)) {
+					j.n = copy(j.p, r.data[j.off-r.seek:])
+				}
 				if j.n < len(j.p) {
 					j.err = r.err
 				}
