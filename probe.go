@@ -10,10 +10,12 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"testing/iotest"
+	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
+	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
-	"github.com/elliotnunn/BeHierarchic/internal/singlefilefs"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
@@ -41,36 +43,55 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 		return len(header) >= offset+len(s) && string(header[offset:][:len(s)]) == s
 	}
 
+	getTime := func() time.Time {
+		s, err := f.Stat()
+		if err != nil {
+			return time.Time{}
+		}
+		return s.ModTime()
+	}
+
 	switch {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func(r io.ReaderAt) (fs.FS, error) {
-			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(subname), ".gz .gzip .tgz=.tar"),
-				Size: sizeUnknown,
-				FileOpener: func() (io.Reader, error) {
-					return gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
-				},
-			}, nil
+			innerName := changeSuffix(path.Base(subname), ".gz .gzip .tgz=.tar")
+			opener := func() io.Reader {
+				r, err := gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
+				if err != nil {
+					return iotest.ErrReader(err)
+				}
+				return r
+			}
+			fsys := fskeleton.New()
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.NoMore()
+			return fsys, nil
 		}, nil
 	case matchAt("BZ", 0): // bzip2
 		return func(r io.ReaderAt) (fs.FS, error) {
-			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(subname), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar"),
-				Size: sizeUnknown,
-				FileOpener: func() (io.Reader, error) {
-					return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64)), nil
-				},
-			}, nil
+			innerName := changeSuffix(path.Base(subname), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
+			opener := func() io.Reader {
+				return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
+			}
+			fsys := fskeleton.New()
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.NoMore()
+			return fsys, nil
 		}, nil
 	case matchAt("\xfd7zXZ\x00", 0): // xz
 		return func(r io.ReaderAt) (fs.FS, error) {
-			return &singlefilefs.FS{
-				Name: changeSuffix(path.Base(subname), ".xz .txz=.tar"),
-				Size: sizeUnknown,
-				FileOpener: func() (io.Reader, error) {
-					return xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
-				},
-			}, nil
+			innerName := changeSuffix(path.Base(subname), ".xz .txz=.tar")
+			opener := func() io.Reader {
+				r, err := xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
+				if err != nil {
+					return iotest.ErrReader(err)
+				}
+				return r
+			}
+			fsys := fskeleton.New()
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.NoMore()
+			return fsys, nil
 		}, nil
 	case matchAt("ER", 0): // Apple Partition Map
 		return func(r io.ReaderAt) (fs.FS, error) { return apm.New(r) }, nil
