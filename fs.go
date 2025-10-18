@@ -95,6 +95,13 @@ func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, n
 }
 
 func (fsys *FS) getArchive(subsys fs.FS, subname string, needFS bool) (bool, fs.FS, error) {
+	if subsys == fsys.root { // Undercooked files, do not touch
+		switch path.Ext(subname) {
+		case ".crdownload", ".part":
+			return false, nil, nil
+		}
+	}
+
 	b := fsys.getB(subsys, subname)
 	b.lock.Lock()
 	defer b.lock.Unlock()
