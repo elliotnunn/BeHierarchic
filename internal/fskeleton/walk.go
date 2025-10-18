@@ -47,16 +47,23 @@ func (w *walkstuff) done() {
 	w.stragglers = nil
 }
 
-func (w *walkstuff) Walk() iter.Seq[string] {
+func (w *walkstuff) WalkFiles() iter.Seq[string] {
 	return func(yield func(string) bool) {
 		w.Lock()
 
-		w.ensureSorted()
+		if w.full {
+			slices.SortStableFunc(w.list, func(a, b keyval) int { return cmp.Compare(a.key, b.key) })
+			w.sorted = true
+		}
 		for _, kv := range w.list {
 			if !yield(kv.val) {
 				w.Unlock()
 				return
 			}
+		}
+		if w.full {
+			w.Unlock()
+			return
 		}
 
 		ch := make(chan string)
@@ -65,17 +72,10 @@ func (w *walkstuff) Walk() iter.Seq[string] {
 
 		for s := range ch {
 			if !yield(s) {
+				for range ch {
+				} // waste the remainder
 				return
 			}
 		}
-		w.Unlock()
-	}
-}
-
-// does not do its own locking
-func (w *walkstuff) ensureSorted() {
-	if !w.sorted {
-		slices.SortStableFunc(w.list, func(a, b keyval) int { return cmp.Compare(a.key, b.key) })
-		w.sorted = true
 	}
 }

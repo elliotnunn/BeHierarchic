@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"fmt"
 	"io/fs"
+	"iter"
 	"path"
 	"sort"
 	"strings"
@@ -15,6 +16,14 @@ func FilesInDiskOrder(fsys fs.FS) (string, <-chan string) {
 	switch t := fsys.(type) {
 	default: // the exhaustive ReadDir case
 		return sortPaths(fsys, walkAsync(fsys))
+	case interface{ WalkFiles() iter.Seq[string] }:
+		go func() {
+			for pathname := range t.WalkFiles() {
+				ret <- pathname
+			}
+			close(ret)
+		}()
+		return "disk-order", ret
 	case *zip.Reader:
 		go func() {
 			for _, f := range t.File {
