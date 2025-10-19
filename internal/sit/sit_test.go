@@ -49,6 +49,12 @@ func TestAlgorithms(t *testing.T) {
 						t.Skip(err)
 					} else if err != nil {
 						t.Fatal(err)
+					} else if err == nil {
+						// try a second time to shake out statefulness bugs
+						_, err = fs.ReadFile(sit, innerpath) // try it a second time!
+						if err != nil {
+							t.Fatal("on the second read attempt only:", err)
+						}
 					}
 				})
 				return nil

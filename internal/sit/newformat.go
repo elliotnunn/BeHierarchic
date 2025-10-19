@@ -134,9 +134,11 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 		adfile, adlen := meta.ForDir()
 		fsys.CreateSequentialFile(appledouble.Sidecar(name), 0, adfile, adlen, 0, meta.ModTime, nil)
 	} else { // file
-		rRaw := io.NewSectionReader(disk, f.HeaderEnd, int64(macstuff.Rsrc.Packed))
+		rOffset := f.HeaderEnd
 		if macstuff.Rsrc.Algo == 0 && f.RCrypt == "" {
-			adfile, adsize := meta.WithResourceFork(rRaw, rRaw.Size())
+			adfile, adsize := meta.WithResourceFork(
+				io.NewSectionReader(disk, rOffset, int64(macstuff.Rsrc.Unpacked)),
+				int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
 				f.HeaderEnd,          // order
 				adfile,               // reader
@@ -144,7 +146,8 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 				0, meta.ModTime, nil) // mode, mtime, sys
 		} else {
 			adfile, adsize := meta.WithSequentialResourceFork(func() io.Reader {
-				return readerFor(macstuff.Rsrc.Algo, f.RCrypt, macstuff.Rsrc.Unpacked, macstuff.Rsrc.CRC, rRaw)
+				return readerFor(macstuff.Rsrc.Algo, f.RCrypt, macstuff.Rsrc.Unpacked, macstuff.Rsrc.CRC,
+					io.NewSectionReader(disk, rOffset, int64(macstuff.Rsrc.Packed)))
 			}, int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateSequentialFile(appledouble.Sidecar(name),
 				f.HeaderEnd,          // order
@@ -153,18 +156,19 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 				0, meta.ModTime, nil) // mode, mtime, sys
 		}
 
-		dRaw := io.NewSectionReader(disk, f.HeaderEnd+int64(macstuff.Rsrc.Packed), int64(f.Common.Data.Packed))
+		dOffset := f.HeaderEnd + int64(macstuff.Rsrc.Packed)
 		if f.Common.Data.Algo == 0 && f.DCrypt == "" {
 			fsys.CreateRandomAccessFile(name,
-				f.HeaderEnd+1,                 // order
-				dRaw,                          // readerAt
-				int64(f.Common.Data.Unpacked), // size
-				0, meta.ModTime, nil)          // mode, mtime, sys
+				f.HeaderEnd+1, // order
+				io.NewSectionReader(disk, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
+				int64(f.Common.Data.Unpacked),                                     // size
+				0, meta.ModTime, nil)                                              // mode, mtime, sys
 		} else {
 			fsys.CreateSequentialFile(name,
 				f.HeaderEnd+1, // order
 				func() io.Reader {
-					return readerFor(f.Common.Data.Algo, f.DCrypt, f.Common.Data.Unpacked, f.Common.Data.CRC, dRaw)
+					return readerFor(f.Common.Data.Algo, f.DCrypt, f.Common.Data.Unpacked, f.Common.Data.CRC,
+						io.NewSectionReader(disk, dOffset, int64(f.Common.Data.Packed)))
 				}, // reader
 				int64(f.Common.Data.Unpacked), // size
 				0, meta.ModTime, nil)          // mode, mtime, sys

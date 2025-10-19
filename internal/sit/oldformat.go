@@ -88,9 +88,9 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 			adfile, adlen := meta.ForDir()
 			fsys.CreateSequentialFile(appledouble.Sidecar(name), 0, adfile, adlen, 0, meta.ModTime, nil)
 		} else { // file
-			rRaw := io.NewSectionReader(disk, int64(offset+112), int64(hdr.RPackLen))
+			rOffset := int64(offset + 112)
 			if hdr.RAlgo == 0 {
-				adfile, adsize := meta.WithResourceFork(rRaw, rRaw.Size())
+				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(disk, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
 				fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
 					offset,               // order
 					adfile,               // reader
@@ -98,7 +98,8 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 					0, meta.ModTime, nil) // mode, mtime, sys
 			} else {
 				adfile, adsize := meta.WithSequentialResourceFork(func() io.Reader {
-					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, rRaw)
+					raw := io.NewSectionReader(disk, rOffset, int64(hdr.RPackLen))
+					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, raw)
 				}, int64(hdr.RUnpackLen))
 				fsys.CreateSequentialFile(appledouble.Sidecar(name),
 					offset,               // order
@@ -107,18 +108,19 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 					0, meta.ModTime, nil) // mode, mtime, sys
 			}
 
-			dRaw := io.NewSectionReader(disk, offset+112+int64(hdr.RPackLen), int64(hdr.DPackLen))
+			dOffset := offset + 112 + int64(hdr.RPackLen)
 			if hdr.DAlgo == 0 {
 				fsys.CreateRandomAccessFile(name,
-					offset+1,              // order
-					dRaw,                  // readerAt
+					offset+1, // order
+					io.NewSectionReader(disk, dOffset, int64(hdr.DUnpackLen)), // readerAt
 					int64(hdr.RUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {
 				fsys.CreateSequentialFile(name,
 					offset+1, // order
 					func() io.Reader {
-						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, dRaw)
+						raw := io.NewSectionReader(disk, dOffset, int64(hdr.DPackLen))
+						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
 					}, // reader
 					int64(hdr.RUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
