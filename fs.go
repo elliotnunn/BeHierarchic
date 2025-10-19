@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
@@ -158,8 +159,9 @@ func (fsys *FS) getB(subsys fs.FS, subname string) *b {
 
 func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
+	t := time.Now()
 	fsys.prefetch(fsys.root, ".", runtime.NumCPU())
-	slog.Info("prefetchStop")
+	slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 }
 
 func (fsys *FS) prefetch(subsys fs.FS, infoname string, concurrency int) {
