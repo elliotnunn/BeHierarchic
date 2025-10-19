@@ -78,18 +78,16 @@ func (f *file) Next() int64 {
 	return next
 }
 
-func newFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
+func newFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 	defer fsys.NoMore()
 	var (
 		pass2 []file
 		known = make(map[int64]file)
 	)
-	for {
+	for offset < filesize {
 		f, err := headers(disk, offset)
-		err = cvtEOF(err)
-		if err == io.EOF {
-			break
-		} else if err != nil {
+		err = notExpectingEOF(err)
+		if err != nil {
 			slog.Warn("StuffIt read error", "err", err, "offset", offset)
 			return
 		}

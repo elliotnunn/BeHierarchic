@@ -62,8 +62,9 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		if !checkCRC16(buf, 98) {
 			return nil, ErrHeader
 		}
+		filesize := int64(binary.BigEndian.Uint32(buf[84:]))
 		fsys := fskeleton.New()
-		go newFormat(fsys, disk, int64(len(buf)))
+		go newFormat(fsys, disk, int64(len(buf)), filesize)
 		return fsys, nil
 	} else {
 		buf, err = creepTo(buf, r, 22)
@@ -74,7 +75,8 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		}
 		// seems to be a CRC16 at offset 20 but I cannot get it to match... no matter
 		fsys := fskeleton.New()
-		go oldFormat(fsys, disk, int64(len(buf)))
+		filesize := int64(binary.BigEndian.Uint32(buf[6:]))
+		go oldFormat(fsys, disk, int64(len(buf)), filesize)
 		return fsys, nil
 	}
 }

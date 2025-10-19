@@ -3,9 +3,7 @@ package sit
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
-	"io/fs"
 	"log/slog"
 	"path"
 	"strings"
@@ -43,7 +41,7 @@ type AlgID uint8
 func (id AlgID) isDirStart() bool { return id == 32 }
 func (id AlgID) isDirEnd() bool   { return id == 33 }
 
-func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
+func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 	defer fsys.NoMore()
 	type forlater struct {
 		offset int64
@@ -128,20 +126,18 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 		}
 	}
 
-	for {
+	for offset < filesize {
 		hdrdata := make([]byte, 112)
 		n, err := disk.ReadAt(hdrdata, offset)
-		if n == len(hdrdata) {
+		if n == len(hdrdata) { // ReadAt can return io.EOF on success if right at EOF
 			err = nil
 		}
-		err = cvtEOF(err)
+		err = notExpectingEOF(err)
 		if err == nil && calcCRC16(hdrdata[:110]) != binary.BigEndian.Uint16(hdrdata[110:]) {
 			err = ErrHeader
 		}
 
-		if err == io.EOF {
-			break
-		} else if err != nil {
+		if err != nil {
 			slog.Warn("StuffIt read error", "err", err, "offset", offset)
 			return
 		}
@@ -163,9 +159,9 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 }
 
 // ReadAt returns ErrInvalid when offset > filesize
-func cvtEOF(err error) error {
-	if errors.Is(err, fs.ErrInvalid) {
-		err = io.EOF
+func notExpectingEOF(err error) error {
+	if err == io.EOF {
+		return io.ErrUnexpectedEOF
 	}
 	return err
 }
