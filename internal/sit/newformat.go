@@ -274,12 +274,12 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 				return
 			}
 			// More arbitrary bytes of encryption info
-			if buf[47] != 0 {
-				buf, err = creepBy(buf, reader, int(buf[47]))
+			if buf[49] != 0 {
+				buf, err = creepBy(buf, reader, int(buf[49]))
 				if err != nil {
 					return
 				}
-				f.RCrypt = string(buf[48:])
+				f.RCrypt = string(buf[50:])
 			}
 		}
 		if !checkCRC16(buf, 2) {
