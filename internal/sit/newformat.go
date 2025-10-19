@@ -188,12 +188,12 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 	if err != nil {
 		return
 	} else if string(buf[:4]) != "\xA5\xA5\xA5\xA5" {
-		err = ErrFormat
+		err = ErrHeader
 		return
 	}
 	structsize := int(binary.BigEndian.Uint16(buf[6:]))
 	if structsize < 48 {
-		err = ErrFormat
+		err = ErrHeader
 		return
 	}
 	buf, err = creepTo(buf, reader, structsize)
@@ -203,7 +203,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 
 	// Checksum that encompasses both of these
 	if !checkCRC16(buf, 32) {
-		err = ErrChecksum
+		err = ErrHeader
 		return
 	}
 
@@ -213,7 +213,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 	tail := buf[48:]
 	if f.Common.Typ&0x40 == 0 {
 		if len(tail) < int(f.Common.Data.CryptBytes) {
-			err = ErrFormat
+			err = ErrHeader
 			return
 		}
 		f.DCrypt = string(tail[:f.Common.Data.CryptBytes])
@@ -222,7 +222,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 
 	// The arbitrary name bytes
 	if len(tail) < int(f.Common.NameLen) {
-		err = ErrFormat
+		err = ErrHeader
 		return
 	}
 	f.Name = string(tail[:f.Common.NameLen])
@@ -233,7 +233,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 		commentsize := int(binary.BigEndian.Uint16(tail))
 		tail = tail[4:]
 		if commentsize > len(tail) {
-			err = ErrFormat
+			err = ErrHeader
 			return
 		}
 		f.Comment = string(tail[:commentsize])
@@ -254,7 +254,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 			return
 		}
 		if !checkCRC16(buf, 2) {
-			err = ErrChecksum
+			err = ErrHeader
 			return
 		}
 		var h2win headerWin
@@ -283,7 +283,7 @@ func headers(r io.ReaderAt, offset int64) (f file, err error) {
 			}
 		}
 		if !checkCRC16(buf, 2) {
-			err = ErrChecksum
+			err = ErrHeader
 			return
 		}
 		var h2mac headerMac

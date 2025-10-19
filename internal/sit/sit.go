@@ -25,10 +25,10 @@ import (
 )
 
 var (
-	ErrFormat   = errors.New("not a StuffIt archive")
-	ErrPassword = errors.New("password protected StuffIt archive")
-	ErrAlgo     = errors.New("unimplemented StuffIt compression algorithm")
-	ErrChecksum = errors.New("StuffIt checksum mismatch")
+	ErrHeader   = errors.New("StuffIt: invalid header")
+	ErrPassword = errors.New("StuffIt: password protected file")
+	ErrAlgo     = errors.New("StuffIt: unimplemented compression algorithm")
+	ErrChecksum = errors.New("StuffIt: invalid checksum")
 )
 
 func New(disk io.ReaderAt) (fs.FS, error) {
@@ -49,18 +49,18 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 			return nil, eof2formaterr(err)
 		} else if string(buf[:16]) != "StuffIt (c)1997-" ||
 			string(buf[20:80]) != " Aladdin Systems, Inc., http://www.aladdinsys.com/StuffIt/\r\n" {
-			return nil, ErrFormat
+			return nil, ErrHeader
 		}
 		hdrlen := int(binary.BigEndian.Uint16(buf[96:]))
 		if hdrlen < 100 {
-			return nil, ErrFormat
+			return nil, ErrHeader
 		}
 		buf, err = creepTo(buf, r, hdrlen)
 		if err != nil {
 			return nil, eof2formaterr(err)
 		}
 		if !checkCRC16(buf, 98) {
-			return nil, ErrChecksum
+			return nil, ErrHeader
 		}
 		fsys := fskeleton.New()
 		go newFormat(fsys, disk, int64(len(buf)))
@@ -70,7 +70,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		if err != nil {
 			return nil, eof2formaterr(err)
 		} else if string(buf[10:14]) != "rLau" {
-			return nil, ErrFormat
+			return nil, ErrHeader
 		}
 		// seems to be a CRC16 at offset 20 but I cannot get it to match... no matter
 		fsys := fskeleton.New()
@@ -81,7 +81,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 
 func eof2formaterr(e error) error {
 	if e == io.EOF {
-		return ErrFormat
+		return ErrHeader
 	} else {
 		return e
 	}

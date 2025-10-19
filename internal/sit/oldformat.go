@@ -136,7 +136,7 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset int64) {
 		}
 		err = cvtEOF(err)
 		if err == nil && calcCRC16(hdrdata[:110]) != binary.BigEndian.Uint16(hdrdata[110:]) {
-			err = ErrChecksum
+			err = ErrHeader
 		}
 
 		if err == io.EOF {

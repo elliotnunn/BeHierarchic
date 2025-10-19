@@ -48,38 +48,6 @@ func (r *crc16reader) update(buffer []byte) {
 
 func (r *crc16reader) Close() error { return r.r.Close() }
 
-func readStructCheckingCRC16(r io.ReaderAt, offset int64, structSize, crcField int) ([]byte, error) {
-	if structSize < 0 { // is itself the offset of a field!
-		structSizeField := -structSize
-		var smallbuf [2]byte
-		n, err := r.ReadAt(smallbuf[:], offset+int64(structSizeField))
-		if n != 2 {
-			return nil, err
-		}
-		structSize = int(binary.BigEndian.Uint16(smallbuf[:]))
-	}
-
-	buf := make([]byte, max(structSize, crcField+2))
-	n, err := r.ReadAt(buf, offset)
-	if n != len(buf) {
-		return buf[:n], err
-	}
-
-	want := binary.BigEndian.Uint16(buf[crcField:])
-	got := uint16(0)
-	for i, ch := range buf[:structSize] {
-		if i == crcField || i == crcField+1 {
-			ch = 0
-		}
-		got = crctab[byte(got)^ch] ^ got>>8
-	}
-	if got != want {
-		return nil, ErrChecksum
-	}
-
-	return buf[:structSize], err
-}
-
 func checkCRC16(buf []byte, crcField int) bool {
 	want := binary.BigEndian.Uint16(buf[crcField:])
 	got := uint16(0)
