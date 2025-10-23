@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"math"
-	"path"
 	"slices"
 	"strings"
 	"testing/iotest"
@@ -16,13 +15,15 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
+	"github.com/elliotnunn/BeHierarchic/internal/inithint"
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
 )
 
-func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error) {
-	f, err := subsys.Open(subname)
+func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerator, error) {
+	f, err := subsys.Open(subname.String())
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +55,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 	switch {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(path.Base(subname), ".gz .gzip .tgz=.tar")
+			innerName := changeSuffix(subname.Base(), ".gz .gzip .tgz=.tar")
 			opener := func() io.Reader {
 				r, err := gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
 				if err != nil {
@@ -69,7 +70,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 		}, nil
 	case matchAt("BZ", 0): // bzip2
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(path.Base(subname), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
+			innerName := changeSuffix(subname.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
 			opener := func() io.Reader {
 				return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
 			}
@@ -80,7 +81,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 		}, nil
 	case matchAt("\xfd7zXZ\x00", 0): // xz
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(path.Base(subname), ".xz .txz=.tar")
+			innerName := changeSuffix(subname.Base(), ".xz .txz=.tar")
 			opener := func() io.Reader {
 				r, err := xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
 				if err != nil {
@@ -94,18 +95,26 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname string) (fsysGenerator, error
 			return fsys, nil
 		}, nil
 	case matchAt("ER", 0): // Apple Partition Map
-		return func(r io.ReaderAt) (fs.FS, error) { return apm.New(r) }, nil
+		return func(r io.ReaderAt) (fs.FS, error) {
+			r2 := inithint.NewReaderAt(r)
+			defer r2.Disable()
+			return apm.New(r2)
+		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := fsys.tryToGetSize(subsys, subname)
+		s, err := fsys.tryToGetSize(subsys, subname.String())
 		if err != nil {
 			return nil, err
 		}
-		return func(r io.ReaderAt) (fs.FS, error) { return zip.NewReader(r, s) }, nil
+		return func(r io.ReaderAt) (fs.FS, error) {
+			r2 := inithint.NewReaderAt(r)
+			defer r2.Disable()
+			return zip.NewReader(r2, s)
+		}, nil
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
-		return func(r io.ReaderAt) (fs.FS, error) { return sit.New(r) }, nil
+		return func(r io.ReaderAt) (fs.FS, error) { return sit.New(r) }, nil // manages own inithint
 	case matchAt("ustar\x00\x30\x30", 257), matchAt("ustar\x20\x20\x00", 257): // posix tar
-		return func(r io.ReaderAt) (fs.FS, error) { return tar.New(r), nil }, nil
-	case matchAt("BD", 1024):
+		return func(r io.ReaderAt) (fs.FS, error) { return tar.New(r), nil }, nil // manages own inithint
+	case matchAt("BD", 1024): // manages own inithint
 		return func(r io.ReaderAt) (fs.FS, error) { return hfs.New(r) }, nil
 	}
 	return nil, accessError

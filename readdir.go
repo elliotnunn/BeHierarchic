@@ -56,7 +56,7 @@ func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	listing, err := fs.ReadDir(subsys, subname)
+	listing, err := fs.ReadDir(subsys, subname.String())
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 
 		go func() {
-			isar, _, _ := fsys.getArchive(subsys, path.Join(subname, l.Name()), false)
+			isar, _, _ := fsys.getArchive(subsys, subname.Join(l.Name()), false)
 			if isar {
 				answers <- &dirEntry{fsys: fsys, name: path.Join(name, l.Name()+Special)}
 			} else {

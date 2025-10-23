@@ -30,18 +30,18 @@ func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
 		if err != nil {
 			panic("why can't I resolve an image that exists?")
 		}
-		imgStat, err := fs.Stat(subsys, subname)
+		imgStat, err := fs.Stat(subsys, subname.String())
 		if err != nil {
 			return nil, err
 		}
 		return mountpointStat{FileInfo: imgStat, name: path.Base(name)}, nil
 	} else {
-		stat, err := fs.Stat(subsys, subname)
+		stat, err := fs.Stat(subsys, subname.String())
 		if err != nil {
 			return nil, err
 		}
 		if stat.Size() == sizeUnknown {
-			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(subsys, subname)}, nil
+			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(subsys, subname.String())}, nil
 		} else {
 			return stat, nil
 		}

@@ -26,7 +26,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 
-	f, err := subsys.Open(subname)
+	f, err := subsys.Open(subname.String())
 	if err != nil {
 		return nil, err // would be nice to make this more informative
 	}
@@ -40,7 +40,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
-			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(subsys, subname)}
+			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(subsys, subname.String())}
 		}
 	case fs.ModeDir:
 		if !suppressSpecialSiblings {

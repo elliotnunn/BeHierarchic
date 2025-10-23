@@ -18,11 +18,13 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 	"github.com/elliotnunn/BeHierarchic/internal/multireaderat"
 )
 
 // Create a new FS from an HFS volume
-func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
+func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
+	rInitHint := inithint.NewReaderAt(rNoInit)
 	defer func() {
 		if r := recover(); r != nil {
 			retfs, reterr = nil, fmt.Errorf("%v", r)
@@ -30,7 +32,7 @@ func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
 	}()
 
 	var mdb [512]byte
-	_, err := disk.ReadAt(mdb[:], 0x400)
+	_, err := rInitHint.ReadAt(mdb[:], 0x400)
 	if err != nil {
 		return nil, fmt.Errorf("HFS Master Directory Block unreadable: %w", err)
 	}
@@ -47,7 +49,7 @@ func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
 	// Attempt to detect this early by checking the image size.
 	// Don't resort to an actual read, because the seek might be expensive.
 	minSize := int64(drAlBlSt)*512 + int64(drAlBlkSiz)*int64(drNmAlBlks)
-	if actualSize, ok := tryGetSizeCheaply(disk); ok {
+	if actualSize, ok := tryGetSizeCheaply(rNoInit); ok {
 		if actualSize < minSize {
 			return nil, fmt.Errorf("likely Disk Copy compressed HFS image: expected %db but got %db", minSize, actualSize)
 		}
@@ -60,7 +62,7 @@ func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
 				mustReadAll(
 					parseExtents(mdb[0x86:]).
 						toBytes(drAlBlkSiz, drAlBlSt).
-						makeReader(disk))))
+						makeReader(rInitHint))))
 
 	catalog :=
 		parseBTree(
@@ -69,7 +71,7 @@ func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
 					mdb[0x96:]).
 					chaseOverflow(overflow, 4, false).
 					toBytes(drAlBlkSiz, drAlBlSt).
-					makeReader(disk)))
+					makeReader(rInitHint)))
 
 	dirs := dirPaths(catalog)
 	fsys := fskeleton.New()
@@ -117,12 +119,12 @@ func New(disk io.ReaderAt) (retfs fs.FS, reterr error) {
 				chaseOverflow(overflow, cnid, false).
 				toBytes(drAlBlkSiz, drAlBlSt).
 				clipExtents(dfSize).
-				makeReader(disk)
+				makeReader(rNoInit)
 			rfRead := parseExtents(val[0x56:]).
 				chaseOverflow(overflow, cnid, true).
 				toBytes(drAlBlkSiz, drAlBlSt).
 				clipExtents(int64(rfSize)).
-				makeReader(disk)
+				makeReader(rNoInit)
 
 			adRead, adSize := meta.WithResourceFork(rfRead, rfSize)
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
@@ -29,7 +30,7 @@ type FS struct {
 
 type key struct {
 	fsys fs.FS
-	name string
+	name internpath.Path
 }
 
 type b struct {
@@ -53,7 +54,7 @@ func Wrapper(fsys fs.FS) *FS {
 	}
 }
 
-func (fsys *FS) resolve(name string) (subsys fs.FS, subname string, err error) {
+func (fsys *FS) resolve(name string) (subsys fs.FS, subname internpath.Path, err error) {
 	warps := strings.Split(name, Special+"/")
 	if strings.HasSuffix(name, Special) {
 		warps[len(warps)-1] = strings.TrimSuffix(warps[len(warps)-1], Special)
@@ -63,19 +64,19 @@ func (fsys *FS) resolve(name string) (subsys fs.FS, subname string, err error) {
 
 	subsys = fsys.root
 	for _, el := range warps {
-		isar, subsubsys, err := fsys.getArchive(subsys, el, true)
+		isar, subsubsys, err := fsys.getArchive(subsys, internpath.New(el), true)
 		if err != nil {
-			return nil, "", err
+			return nil, internpath.Path{}, err
 		} else if !isar {
-			return nil, "", fs.ErrNotExist
+			return nil, internpath.Path{}, fs.ErrNotExist
 		}
 		subsys = subsubsys
 	}
-	return subsys, name, nil
+	return subsys, internpath.New(name), nil
 }
 
-func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, name string) (fs.FS, error) {
-	f, err := fsys.Open(name)
+func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, name internpath.Path) (fs.FS, error) {
+	f, err := fsys.Open(name.String())
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,7 @@ func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, n
 	if !nativeReaderAt {
 		f.Close()
 		f = nil
-		r = converter.ReaderAt(fsys, name)
+		r = converter.ReaderAt(fsys, name.String())
 	}
 	fsys2, err := generator(r)
 	if err != nil {
@@ -95,9 +96,9 @@ func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, n
 	return fsys2, nil
 }
 
-func (fsys *FS) getArchive(subsys fs.FS, subname string, needFS bool) (bool, fs.FS, error) {
+func (fsys *FS) getArchive(subsys fs.FS, subname internpath.Path, needFS bool) (bool, fs.FS, error) {
 	if subsys == fsys.root { // Undercooked files, do not touch
-		switch path.Ext(subname) {
+		switch path.Ext(subname.Base()) {
 		case ".crdownload", ".part":
 			return false, nil, nil
 		}
@@ -137,7 +138,7 @@ again:
 	}
 }
 
-func (fsys *FS) getB(subsys fs.FS, subname string) *b {
+func (fsys *FS) getB(subsys fs.FS, subname internpath.Path) *b {
 	fsys.bMu.RLock()
 	x, ok := fsys.burrows[key{subsys, subname}]
 	fsys.bMu.RUnlock()
@@ -160,22 +161,22 @@ func (fsys *FS) getB(subsys fs.FS, subname string) *b {
 func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
 	t := time.Now()
-	fsys.prefetch(fsys.root, ".", runtime.NumCPU())
+	fsys.prefetch(fsys.root, internpath.New("."), runtime.NumCPU())
 	slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 }
 
-func (fsys *FS) prefetch(subsys fs.FS, infoname string, concurrency int) {
+func (fsys *FS) prefetch(subsys fs.FS, infoname internpath.Path, concurrency int) {
 	waysort, files := walk.FilesInDiskOrder(subsys)
-	slog.Info("prefetchDir", "path", infoname, "sortorder", waysort)
+	slog.Info("prefetchDir", "path", infoname.String(), "sortorder", waysort)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(concurrency)
 	for range concurrency {
 		go func() {
 			for name := range files {
-				isar, subsubsys, _ := fsys.getArchive(subsys, name, true)
+				isar, subsubsys, _ := fsys.getArchive(subsys, internpath.New(name), true)
 				if isar {
-					subname := path.Join(infoname, name+Special)
+					subname := infoname.Join(name + Special)
 					fsys.prefetch(subsubsys, subname, 1) // no sub concurrency, is that a good idea?
 				}
 			}

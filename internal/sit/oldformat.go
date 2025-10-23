@@ -10,6 +10,7 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 type header struct {
@@ -128,7 +129,7 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 
 	for offset < filesize {
 		hdrdata := make([]byte, 112)
-		n, err := disk.ReadAt(hdrdata, offset)
+		n, err := inithint.ReadAt(disk, hdrdata, offset)
 		if n == len(hdrdata) { // ReadAt can return io.EOF on success if right at EOF
 			err = nil
 		}

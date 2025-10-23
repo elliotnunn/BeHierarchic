@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 func New(r io.ReaderAt) fs.FS {
@@ -23,15 +24,16 @@ func New(r io.ReaderAt) fs.FS {
 	return fsys
 }
 
-func populate(fsys *fskeleton.FS, r io.ReaderAt) error {
+func populate(fsys *fskeleton.FS, rNoInit io.ReaderAt) error {
 	defer fsys.NoMore()
 	var paxHdrs map[string]string
 	var gnuLongName, gnuLongLink string
 	var rawHdr block
 	off := int64(0)
+	rInitHint := inithint.NewReaderAt(rNoInit)
 
 	for {
-		n, err := r.ReadAt(rawHdr[:], off)
+		n, err := rInitHint.ReadAt(rawHdr[:], off)
 		if n < len(rawHdr) {
 			if err == io.EOF {
 				break
@@ -58,13 +60,13 @@ func populate(fsys *fskeleton.FS, r io.ReaderAt) error {
 		switch hdr.Typeflag {
 		case TypeXGlobalHeader: // ignore
 		case TypeXHeader:
-			paxHdrs, err = parsePAX(io.NewSectionReader(r, off, size))
+			paxHdrs, err = parsePAX(io.NewSectionReader(rInitHint, off, size))
 			if err != nil {
 				return err
 			}
 			// This is a meta header affecting the next header
 		case TypeGNULongName, TypeGNULongLink:
-			realname, err := readSpecialFile(io.NewSectionReader(r, off, size))
+			realname, err := readSpecialFile(io.NewSectionReader(rInitHint, off, size))
 			if err != nil {
 				return err
 			}
@@ -98,7 +100,7 @@ func populate(fsys *fskeleton.FS, r io.ReaderAt) error {
 			}
 
 			// One of the sparse-file formats can read a few more 512-byte header blocks
-			moreHdr := io.NewSectionReader(r, off, math.MaxInt64)
+			moreHdr := io.NewSectionReader(rInitHint, off, math.MaxInt64)
 			sph, err := getSparseHoles(hdr, &rawHdr, moreHdr)
 			if err != nil {
 				return err
@@ -123,7 +125,7 @@ func populate(fsys *fskeleton.FS, r io.ReaderAt) error {
 			}
 
 			// The two main differences from archive/tar: random access and io/fs support
-			reader, logisize := readerFromSparseHoles(r, off, hdr.Size, sph)
+			reader, logisize := readerFromSparseHoles(rNoInit, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
 				fsys.CreateRandomAccessFile(cleanPath, 0, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)

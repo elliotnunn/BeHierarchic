@@ -22,6 +22,7 @@ import (
 	"testing/iotest"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 var (
@@ -35,7 +36,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 	var (
 		buf []byte
 		err error
-		r   = io.NewSectionReader(disk, 0, 200)
+		r   = io.NewSectionReader(inithint.NewReaderAt(disk), 0, 200)
 	)
 
 	buf, err = creepTo(buf, r, 2)

@@ -9,11 +9,12 @@ import (
 	"math"
 
 	"github.com/dgryski/go-tinylfu"
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 type ID struct {
 	fsys fs.FS
-	name string
+	name internpath.Path
 }
 
 // Create a new Pool with the specified properties.
@@ -46,7 +47,7 @@ type Pool struct {
 
 // A ReaderAt is safe for concurrent use by multiple goroutines.
 func (p *Pool) ReaderAt(fsys fs.FS, name string) ReaderAt {
-	return ReaderAt{pool: p, id: ID{fsys, name}}
+	return ReaderAt{pool: p, id: ID{fsys, internpath.New(name)}}
 }
 
 type ReaderAt struct {
@@ -265,7 +266,7 @@ func (p *Pool) startJob(id ID) {
 			if r.File != nil {
 				go r.File.Close()
 			}
-			r.File, r.err = id.fsys.Open(id.name)
+			r.File, r.err = id.fsys.Open(id.name.String())
 			if r.err != nil {
 				return
 			}
