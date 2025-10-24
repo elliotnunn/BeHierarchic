@@ -53,7 +53,6 @@ func (d *dirent) lookup(name internpath.Path) (node, error) {
 		} else if d.complete {
 			return nil, fs.ErrNotExist
 		}
-		println("waiting for", name.String())
 		d.cCond.Wait()
 	}
 }
