@@ -185,7 +185,7 @@ func (d *dir) ReadDir(count int) ([]fs.DirEntry, error) {
 		count = len(d.ent.chs) - d.listOffset
 		err = nil
 	} else { // "give me up to count"
-		for !d.ent.complete && len(d.ent.chs) > d.listOffset {
+		for !d.ent.complete && len(d.ent.chs) <= d.listOffset {
 			d.ent.cCond.Wait()
 		}
 		count = min(count, len(d.ent.chs)-d.listOffset)
