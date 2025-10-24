@@ -8,6 +8,8 @@ import (
 	"iter"
 	"slices"
 	"sync"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 type walkstuff struct {
@@ -20,7 +22,7 @@ type walkstuff struct {
 
 type keyval struct {
 	key int64
-	val string
+	val internpath.Path
 }
 
 func (w *walkstuff) init() {}
@@ -29,7 +31,7 @@ func (w *walkstuff) put(name string, order int64) {
 	w.Lock()
 	defer w.Unlock()
 
-	w.list = append(w.list, keyval{order, name})
+	w.list = append(w.list, keyval{order, internpath.New(name)})
 	w.sorted = false
 	for _, ch := range w.stragglers {
 		ch <- name
@@ -56,7 +58,7 @@ func (w *walkstuff) WalkFiles() iter.Seq[string] {
 			w.sorted = true
 		}
 		for _, kv := range w.list {
-			if !yield(kv.val) {
+			if !yield(kv.val.String()) {
 				w.Unlock()
 				return
 			}

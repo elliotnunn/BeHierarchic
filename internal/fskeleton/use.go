@@ -5,6 +5,7 @@ package fskeleton
 
 import (
 	"io/fs"
+	"strings"
 )
 
 func (fsys *FS) Open(name string) (f fs.File, err error) {
@@ -34,7 +35,7 @@ func (fsys *FS) ReadLink(name string) (target string, err error) {
 	}
 	switch t := node.(type) {
 	case *linkent:
-		return t.target, nil
+		return t.target.String(), nil
 	default:
 		return "", fs.ErrInvalid
 	}
@@ -61,18 +62,22 @@ func (fsys *FS) Stat(name string) (info fs.FileInfo, err error) {
 }
 
 func (fsys *FS) lookup(name string, followLastLink bool) (node, error) {
-	beenHere := make(map[any]struct{})
-	f := node(fsys.root)
-	components, err := checkSplit(name)
-	if err != nil {
-		return nil, err
+	if !fs.ValidPath(name) {
+		return nil, fs.ErrInvalid
 	}
-	for len(components) > 0 {
-		if _, ok := beenHere[f]; ok {
-			return nil, fs.ErrNotExist // circular symlink
-		}
-		beenHere[f] = struct{}{}
 
+	var (
+		components []string
+		beenHere        = make(map[node]bool)
+		f          node = fsys.root
+		err        error
+	)
+
+	if name != "." {
+		components = strings.Split(name, "/")
+	}
+
+	for len(components) > 0 {
 		c := components[0]
 		components = components[1:]
 
@@ -81,18 +86,22 @@ func (fsys *FS) lookup(name string, followLastLink bool) (node, error) {
 			return nil, fs.ErrNotExist // trying to subdir a file
 		}
 
-		f, err = dir.lookup(c)
+		f, err = dir.lookup(dir.pathname().Join(c))
 		if err != nil {
 			return nil, err
 		}
 
 		if link, ok := f.(*linkent); ok && (len(components) > 0 || followLastLink) {
-			f = fsys.root // ascend back to the root
-			lsp, err := checkSplit(link.target)
-			if err != nil {
-				return nil, err
+			if beenHere[f] {
+				return nil, fs.ErrNotExist
 			}
-			components = append(lsp, components...) // and squash the remaining path on the end
+			beenHere[f] = true
+
+			f = fsys.root // ascend back to the root
+			ltarg := link.target.String()
+			if ltarg != "." {
+				components = append(strings.Split(ltarg, "/"), components...)
+			}
 		}
 	}
 	return f, nil

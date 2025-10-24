@@ -4,7 +4,7 @@
 package fskeleton
 
 import (
-	"fmt"
+	"errors"
 	"io"
 	"io/fs"
 	"testing"
@@ -106,6 +106,58 @@ func TestFullyNonblocking(t *testing.T) {
 		return nil
 	})
 }
+func TestSymlink(t *testing.T) {
+	fsys := New()
+	expectErr(t, nil, fsys.CreateSymlink("symlink1", "file1", 0, time.Time{}, nil)) // dangling symlink
+	expectErr(t, nil, fsys.CreateSymlink("symlink2", "file2", 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateSymlink("symlink3", "dir3", 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateSymlink("symlink4", "symlink3/file5", 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateSymlink("symlink6", "symlink6", 0, time.Time{}, nil)) // circular
+	expectErr(t, nil, fsys.CreateDir("dir3", 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateFile("file2", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateFile("dir3/file5", 0, emptyFile, 0, 0, time.Time{}, nil))
+
+	mustBlock(t, func() { fsys.Open("symlink1") })
+	fsys.NoMore()
+	mustNotBlock(t, func() { fsys.Open("symlink1") })
+
+	s, err := fsys.Lstat("symlink1") // dangling symlink
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.ModeSymlink.String())
+	_, err = fsys.Stat("symlink1")
+	expectErr(t, fs.ErrNotExist, err)
+	target, err := fsys.ReadLink("symlink1")
+	expectErr(t, err, nil)
+	expectStr(t, "file1", target)
+
+	s, err = fsys.Lstat("symlink2") // good symlink
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.ModeSymlink.String())
+	s, err = fsys.Stat("symlink2")
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.FileMode(0).String())
+	target, err = fsys.ReadLink("symlink2")
+	expectErr(t, err, nil)
+	expectStr(t, "file2", target)
+
+	expectStr(t, "file5", listDir(fsys, "symlink3"))
+
+	s, err = fsys.Lstat("symlink4") // symlink through another symlink
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.ModeSymlink.String())
+	s, err = fsys.Stat("symlink4")
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.FileMode(0).String())
+
+	s, err = fsys.Lstat("symlink6") // circular symlink
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.ModeSymlink.String())
+	_, err = fsys.Stat("symlink6")
+	expectErr(t, fs.ErrNotExist, err)
+	target, err = fsys.ReadLink("symlink6")
+	expectErr(t, err, nil)
+	expectStr(t, "symlink6", target)
+}
 
 func mustBlock(t *testing.T, f func()) {
 	done := make(chan struct{})
@@ -136,8 +188,7 @@ func mustNotBlock(t *testing.T, f func()) {
 func emptyFile(f fs.File) (fs.File, error) { return f, nil }
 
 func expectErr(t *testing.T, want, got error) {
-	w, e := fmt.Sprint(want), fmt.Sprint(got)
-	if w != e {
+	if !errors.Is(got, want) {
 		t.Errorf("expected %v, got %v", want, got)
 	}
 }

@@ -7,13 +7,14 @@ import (
 	"io"
 	"io/fs"
 	"time"
-	"unique"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 var _ node = new(fileent) // check satisfies interface
 
 type fileent struct {
-	name    unique.Handle[string]
+	name    internpath.Path
 	size    int64
 	mode    fs.FileMode
 	modtime time.Time
@@ -21,10 +22,11 @@ type fileent struct {
 	opener  func(fs.File) (fs.File, error)
 }
 
-func (f *fileent) open() (fs.File, error) { return f.opener(f) }
+func (f *fileent) pathname() internpath.Path { return f.name }
+func (f *fileent) open() (fs.File, error)    { return f.opener(f) }
 
 // common to fs.DirEntry and fs.FileInfo
-func (f *fileent) Name() string { return f.name.Value() }
+func (f *fileent) Name() string { return f.name.Base() }
 func (f *fileent) IsDir() bool  { return false }
 
 // fs.DirEntry

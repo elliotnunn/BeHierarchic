@@ -9,15 +9,16 @@ package fskeleton
 import (
 	"io"
 	"io/fs"
-	"path"
-	"strings"
+	"slices"
+	"testing/iotest"
 	"time"
-	"unique"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 func New() *FS {
 	fsys := FS{root: newDir()}
-	fsys.root.name = unique.Make(".")
+	fsys.root.name = internpath.New(".")
 	fsys.walkstuff.init()
 	return &fsys
 }
@@ -36,10 +37,13 @@ type OpenFunc func(fs.File) (fs.File, error)
 //
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
 func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys any) error {
+	if !fs.ValidPath(name) {
+		return fs.ErrInvalid
+	}
 	nu := newDir()
-	nu.name, nu.mode, nu.modtime, nu.sys = unique.Make(path.Base(name)), mode, mtime, sys
+	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode, mtime, sys
 	nu.iOK = true
-	return fsys.create(name, nu)
+	return fsys.create(nu)
 }
 
 // CreateFile creates a regular file at the specified path.
@@ -49,9 +53,12 @@ func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys an
 //
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
 func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	nu := &fileent{name: unique.Make(path.Base(name)),
+	if !fs.ValidPath(name) {
+		return fs.ErrInvalid
+	}
+	nu := &fileent{name: internpath.New(name),
 		size: size, mode: mode, modtime: mtime, sys: sys, opener: open}
-	err := fsys.create(name, nu)
+	err := fsys.create(nu)
 	if err != nil {
 		return err
 	}
@@ -62,14 +69,10 @@ func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, 
 // CreateErrorFile creates a file that always returns the error of your choice on Read (but not on Close).
 func (fsys *FS) CreateErrorFile(name string, order int64, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	fn := func(stub fs.File) (fs.File, error) {
-		return rFile{metadata: stub, Reader: errorReader{err}}, nil
+		return rFile{metadata: stub, Reader: iotest.ErrReader(err)}, nil
 	}
 	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
 }
-
-type errorReader struct{ err error }
-
-func (r errorReader) Read([]byte) (int, error) { return 0, r.err }
 
 // CreateSequentialFile is like CreateFile, but sorts out the simple stuff for you.
 func (fsys *FS) CreateSequentialFile(name string, order int64, r func() io.Reader, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
@@ -126,12 +129,12 @@ func (raFile) Close() error { return nil }
 // mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
 // There is no need to set the the [fs.ModeSymlink] bit.
 func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.Time, sys any) error {
-	if !fs.ValidPath(target) {
+	if !fs.ValidPath(name) || !fs.ValidPath(target) {
 		return fs.ErrInvalid
 	}
-	nu := &linkent{name: unique.Make(path.Base(name)),
-		target: target, mode: mode, modtime: mtime, sys: sys}
-	return fsys.create(name, nu)
+	nu := &linkent{name: internpath.New(name),
+		target: internpath.New(target), mode: mode, modtime: mtime, sys: sys}
+	return fsys.create(nu)
 }
 
 // NoMoreChildren prevents future Create*() calls from adding immediate children to the specified directory.
@@ -149,13 +152,13 @@ func (fsys *FS) NoMoreChildren(name string) error {
 		return nil
 	}
 
-	comps, err := checkSplit(name)
-	if err != nil {
-		return err
+	if !fs.ValidPath(name) {
+		return fs.ErrInvalid
 	}
 
 	at := fsys.root
-	for _, c := range comps {
+	for _, c := range components(internpath.New(name)) {
+		var err error
 		at, err = at.implicitSubdir(c)
 		if err != nil {
 			return err
@@ -180,15 +183,12 @@ func (fsys *FS) NoMore() {
 type node interface {
 	fs.DirEntry
 	fs.FileInfo
+	pathname() internpath.Path
 	open() (fs.File, error)
 }
 
-func (fsys *FS) create(name string, node node) error {
-	comps, err := checkSplit(name)
-	if err != nil {
-		return err
-	}
-
+func (fsys *FS) create(node node) error {
+	comps := components(node.pathname())
 	if len(comps) == 0 {
 		if dir, ok := node.(*dirent); ok {
 			return fsys.root.replace(dir)
@@ -199,6 +199,7 @@ func (fsys *FS) create(name string, node node) error {
 
 	at := fsys.root
 	for _, c := range comps[:len(comps)-1] {
+		var err error
 		at, err = at.implicitSubdir(c)
 		if err != nil {
 			return err
@@ -207,12 +208,12 @@ func (fsys *FS) create(name string, node node) error {
 	return at.put(node)
 }
 
-func checkSplit(name string) ([]string, error) {
-	if !fs.ValidPath(name) {
-		return nil, fs.ErrInvalid
-	} else if name == "." {
-		return nil, nil
-	} else {
-		return strings.Split(name, "/"), nil
+func components(name internpath.Path) []internpath.Path {
+	var c []internpath.Path
+	root := internpath.New(".")
+	for cur := name; cur != root; cur = cur.Dir() {
+		c = append(c, cur)
 	}
+	slices.Reverse(c)
+	return c
 }

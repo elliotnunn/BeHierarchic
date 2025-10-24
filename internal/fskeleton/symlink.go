@@ -6,23 +6,25 @@ package fskeleton
 import (
 	"io/fs"
 	"time"
-	"unique"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 var _ node = new(linkent) // check satisfies interface
 
 type linkent struct {
-	name    unique.Handle[string]
+	name    internpath.Path
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
-	target  string
+	target  internpath.Path
 }
 
-func (l *linkent) open() (fs.File, error) { panic("never open symlink") }
+func (l *linkent) pathname() internpath.Path { return l.name }
+func (l *linkent) open() (fs.File, error)    { panic("never open symlink") }
 
 // common to fs.DirEntry and fs.FileInfo
-func (l *linkent) Name() string { return l.name.Value() }
+func (l *linkent) Name() string { return l.name.Base() }
 func (l *linkent) IsDir() bool  { return false }
 
 // fs.DirEntry

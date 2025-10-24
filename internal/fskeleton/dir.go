@@ -6,10 +6,10 @@ package fskeleton
 import (
 	"io"
 	"io/fs"
-	"strings"
 	"sync"
 	"time"
-	"unique"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 var _ node = new(dirent)
@@ -18,11 +18,11 @@ var _ fs.ReadDirFile = new(dir) // check satisfies interface
 func newDir() *dirent {
 	return &dirent{iCond: sync.NewCond(new(sync.Mutex)),
 		cCond: sync.NewCond(new(sync.Mutex)),
-		chm:   make(map[string]node)}
+		chm:   make(map[internpath.Path]node)}
 }
 
 type dirent struct {
-	name unique.Handle[string]
+	name internpath.Path
 
 	iCond   *sync.Cond
 	iOK     bool
@@ -33,7 +33,7 @@ type dirent struct {
 	cCond    *sync.Cond
 	complete bool
 	chs      []node
-	chm      map[string]node
+	chm      map[internpath.Path]node
 }
 
 type dir struct { // in its open state
@@ -41,9 +41,10 @@ type dir struct { // in its open state
 	listOffset int
 }
 
-func (d *dirent) open() (fs.File, error) { return &dir{ent: d, listOffset: 0}, nil }
+func (d *dirent) pathname() internpath.Path { return d.name }
+func (d *dirent) open() (fs.File, error)    { return &dir{ent: d, listOffset: 0}, nil }
 
-func (d *dirent) lookup(name string) (node, error) {
+func (d *dirent) lookup(name internpath.Path) (node, error) {
 	d.cCond.L.Lock()
 	defer d.cCond.L.Unlock()
 	for {
@@ -52,12 +53,13 @@ func (d *dirent) lookup(name string) (node, error) {
 		} else if d.complete {
 			return nil, fs.ErrNotExist
 		}
+		println("waiting for", name.String())
 		d.cCond.Wait()
 	}
 }
 
 // may return fs.ErrExist if a non-dir with this name exists
-func (d *dirent) implicitSubdir(name string) (*dirent, error) {
+func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
 	d.cCond.L.Lock()
 	defer d.cCond.L.Unlock()
 	if d.complete {
@@ -65,9 +67,8 @@ func (d *dirent) implicitSubdir(name string) (*dirent, error) {
 	}
 
 	if got, exist := d.chm[name]; !exist {
-		name = strings.Clone(name)
 		got := newDir()
-		got.name = unique.Make(name)
+		got.name = name
 		d.chm[name] = got
 		d.chs = append(d.chs, got)
 		d.cCond.Broadcast()
@@ -87,7 +88,7 @@ func (d *dirent) put(thing node) error {
 		return fs.ErrPermission
 	}
 
-	if got, exist := d.chm[thing.Name()]; exist {
+	if got, exist := d.chm[thing.pathname()]; exist {
 		if got, ok := got.(*dirent); ok {
 			if want, ok := thing.(*dirent); ok {
 				return got.replace(want)
@@ -96,7 +97,7 @@ func (d *dirent) put(thing node) error {
 		return fs.ErrExist
 	}
 
-	d.chm[thing.Name()] = thing
+	d.chm[thing.pathname()] = thing
 	d.chs = append(d.chs, thing)
 	d.cCond.Broadcast()
 	return nil
@@ -136,7 +137,7 @@ func (d *dirent) noMore(recursive bool) {
 }
 
 // common to fs.DirEntry and fs.FileInfo
-func (d *dirent) Name() string { return d.name.Value() }
+func (d *dirent) Name() string { return d.name.Base() }
 func (d *dirent) IsDir() bool  { return true }
 
 // fs.DirEntry
