@@ -15,25 +15,28 @@ import (
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
-	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 func New(r io.ReaderAt) fs.FS {
+	return New2(r, r)
+}
+
+// New2 routes headers and data requests through different readers, to help exotic caching schemes
+func New2(headerReader, dataReader io.ReaderAt) fs.FS {
 	fsys := fskeleton.New()
-	go populate(fsys, r) // yes, discard the error
+	go populate(fsys, headerReader, dataReader) // yes, discard the error
 	return fsys
 }
 
-func populate(fsys *fskeleton.FS, rNoInit io.ReaderAt) error {
+func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 	defer fsys.NoMore()
 	var paxHdrs map[string]string
 	var gnuLongName, gnuLongLink string
 	var rawHdr block
 	off := int64(0)
-	rInitHint := inithint.NewReaderAt(rNoInit)
 
 	for {
-		n, err := rInitHint.ReadAt(rawHdr[:], off)
+		n, err := headerReader.ReadAt(rawHdr[:], off)
 		if n < len(rawHdr) {
 			if err == io.EOF {
 				break
@@ -60,13 +63,13 @@ func populate(fsys *fskeleton.FS, rNoInit io.ReaderAt) error {
 		switch hdr.Typeflag {
 		case TypeXGlobalHeader: // ignore
 		case TypeXHeader:
-			paxHdrs, err = parsePAX(io.NewSectionReader(rInitHint, off, size))
+			paxHdrs, err = parsePAX(io.NewSectionReader(headerReader, off, size))
 			if err != nil {
 				return err
 			}
 			// This is a meta header affecting the next header
 		case TypeGNULongName, TypeGNULongLink:
-			realname, err := readSpecialFile(io.NewSectionReader(rInitHint, off, size))
+			realname, err := readSpecialFile(io.NewSectionReader(headerReader, off, size))
 			if err != nil {
 				return err
 			}
@@ -100,7 +103,7 @@ func populate(fsys *fskeleton.FS, rNoInit io.ReaderAt) error {
 			}
 
 			// One of the sparse-file formats can read a few more 512-byte header blocks
-			moreHdr := io.NewSectionReader(rInitHint, off, math.MaxInt64)
+			moreHdr := io.NewSectionReader(headerReader, off, math.MaxInt64)
 			sph, err := getSparseHoles(hdr, &rawHdr, moreHdr)
 			if err != nil {
 				return err
@@ -125,7 +128,7 @@ func populate(fsys *fskeleton.FS, rNoInit io.ReaderAt) error {
 			}
 
 			// The two main differences from archive/tar: random access and io/fs support
-			reader, logisize := readerFromSparseHoles(rNoInit, off, hdr.Size, sph)
+			reader, logisize := readerFromSparseHoles(dataReader, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
 				fsys.CreateRandomAccessFile(cleanPath, 0, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)

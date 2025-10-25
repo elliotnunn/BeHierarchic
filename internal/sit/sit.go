@@ -22,7 +22,6 @@ import (
 	"testing/iotest"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
-	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 var (
@@ -32,11 +31,17 @@ var (
 	ErrChecksum = errors.New("StuffIt: invalid checksum")
 )
 
-func New(disk io.ReaderAt) (fs.FS, error) {
+// New opens a StuffIt file
+func New(r io.ReaderAt) (fs.FS, error) {
+	return New2(r, r)
+}
+
+// New2 routes headers and data requests through different readers, to help exotic caching schemes
+func New2(headerReader, dataReader io.ReaderAt) (fs.FS, error) {
 	var (
 		buf []byte
 		err error
-		r   = io.NewSectionReader(inithint.NewReaderAt(disk), 0, 200)
+		r   = io.NewSectionReader(headerReader, 0, 200)
 	)
 
 	buf, err = creepTo(buf, r, 2)
@@ -65,7 +70,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		}
 		filesize := int64(binary.BigEndian.Uint32(buf[84:]))
 		fsys := fskeleton.New()
-		go newFormat(fsys, disk, int64(len(buf)), filesize)
+		go newFormat(fsys, headerReader, dataReader, int64(len(buf)), filesize)
 		return fsys, nil
 	} else {
 		buf, err = creepTo(buf, r, 22)
@@ -77,7 +82,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		// seems to be a CRC16 at offset 20 but I cannot get it to match... no matter
 		fsys := fskeleton.New()
 		filesize := int64(binary.BigEndian.Uint32(buf[6:]))
-		go oldFormat(fsys, disk, int64(len(buf)), filesize)
+		go oldFormat(fsys, headerReader, dataReader, int64(len(buf)), filesize)
 		return fsys, nil
 	}
 }

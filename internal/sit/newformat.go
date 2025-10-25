@@ -78,21 +78,21 @@ func (f *file) Next() int64 {
 	return next
 }
 
-func newFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
+func newFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset, filesize int64) {
 	defer fsys.NoMore()
 	var (
 		pass2 []file
 		known = make(map[int64]file)
 	)
 	for offset < filesize {
-		f, err := headers(disk, offset)
+		f, err := headers(headerReader, offset)
 		err = notExpectingEOF(err)
 		if err != nil {
 			slog.Warn("StuffIt read error", "err", err, "offset", offset)
 			return
 		}
 
-		ok := addToFS(fsys, f, disk, known)
+		ok := addToFS(fsys, f, headerReader, known)
 		if !ok {
 			pass2 = append(pass2, f)
 		}
@@ -100,11 +100,11 @@ func newFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 	}
 
 	for _, f := range pass2 {
-		addToFS(fsys, f, disk, known)
+		addToFS(fsys, f, dataReader, known)
 	}
 }
 
-func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file) bool {
+func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64]file) bool {
 	known[f.Offset] = f
 
 	if f.Name == "" {
@@ -135,7 +135,7 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 		rOffset := f.HeaderEnd
 		if macstuff.Rsrc.Algo == 0 && f.RCrypt == "" {
 			adfile, adsize := meta.WithResourceFork(
-				io.NewSectionReader(disk, rOffset, int64(macstuff.Rsrc.Unpacked)),
+				io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Unpacked)),
 				int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
 				f.HeaderEnd,          // order
@@ -145,7 +145,7 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 		} else {
 			adfile, adsize := meta.WithSequentialResourceFork(func() io.Reader {
 				return readerFor(macstuff.Rsrc.Algo, f.RCrypt, macstuff.Rsrc.Unpacked, macstuff.Rsrc.CRC,
-					io.NewSectionReader(disk, rOffset, int64(macstuff.Rsrc.Packed)))
+					io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Packed)))
 			}, int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateSequentialFile(appledouble.Sidecar(name),
 				f.HeaderEnd,          // order
@@ -158,15 +158,15 @@ func addToFS(fsys *fskeleton.FS, f file, disk io.ReaderAt, known map[int64]file)
 		if f.Common.Data.Algo == 0 && f.DCrypt == "" {
 			fsys.CreateRandomAccessFile(name,
 				f.HeaderEnd+1, // order
-				io.NewSectionReader(disk, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
-				int64(f.Common.Data.Unpacked),                                     // size
-				0, meta.ModTime, nil)                                              // mode, mtime, sys
+				io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
+				int64(f.Common.Data.Unpacked),                                           // size
+				0, meta.ModTime, nil)                                                    // mode, mtime, sys
 		} else {
 			fsys.CreateSequentialFile(name,
 				f.HeaderEnd+1, // order
 				func() io.Reader {
 					return readerFor(f.Common.Data.Algo, f.DCrypt, f.Common.Data.Unpacked, f.Common.Data.CRC,
-						io.NewSectionReader(disk, dOffset, int64(f.Common.Data.Packed)))
+						io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Packed)))
 				}, // reader
 				int64(f.Common.Data.Unpacked), // size
 				0, meta.ModTime, nil)          // mode, mtime, sys

@@ -10,7 +10,6 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
-	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 )
 
 type header struct {
@@ -42,7 +41,7 @@ type AlgID uint8
 func (id AlgID) isDirStart() bool { return id == 32 }
 func (id AlgID) isDirEnd() bool   { return id == 33 }
 
-func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
+func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset, filesize int64) {
 	defer fsys.NoMore()
 	type forlater struct {
 		offset int64
@@ -89,7 +88,7 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 		} else { // file
 			rOffset := int64(offset + 112)
 			if hdr.RAlgo == 0 {
-				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(disk, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
+				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(dataReader, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
 				fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
 					offset,               // order
 					adfile,               // reader
@@ -97,7 +96,7 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 					0, meta.ModTime, nil) // mode, mtime, sys
 			} else {
 				adfile, adsize := meta.WithSequentialResourceFork(func() io.Reader {
-					raw := io.NewSectionReader(disk, rOffset, int64(hdr.RPackLen))
+					raw := io.NewSectionReader(dataReader, rOffset, int64(hdr.RPackLen))
 					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, raw)
 				}, int64(hdr.RUnpackLen))
 				fsys.CreateSequentialFile(appledouble.Sidecar(name),
@@ -111,14 +110,14 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 			if hdr.DAlgo == 0 {
 				fsys.CreateRandomAccessFile(name,
 					offset+1, // order
-					io.NewSectionReader(disk, dOffset, int64(hdr.DUnpackLen)), // readerAt
+					io.NewSectionReader(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
 					int64(hdr.RUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {
 				fsys.CreateSequentialFile(name,
 					offset+1, // order
 					func() io.Reader {
-						raw := io.NewSectionReader(disk, dOffset, int64(hdr.DPackLen))
+						raw := io.NewSectionReader(dataReader, dOffset, int64(hdr.DPackLen))
 						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
 					}, // reader
 					int64(hdr.RUnpackLen), // size
@@ -129,7 +128,7 @@ func oldFormat(fsys *fskeleton.FS, disk io.ReaderAt, offset, filesize int64) {
 
 	for offset < filesize {
 		hdrdata := make([]byte, 112)
-		n, err := inithint.ReadAt(disk, hdrdata, offset)
+		n, err := headerReader.ReadAt(hdrdata, offset)
 		if n == len(hdrdata) { // ReadAt can return io.EOF on success if right at EOF
 			err = nil
 		}

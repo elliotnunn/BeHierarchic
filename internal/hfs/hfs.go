@@ -18,13 +18,16 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
-	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 	"github.com/elliotnunn/BeHierarchic/internal/multireaderat"
 )
 
-// Create a new FS from an HFS volume
-func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
-	rInitHint := inithint.NewReaderAt(rNoInit)
+// New opens an HFS image
+func New(r io.ReaderAt) (fs.FS, error) {
+	return New2(r, r)
+}
+
+// New2 routes headers and data requests through different readers, to help exotic caching schemes
+func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			retfs, reterr = nil, fmt.Errorf("%v", r)
@@ -32,7 +35,7 @@ func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
 	}()
 
 	var mdb [512]byte
-	_, err := rInitHint.ReadAt(mdb[:], 0x400)
+	_, err := headerReader.ReadAt(mdb[:], 0x400)
 	if err != nil {
 		return nil, fmt.Errorf("HFS Master Directory Block unreadable: %w", err)
 	}
@@ -49,7 +52,7 @@ func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
 	// Attempt to detect this early by checking the image size.
 	// Don't resort to an actual read, because the seek might be expensive.
 	minSize := int64(drAlBlSt)*512 + int64(drAlBlkSiz)*int64(drNmAlBlks)
-	if actualSize, ok := tryGetSizeCheaply(rNoInit); ok {
+	if actualSize, ok := tryGetSizeCheaply(headerReader); ok {
 		if actualSize < minSize {
 			return nil, fmt.Errorf("likely Disk Copy compressed HFS image: expected %db but got %db", minSize, actualSize)
 		}
@@ -62,7 +65,7 @@ func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
 				mustReadAll(
 					parseExtents(mdb[0x86:]).
 						toBytes(drAlBlkSiz, drAlBlSt).
-						makeReader(rInitHint))))
+						makeReader(headerReader))))
 
 	catalog :=
 		parseBTree(
@@ -71,7 +74,7 @@ func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
 					mdb[0x96:]).
 					chaseOverflow(overflow, 4, false).
 					toBytes(drAlBlkSiz, drAlBlSt).
-					makeReader(rInitHint)))
+					makeReader(headerReader)))
 
 	dirs := dirPaths(catalog)
 	fsys := fskeleton.New()
@@ -119,12 +122,12 @@ func New(rNoInit io.ReaderAt) (retfs fs.FS, reterr error) {
 				chaseOverflow(overflow, cnid, false).
 				toBytes(drAlBlkSiz, drAlBlSt).
 				clipExtents(dfSize).
-				makeReader(rNoInit)
+				makeReader(dataReader)
 			rfRead := parseExtents(val[0x56:]).
 				chaseOverflow(overflow, cnid, true).
 				toBytes(drAlBlkSiz, drAlBlSt).
 				clipExtents(int64(rfSize)).
-				makeReader(rNoInit)
+				makeReader(dataReader)
 
 			adRead, adSize := meta.WithResourceFork(rfRead, rfSize)
 
