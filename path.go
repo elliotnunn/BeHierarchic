@@ -23,9 +23,12 @@ type path struct {
 func (o path) Open() (fs.File, error)          { return o.fsys.Open(o.name.String()) }
 func (o path) Stat() (fs.FileInfo, error)      { return fs.Stat(o.fsys, o.name.String()) }
 func (o path) ReadDir() ([]fs.DirEntry, error) { return fs.ReadDir(o.fsys, o.name.String()) }
-func (o path) Join(p string) path              { o.name = o.name.Join(p); return o }
 
-// String returns the full path to the file
+// ShallowJoin returns a path with some elements added. Caution! It is only a lexical operation,
+// and will return an unusable path if passed a Special character
+func (o path) ShallowJoin(p string) path { o.name = o.name.Join(p); return o }
+
+// String returns the full path to the file (at some small cost)
 func (o path) String() string {
 	o.container.rMu.RLock()
 	defer o.container.rMu.RUnlock()

@@ -74,7 +74,7 @@ func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 
 		go func() {
-			isar, _, _ := o.Join(l.Name()).getArchive(false)
+			isar, _, _ := o.ShallowJoin(l.Name()).getArchive(false)
 			if isar {
 				answers <- &dirEntry{fsys: fsys, name: gopath.Join(name, l.Name()+Special)}
 			} else {

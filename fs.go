@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
@@ -148,10 +149,9 @@ func (o path) prefetch(concurrency int) {
 	for range concurrency {
 		go func() {
 			for name := range files {
-				isar, _, _ := o.Join(name).getArchive(true)
+				isar, subfsys, _ := o.ShallowJoin(name).getArchive(true)
 				if isar {
-					p, _ := o.container.path(o.Join(name).String() + Special) // we were promised this exists
-					p.prefetch(1)                                             // no sub concurrency, is that a good idea?
+					path{o.container, subfsys, internpath.New(".")}.prefetch(1)
 				}
 			}
 			wg.Done()
