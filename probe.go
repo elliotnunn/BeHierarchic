@@ -21,8 +21,10 @@ import (
 	"github.com/therootcompany/xz"
 )
 
+const sizeUnknown = -77777777 // no special significance, just negative & eyecatching
+
 func (o path) probeArchive() (fsysGenerator, error) {
-	f, err := o.Open()
+	f, err := o.cookedOpen()
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +102,15 @@ func (o path) probeArchive() (fsysGenerator, error) {
 			return apm.New(r2)
 		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := o.tryToGetSize()
+		stat, err := f.Stat()
 		if err != nil {
 			return nil, err
 		}
+		size := stat.Size()
 		return func(r io.ReaderAt) (fs.FS, error) {
 			r2 := inithint.NewReaderAt(r)
 			defer r2.Disable()
-			return zip.NewReader(r2, s)
+			return zip.NewReader(r2, size)
 		}, nil
 	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
 		return func(r io.ReaderAt) (fs.FS, error) { return sit.New2(r, r) }, nil

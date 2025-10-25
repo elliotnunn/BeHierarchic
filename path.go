@@ -20,13 +20,12 @@ type path struct {
 	name      internpath.Path
 }
 
-func (o path) Open() (fs.File, error)          { return o.fsys.Open(o.name.String()) }
-func (o path) Stat() (fs.FileInfo, error)      { return fs.Stat(o.fsys, o.name.String()) }
-func (o path) ReadDir() ([]fs.DirEntry, error) { return fs.ReadDir(o.fsys, o.name.String()) }
-
 // ShallowJoin returns a path with some elements added. Caution! It is only a lexical operation,
 // and will return an unusable path if passed a Special character
 func (o path) ShallowJoin(p string) path { o.name = o.name.Join(p); return o }
+
+// Open opens the raw file (no archive-browsing decorations) for the benefit of reader2readerat
+func (o path) Open() (fs.File, error) { return o.fsys.Open(o.name.String()) }
 
 // String returns the full path to the file (at some small cost)
 func (o path) String() string {
@@ -50,18 +49,17 @@ func (fsys *FS) path(name string) (path, error) {
 		warps[len(warps)-1] = strings.TrimSuffix(warps[len(warps)-1], Special)
 		warps = append(warps, ".")
 	}
-	warps, name = warps[:len(warps)-1], warps[len(warps)-1]
 
-	subsys := fsys.root
-	for _, el := range warps {
-		p := path{fsys, subsys, internpath.New(el)}
-		isar, subsubsys, err := p.getArchive(true)
+	p := path{fsys, fsys.root, internpath.New(".")}
+	for _, el := range warps[:len(warps)-1] {
+		var isar bool
+		var err error
+		isar, p, err = p.ShallowJoin(el).getArchive(true)
 		if err != nil {
 			return path{}, err
 		} else if !isar {
 			return path{}, fs.ErrNotExist
 		}
-		subsys = subsubsys
 	}
-	return path{fsys, subsys, internpath.New(name)}, nil
+	return p.ShallowJoin(warps[len(warps)-1]), nil
 }

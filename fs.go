@@ -9,6 +9,7 @@ import (
 	gopath "path"
 	"sync"
 
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
@@ -47,11 +48,11 @@ func Wrapper(fsys fs.FS) *FS {
 	}
 }
 
-func (o path) getArchive(needFS bool) (bool, fs.FS, error) {
+func (o path) getArchive(needFS bool) (bool, path, error) {
 	if o.fsys == o.container.root { // Undercooked files, do not touch
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
-			return false, nil, nil
+			return false, path{}, nil
 		}
 	}
 
@@ -64,7 +65,7 @@ again:
 	default: // not yet decided
 		gen, err := o.probeArchive()
 		if err != nil {
-			return false, nil, err
+			return false, path{}, err
 		}
 		if gen == nil {
 			b.data = notAnArchive{}
@@ -73,17 +74,17 @@ again:
 		}
 		goto again
 	case notAnArchive:
-		return false, nil, nil
+		return false, path{}, nil
 	case fs.FS:
-		return true, t, nil
+		return true, path{o.container, t, internpath.New(".")}, nil
 	case fsysGenerator:
 		if !needFS {
-			return true, nil, nil
+			return true, path{}, nil
 		}
 
-		f, err := o.Open()
+		f, err := o.rawOpen()
 		if err != nil {
-			return false, nil, err
+			return false, path{}, err
 		}
 		r, nativeReaderAt := f.(io.ReaderAt)
 		if !nativeReaderAt {
@@ -96,7 +97,7 @@ again:
 			if f != nil {
 				f.Close()
 			}
-			return false, nil, err
+			return false, path{}, err
 		}
 
 		o.container.rMu.Lock()

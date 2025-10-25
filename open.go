@@ -11,11 +11,12 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
-func (fsys *FS) Open(name string) (fs.File, error) {
-	// Cases to cover:
-	// - all files must implement io.ReaderAt
-	// - all directories must have mountpoints added to their listing
-	name, suppressSpecialSiblings := checkAndDeleteComponent(name, ".nodeeper")
+func (fsys *FS) Open(name string) (f fs.File, err error) {
+	defer func() {
+		if err != nil {
+			err = &fs.PathError{Op: "open", Path: name, Err: err}
+		}
+	}()
 
 	if !fs.ValidPath(name) {
 		return nil, fs.ErrInvalid
@@ -26,6 +27,14 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return nil, err
 	}
 
+	return o.cookedOpen()
+}
+
+func (o path) rawOpen() (fs.File, error) { return o.fsys.Open(o.name.String()) }
+func (o path) cookedOpen() (fs.File, error) {
+	// Cases to cover:
+	// - all files must implement io.ReaderAt
+	// - all directories must have mountpoints added to their listing
 	f, err := o.Open()
 	if err != nil {
 		return nil, err // would be nice to make this more informative
@@ -40,36 +49,36 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
-			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(o)}
+			f.Close()
+			// TODO: check whether Size() returns something sensible, and if not,
+			// signal rapool to watch out for the size of this file
+			f = &file{path: o, rdr: o.container.rapool.ReaderAt(o)}
 		}
 	case fs.ModeDir:
-		if !suppressSpecialSiblings {
-			f = &dir{obj: f.(fs.ReadDirFile), fsys: fsys, name: name}
-		}
+		f = &dir{path: o, obj: f.(fs.ReadDirFile)}
 	}
 	return f, nil
 }
 
 type dir struct {
+	path  path
 	obj   fs.ReadDirFile
-	fsys  *FS
-	name  string
 	list  []fs.DirEntry
 	lseek int
 }
 
+func (d *dir) Stat() (fs.FileInfo, error) { return d.path.cookedStat() }
 func (d *dir) Close() error               { return d.obj.Close() }
 func (d *dir) Read(p []byte) (int, error) { return 0, io.EOF }
 
 type file struct {
-	name string
-	fsys *FS
-	obj  fs.File
+	path path
 	rdr  spinner.ReaderAt
 	seek int64
 }
 
-func (f *file) Close() error                            { return f.obj.Close() }
+func (f *file) Stat() (fs.FileInfo, error)              { return f.path.cookedStat() }
+func (f *file) Close() error                            { return nil }
 func (f *file) ReadAt(p []byte, off int64) (int, error) { return f.rdr.ReadAt(p, off) }
 
 func (f *file) Read(p []byte) (int, error) {

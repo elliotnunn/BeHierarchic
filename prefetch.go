@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
@@ -29,7 +28,7 @@ func (o path) prefetch(concurrency int) {
 			for name := range files {
 				isar, subfsys, _ := o.ShallowJoin(name).getArchive(true)
 				if isar {
-					path{o.container, subfsys, internpath.New(".")}.prefetch(1)
+					subfsys.prefetch(1)
 				}
 			}
 			wg.Done()
@@ -37,4 +36,3 @@ func (o path) prefetch(concurrency int) {
 	}
 	wg.Wait()
 }
-

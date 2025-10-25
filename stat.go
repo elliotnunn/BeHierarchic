@@ -2,18 +2,17 @@ package main
 
 import (
 	"io/fs"
-	gopath "path"
-	"strings"
 	"time"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
-func (d *dir) Stat() (fs.FileInfo, error)  { return d.fsys.Stat(d.name) }
-func (f *file) Stat() (fs.FileInfo, error) { return f.fsys.Stat(f.name) }
-
-func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
-	// Special cases to cover:
-	// - a mountpoint: it should not return a name of "."
-	// - a file that doesn't know its own size (e.g. a gzip)
+func (fsys *FS) Stat(name string) (stat fs.FileInfo, err error) {
+	defer func() {
+		if err != nil {
+			err = &fs.PathError{Op: "stat", Path: name, Err: err}
+		}
+	}()
 
 	if !fs.ValidPath(name) {
 		return nil, fs.ErrInvalid
@@ -23,25 +22,32 @@ func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	imgname, isMountpoint := strings.CutSuffix(name, Special)
 
+	return o.cookedStat()
+}
+
+func (o path) rawStat() (fs.FileInfo, error) { return fs.Stat(o.fsys, o.name.String()) }
+func (o path) cookedStat() (fs.FileInfo, error) {
+	// Cases to cover:
+	// - a mountpoint: it should not return a name of "."
+	// - a file that doesn't know its own size (e.g. a gzip)
+
+	isMountpoint := o.fsys != o.container.root && o.name == internpath.New(".")
 	if isMountpoint {
-		o, err = fsys.path(imgname)
-		if err != nil {
-			panic("why can't I resolve an image that exists?")
-		}
-		imgStat, err := o.Stat()
+		diskImage := o.container.reverse[o.fsys]
+		imgStat, err := diskImage.rawStat()
 		if err != nil {
 			return nil, err
 		}
-		return mountpointStat{FileInfo: imgStat, name: gopath.Base(name)}, nil
+		return mountpointStat{FileInfo: imgStat, name: diskImage.name.Base() + Special}, nil
 	} else {
-		stat, err := o.Stat()
+		stat, err := o.rawStat()
 		if err != nil {
 			return nil, err
 		}
-		if stat.Size() == sizeUnknown {
-			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(o)}, nil
+		if stat.Mode().IsRegular() && stat.Size() < 0 {
+			// TODO: signal rapool to watch out for the size of this file
+			return sizeDeferredStat{stat, o.container.rapool.ReaderAt(o)}, nil
 		} else {
 			return stat, nil
 		}
@@ -59,8 +65,6 @@ func (s mountpointStat) Mode() fs.FileMode {
 	return s.FileInfo.Mode() | fs.ModeDir | s.FileInfo.Mode()&0o444>>2
 }
 
-const sizeUnknown = -0xa720121993
-
 type sizeDeferredStat struct {
 	fileInfoWithoutSize
 	sizer
@@ -73,18 +77,4 @@ type fileInfoWithoutSize interface {
 	ModTime() time.Time
 	IsDir() bool
 	Sys() any
-}
-
-// Slightly ugly, for when we need the size right away but have discarded the full path
-func (o path) tryToGetSize() (int64, error) {
-	stat, err := o.Stat()
-	if err != nil {
-		return 0, err
-	}
-	size := stat.Size()
-	if size == sizeUnknown {
-		return o.container.rapool.ReaderAt(o).Size(), nil
-	} else {
-		return size, nil
-	}
 }
