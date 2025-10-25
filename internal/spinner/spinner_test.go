@@ -84,7 +84,7 @@ func TestConcurrent(t *testing.T) {
 
 	fsys := new(fsys)
 	pool := New(shift, 10, 10)
-	f := pool.ReaderAt(fsys, fmt.Sprintf("slow%d", 3*block))
+	f := pool.ReaderAt(reopenableFile{fsys, fmt.Sprintf("slow%d", 3*block)})
 
 	t.Run("parallelreads", func(t *testing.T) {
 		for _, testCase := range whereToRead {
@@ -139,7 +139,7 @@ func TestSerial(t *testing.T) {
 	for i, group := range whereToRead {
 		fsys := new(fsys)
 		pool := New(shift, 10, 10)
-		f := pool.ReaderAt(fsys, fmt.Sprintf("fast%d", 3*block))
+		f := pool.ReaderAt(reopenableFile{fsys, fmt.Sprintf("fast%d", 3*block)})
 
 		t.Run(fmt.Sprintf("group%d", i), func(t *testing.T) {
 			for _, testCase := range group {
@@ -171,7 +171,7 @@ func TestSerial(t *testing.T) {
 func TestReadAhead(t *testing.T) {
 	fsys := new(fsys)
 	pool := New(shift, 10, 10)
-	f := pool.ReaderAt(fsys, fmt.Sprintf("slow%d", 2*block))
+	f := pool.ReaderAt(reopenableFile{fsys, fmt.Sprintf("slow%d", 2*block)})
 
 	f.ReadAt(make([]byte, 10), 0)
 	time.Sleep(quantum) // wait to fill the cache with the next block
@@ -185,3 +185,11 @@ func TestReadAhead(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+type reopenableFile struct {
+	fsys     fs.FS
+	filename string
+}
+
+func (r reopenableFile) Reopen() (fs.File, error) { return r.fsys.Open(r.filename) }
+func (r reopenableFile) String() string           { return r.filename }

@@ -101,7 +101,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerat
 			return apm.New(r2)
 		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := fsys.tryToGetSize(subsys, subname.String())
+		s, err := fsys.tryToGetSize(subsys, subname)
 		if err != nil {
 			return nil, err
 		}

@@ -40,7 +40,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
-			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(subsys, subname.String())}
+			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})}
 		}
 	case fs.ModeDir:
 		if !suppressSpecialSiblings {

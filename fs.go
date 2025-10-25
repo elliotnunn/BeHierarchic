@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"path"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,9 @@ const Special = "◆"
 type FS struct {
 	bMu     sync.RWMutex
 	burrows map[key]*b
+
+	rMu     sync.RWMutex
+	reverse map[fs.FS]key
 
 	root   fs.FS
 	rapool *spinner.Pool
@@ -50,6 +54,7 @@ func Wrapper(fsys fs.FS) *FS {
 	return &FS{
 		root:    fsys,
 		burrows: make(map[key]*b),
+		reverse: make(map[fs.FS]key),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 }
@@ -73,27 +78,6 @@ func (fsys *FS) resolve(name string) (subsys fs.FS, subname internpath.Path, err
 		subsys = subsubsys
 	}
 	return subsys, internpath.New(name), nil
-}
-
-func instantiate(generator fsysGenerator, converter *spinner.Pool, fsys fs.FS, name internpath.Path) (fs.FS, error) {
-	f, err := fsys.Open(name.String())
-	if err != nil {
-		return nil, err
-	}
-	r, nativeReaderAt := f.(io.ReaderAt)
-	if !nativeReaderAt {
-		f.Close()
-		f = nil
-		r = converter.ReaderAt(fsys, name.String())
-	}
-	fsys2, err := generator(r)
-	if err != nil {
-		if f != nil {
-			f.Close()
-		}
-		return nil, err
-	}
-	return fsys2, nil
 }
 
 func (fsys *FS) getArchive(subsys fs.FS, subname internpath.Path, needFS bool) (bool, fs.FS, error) {
@@ -129,10 +113,28 @@ again:
 		if !needFS {
 			return true, nil, nil
 		}
-		fsys2, err := instantiate(t, fsys.rapool, subsys, subname)
-		if err != nil { // should this be remembered as a permanent error?
+
+		f, err := subsys.Open(subname.String())
+		if err != nil {
 			return false, nil, err
 		}
+		r, nativeReaderAt := f.(io.ReaderAt)
+		if !nativeReaderAt {
+			f.Close()
+			f = nil
+			r = fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})
+		}
+		fsys2, err := t(r)
+		if err != nil {
+			if f != nil {
+				f.Close()
+			}
+			return false, nil, err
+		}
+
+		fsys.rMu.Lock()
+		fsys.reverse[fsys2] = key{subsys, subname}
+		fsys.rMu.Unlock()
 		b.data = fsys2
 		goto again
 	}
@@ -185,3 +187,23 @@ func (fsys *FS) prefetch(subsys fs.FS, infoname internpath.Path, concurrency int
 	}
 	wg.Wait()
 }
+
+func (fsys *FS) fullPath(id key) string {
+	fsys.rMu.RLock()
+	defer fsys.rMu.RUnlock()
+	warps := []string{id.name.String()}
+	for id.fsys != fsys.root {
+		id = fsys.reverse[id.fsys]
+		warps = append(warps, id.name.String()+Special)
+	}
+	slices.Reverse(warps)
+	return path.Join(warps...)
+}
+
+type reopenableFile struct {
+	fsys *FS
+	id   key
+}
+
+func (f reopenableFile) Reopen() (fs.File, error) { return f.id.fsys.Open(f.id.name.String()) }
+func (f reopenableFile) String() string           { return f.fsys.fullPath(f.id) }

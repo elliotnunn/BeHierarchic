@@ -5,6 +5,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 func (d *dir) Stat() (fs.FileInfo, error)  { return d.fsys.Stat(d.name) }
@@ -41,7 +43,7 @@ func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
 			return nil, err
 		}
 		if stat.Size() == sizeUnknown {
-			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(subsys, subname.String())}, nil
+			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})}, nil
 		} else {
 			return stat, nil
 		}
@@ -76,14 +78,14 @@ type fileInfoWithoutSize interface {
 }
 
 // Slightly ugly, for when we need the size right away but have discarded the full path
-func (fsys *FS) tryToGetSize(subsys fs.FS, subname string) (int64, error) {
-	stat, err := fs.Stat(subsys, subname)
+func (fsys *FS) tryToGetSize(subsys fs.FS, subname internpath.Path) (int64, error) {
+	stat, err := fs.Stat(subsys, subname.String())
 	if err != nil {
 		return 0, err
 	}
 	size := stat.Size()
 	if size == sizeUnknown {
-		return fsys.rapool.ReaderAt(subsys, subname).Size(), nil
+		return fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}}).Size(), nil
 	} else {
 		return size, nil
 	}

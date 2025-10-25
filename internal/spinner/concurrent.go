@@ -3,18 +3,18 @@
 package spinner
 
 import (
+	"fmt"
 	"hash/maphash"
 	"io"
 	"io/fs"
 	"math"
 
 	"github.com/dgryski/go-tinylfu"
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
-type ID struct {
-	fsys fs.FS
-	name internpath.Path
+type ReopenableFile interface { // keep in mind that this is used as a key
+	Reopen() (fs.File, error)
+	fmt.Stringer // likely to be used as a disk key, so choose well
 }
 
 // Create a new Pool with the specified properties.
@@ -23,11 +23,11 @@ func New(blockShift int, nBlock int, nReader int) *Pool {
 		jobs:    make(chan []*job),
 		sizeQ:   make(chan sizeQuery),
 		shift:   blockShift,
-		readers: make(map[ID]*readerState),
-		dones:   make(chan ID),
+		readers: make(map[ReopenableFile]*readerState),
+		dones:   make(chan ReopenableFile),
 		bcache:  tinylfu.New[ckey, []byte](nBlock, nBlock*10, bhasher),
 	}
-	p.rcache = tinylfu.New[ID, struct{}](nReader, nReader*10, rhasher, tinylfu.OnEvict(p.evict))
+	p.rcache = tinylfu.New[ReopenableFile, struct{}](nReader, nReader*10, rhasher, tinylfu.OnEvict(p.evict))
 	go p.multiplexer()
 	return p
 }
@@ -39,20 +39,20 @@ type Pool struct {
 	jobs    chan []*job
 	sizeQ   chan sizeQuery
 	shift   int
-	readers map[ID]*readerState
-	dones   chan ID
+	readers map[ReopenableFile]*readerState
+	dones   chan ReopenableFile
 	bcache  *tinylfu.T[ckey, []byte]
-	rcache  *tinylfu.T[ID, struct{}]
+	rcache  *tinylfu.T[ReopenableFile, struct{}]
 }
 
 // A ReaderAt is safe for concurrent use by multiple goroutines.
-func (p *Pool) ReaderAt(fsys fs.FS, name string) ReaderAt {
-	return ReaderAt{pool: p, id: ID{fsys, internpath.New(name)}}
+func (p *Pool) ReaderAt(f ReopenableFile) ReaderAt {
+	return ReaderAt{pool: p, id: f}
 }
 
 type ReaderAt struct {
 	pool *Pool
-	id   ID
+	id   ReopenableFile
 }
 
 func (r ReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
@@ -112,18 +112,18 @@ func (r ReaderAt) Size() int64 {
 }
 
 type sizeQuery struct {
-	id  ID
+	id  ReopenableFile
 	ret chan int64
 }
 
 type ckey struct {
-	id     ID
+	id     ReopenableFile
 	offset int64
 }
 
 // Part of a ReadAt request touching a single block
 type job struct {
-	id   ID
+	id   ReopenableFile
 	p    []byte
 	off  int64
 	n    int
@@ -236,7 +236,7 @@ func (p *Pool) multiplexer() {
 	}
 }
 
-func (p *Pool) startJob(id ID) {
+func (p *Pool) startJob(id ReopenableFile) {
 	r, ok := p.readers[id]
 	if !ok {
 		panic("nonexistent reader")
@@ -266,7 +266,7 @@ func (p *Pool) startJob(id ID) {
 			if r.File != nil {
 				go r.File.Close()
 			}
-			r.File, r.err = id.fsys.Open(id.name.String())
+			r.File, r.err = id.Reopen()
 			if r.err != nil {
 				return
 			}
@@ -284,7 +284,7 @@ func (p *Pool) startJob(id ID) {
 }
 
 // only ever called via startJob, so don't worry about sync
-func (p *Pool) evict(id ID, _ struct{}) {
+func (p *Pool) evict(id ReopenableFile, _ struct{}) {
 	r := p.readers[id]
 	if r.busy {
 		r.diesoon = true
@@ -296,7 +296,7 @@ func (p *Pool) evict(id ID, _ struct{}) {
 	}
 }
 
-func (p *Pool) ensureReader(id ID) *readerState {
+func (p *Pool) ensureReader(id ReopenableFile) *readerState {
 	r, ok := p.readers[id]
 	if !ok {
 		r = new(readerState)
@@ -322,6 +322,6 @@ func bhasher(k ckey) uint64 {
 	return maphash.Comparable(seed, k)
 }
 
-func rhasher(k ID) uint64 {
+func rhasher(k ReopenableFile) uint64 {
 	return maphash.Comparable(seed, k)
 }
