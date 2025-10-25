@@ -2,11 +2,9 @@ package main
 
 import (
 	"io/fs"
-	"path"
+	gopath "path"
 	"strings"
 	"time"
-
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 func (d *dir) Stat() (fs.FileInfo, error)  { return d.fsys.Stat(d.name) }
@@ -21,29 +19,29 @@ func (fsys *FS) Stat(name string) (fs.FileInfo, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	subsys, subname, err := fsys.resolve(name)
+	o, err := fsys.path(name)
 	if err != nil {
 		return nil, err
 	}
 	imgname, isMountpoint := strings.CutSuffix(name, Special)
 
 	if isMountpoint {
-		subsys, subname, err = fsys.resolve(imgname)
+		o, err = fsys.path(imgname)
 		if err != nil {
 			panic("why can't I resolve an image that exists?")
 		}
-		imgStat, err := fs.Stat(subsys, subname.String())
+		imgStat, err := o.Stat()
 		if err != nil {
 			return nil, err
 		}
-		return mountpointStat{FileInfo: imgStat, name: path.Base(name)}, nil
+		return mountpointStat{FileInfo: imgStat, name: gopath.Base(name)}, nil
 	} else {
-		stat, err := fs.Stat(subsys, subname.String())
+		stat, err := o.Stat()
 		if err != nil {
 			return nil, err
 		}
 		if stat.Size() == sizeUnknown {
-			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})}, nil
+			return sizeDeferredStat{stat, fsys.rapool.ReaderAt(o)}, nil
 		} else {
 			return stat, nil
 		}
@@ -78,14 +76,14 @@ type fileInfoWithoutSize interface {
 }
 
 // Slightly ugly, for when we need the size right away but have discarded the full path
-func (fsys *FS) tryToGetSize(subsys fs.FS, subname internpath.Path) (int64, error) {
-	stat, err := fs.Stat(subsys, subname.String())
+func (fsys *FS) tryToGetSize(o path) (int64, error) {
+	stat, err := o.Stat()
 	if err != nil {
 		return 0, err
 	}
 	size := stat.Size()
 	if size == sizeUnknown {
-		return fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}}).Size(), nil
+		return fsys.rapool.ReaderAt(o).Size(), nil
 	} else {
 		return size, nil
 	}

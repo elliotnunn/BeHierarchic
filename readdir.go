@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"io"
 	"io/fs"
-	"path"
+	gopath "path"
 	"slices"
 	"strings"
 )
@@ -37,7 +37,7 @@ type dirEntry struct {
 	name string
 }
 
-func (de *dirEntry) Name() string               { return path.Base(de.name) }
+func (de *dirEntry) Name() string               { return gopath.Base(de.name) }
 func (de *dirEntry) Info() (fs.FileInfo, error) { return de.fsys.Stat(de.name) }
 func (de *dirEntry) Type() fs.FileMode          { return fs.ModeDir }
 func (de *dirEntry) IsDir() bool                { return true }
@@ -52,11 +52,11 @@ func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	subsys, subname, err := fsys.resolve(name)
+	o, err := fsys.path(name)
 	if err != nil {
 		return nil, err
 	}
-	listing, err := fs.ReadDir(subsys, subname.String())
+	listing, err := o.ReadDir()
 	if err != nil {
 		return nil, err
 	}
@@ -74,9 +74,9 @@ func (fsys *FS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 
 		go func() {
-			isar, _, _ := fsys.getArchive(subsys, subname.Join(l.Name()), false)
+			isar, _, _ := fsys.getArchive(o.Join(l.Name()), false)
 			if isar {
-				answers <- &dirEntry{fsys: fsys, name: path.Join(name, l.Name()+Special)}
+				answers <- &dirEntry{fsys: fsys, name: gopath.Join(name, l.Name()+Special)}
 			} else {
 				answers <- nil
 			}

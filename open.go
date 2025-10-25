@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
+	gopath "path"
 	"strings"
 
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
@@ -21,12 +21,12 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 		return nil, fs.ErrInvalid
 	}
 
-	subsys, subname, err := fsys.resolve(name)
+	o, err := fsys.path(name)
 	if err != nil {
 		return nil, err
 	}
 
-	f, err := subsys.Open(subname.String())
+	f, err := o.Open()
 	if err != nil {
 		return nil, err // would be nice to make this more informative
 	}
@@ -40,7 +40,7 @@ func (fsys *FS) Open(name string) (fs.File, error) {
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
-			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})}
+			f = &file{fsys: fsys, name: name, obj: f, rdr: fsys.rapool.ReaderAt(o)}
 		}
 	case fs.ModeDir:
 		if !suppressSpecialSiblings {
@@ -113,7 +113,7 @@ func checkAndDeleteComponent(name string, special string) (string, bool) {
 		if len(l2) == 0 {
 			return ".", true
 		} else {
-			return path.Join(l2...), true
+			return gopath.Join(l2...), true
 		}
 	} else {
 		return name, false

@@ -191,5 +191,5 @@ type reopenableFile struct {
 	filename string
 }
 
-func (r reopenableFile) Reopen() (fs.File, error) { return r.fsys.Open(r.filename) }
-func (r reopenableFile) String() string           { return r.filename }
+func (r reopenableFile) Open() (fs.File, error) { return r.fsys.Open(r.filename) }
+func (r reopenableFile) String() string         { return r.filename }

@@ -7,14 +7,11 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"path"
+	gopath "path"
 	"runtime"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
@@ -23,18 +20,13 @@ const Special = "◆"
 
 type FS struct {
 	bMu     sync.RWMutex
-	burrows map[key]*b
+	burrows map[path]*b
 
 	rMu     sync.RWMutex
-	reverse map[fs.FS]key
+	reverse map[fs.FS]path
 
 	root   fs.FS
 	rapool *spinner.Pool
-}
-
-type key struct {
-	fsys fs.FS
-	name internpath.Path
 }
 
 type b struct {
@@ -53,49 +45,28 @@ func Wrapper(fsys fs.FS) *FS {
 	const blockShift = 13 // 8 kb
 	return &FS{
 		root:    fsys,
-		burrows: make(map[key]*b),
-		reverse: make(map[fs.FS]key),
+		burrows: make(map[path]*b),
+		reverse: make(map[fs.FS]path),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 }
 
-func (fsys *FS) resolve(name string) (subsys fs.FS, subname internpath.Path, err error) {
-	warps := strings.Split(name, Special+"/")
-	if strings.HasSuffix(name, Special) {
-		warps[len(warps)-1] = strings.TrimSuffix(warps[len(warps)-1], Special)
-		warps = append(warps, ".")
-	}
-	warps, name = warps[:len(warps)-1], warps[len(warps)-1]
-
-	subsys = fsys.root
-	for _, el := range warps {
-		isar, subsubsys, err := fsys.getArchive(subsys, internpath.New(el), true)
-		if err != nil {
-			return nil, internpath.Path{}, err
-		} else if !isar {
-			return nil, internpath.Path{}, fs.ErrNotExist
-		}
-		subsys = subsubsys
-	}
-	return subsys, internpath.New(name), nil
-}
-
-func (fsys *FS) getArchive(subsys fs.FS, subname internpath.Path, needFS bool) (bool, fs.FS, error) {
-	if subsys == fsys.root { // Undercooked files, do not touch
-		switch path.Ext(subname.Base()) {
+func (fsys *FS) getArchive(o path, needFS bool) (bool, fs.FS, error) {
+	if o.fsys == fsys.root { // Undercooked files, do not touch
+		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
 			return false, nil, nil
 		}
 	}
 
-	b := fsys.getB(subsys, subname)
+	b := fsys.getB(o)
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 again:
 	switch t := b.data.(type) {
 	default: // not yet decided
-		gen, err := fsys.probeArchive(subsys, subname)
+		gen, err := fsys.probeArchive(o)
 		if err != nil {
 			return false, nil, err
 		}
@@ -114,7 +85,7 @@ again:
 			return true, nil, nil
 		}
 
-		f, err := subsys.Open(subname.String())
+		f, err := o.Open()
 		if err != nil {
 			return false, nil, err
 		}
@@ -122,7 +93,7 @@ again:
 		if !nativeReaderAt {
 			f.Close()
 			f = nil
-			r = fsys.rapool.ReaderAt(reopenableFile{fsys, key{subsys, subname}})
+			r = fsys.rapool.ReaderAt(o)
 		}
 		fsys2, err := t(r)
 		if err != nil {
@@ -133,16 +104,16 @@ again:
 		}
 
 		fsys.rMu.Lock()
-		fsys.reverse[fsys2] = key{subsys, subname}
+		fsys.reverse[fsys2] = o
 		fsys.rMu.Unlock()
 		b.data = fsys2
 		goto again
 	}
 }
 
-func (fsys *FS) getB(subsys fs.FS, subname internpath.Path) *b {
+func (fsys *FS) getB(o path) *b {
 	fsys.bMu.RLock()
-	x, ok := fsys.burrows[key{subsys, subname}]
+	x, ok := fsys.burrows[o]
 	fsys.bMu.RUnlock()
 
 	if ok {
@@ -150,10 +121,10 @@ func (fsys *FS) getB(subsys fs.FS, subname internpath.Path) *b {
 	}
 
 	fsys.bMu.Lock()
-	x, ok = fsys.burrows[key{subsys, subname}]
+	x, ok = fsys.burrows[o]
 	if !ok { // recheck because we relinquished the lock
 		x = new(b)
-		fsys.burrows[key{subsys, subname}] = x
+		fsys.burrows[o] = x
 	}
 	fsys.bMu.Unlock()
 
@@ -163,23 +134,24 @@ func (fsys *FS) getB(subsys fs.FS, subname internpath.Path) *b {
 func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
 	t := time.Now()
-	fsys.prefetch(fsys.root, internpath.New("."), runtime.NumCPU())
+	o, _ := fsys.path(".")
+	fsys.prefetch(o, runtime.NumCPU())
 	slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 }
 
-func (fsys *FS) prefetch(subsys fs.FS, infoname internpath.Path, concurrency int) {
-	waysort, files := walk.FilesInDiskOrder(subsys)
-	slog.Info("prefetchDir", "path", infoname.String(), "sortorder", waysort)
+func (fsys *FS) prefetch(o path, concurrency int) {
+	waysort, files := walk.FilesInDiskOrder(o.fsys)
+	slog.Info("prefetchDir", "path", o.String(), "sortorder", waysort)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(concurrency)
 	for range concurrency {
 		go func() {
 			for name := range files {
-				isar, subsubsys, _ := fsys.getArchive(subsys, internpath.New(name), true)
+				isar, _, _ := fsys.getArchive(o.Join(name), true)
 				if isar {
-					subname := infoname.Join(name + Special)
-					fsys.prefetch(subsubsys, subname, 1) // no sub concurrency, is that a good idea?
+					p, _ := fsys.path(o.Join(name).String() + Special) // we were promised this exists
+					fsys.prefetch(p, 1)                                // no sub concurrency, is that a good idea?
 				}
 			}
 			wg.Done()
@@ -187,23 +159,3 @@ func (fsys *FS) prefetch(subsys fs.FS, infoname internpath.Path, concurrency int
 	}
 	wg.Wait()
 }
-
-func (fsys *FS) fullPath(id key) string {
-	fsys.rMu.RLock()
-	defer fsys.rMu.RUnlock()
-	warps := []string{id.name.String()}
-	for id.fsys != fsys.root {
-		id = fsys.reverse[id.fsys]
-		warps = append(warps, id.name.String()+Special)
-	}
-	slices.Reverse(warps)
-	return path.Join(warps...)
-}
-
-type reopenableFile struct {
-	fsys *FS
-	id   key
-}
-
-func (f reopenableFile) Reopen() (fs.File, error) { return f.id.fsys.Open(f.id.name.String()) }
-func (f reopenableFile) String() string           { return f.fsys.fullPath(f.id) }

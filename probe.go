@@ -16,14 +16,13 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/inithint"
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
 )
 
-func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerator, error) {
-	f, err := subsys.Open(subname.String())
+func (fsys *FS) probeArchive(o path) (fsysGenerator, error) {
+	f, err := o.Open()
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +54,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerat
 	switch {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(subname.Base(), ".gz .gzip .tgz=.tar")
+			innerName := changeSuffix(o.name.Base(), ".gz .gzip .tgz=.tar")
 			opener := func() io.Reader {
 				r, err := gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
 				if err != nil {
@@ -70,7 +69,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerat
 		}, nil
 	case matchAt("BZ", 0): // bzip2
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(subname.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
+			innerName := changeSuffix(o.name.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
 			opener := func() io.Reader {
 				return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
 			}
@@ -81,7 +80,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerat
 		}, nil
 	case matchAt("\xfd7zXZ\x00", 0): // xz
 		return func(r io.ReaderAt) (fs.FS, error) {
-			innerName := changeSuffix(subname.Base(), ".xz .txz=.tar")
+			innerName := changeSuffix(o.name.Base(), ".xz .txz=.tar")
 			opener := func() io.Reader {
 				r, err := xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
 				if err != nil {
@@ -101,7 +100,7 @@ func (fsys *FS) probeArchive(subsys fs.FS, subname internpath.Path) (fsysGenerat
 			return apm.New(r2)
 		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := fsys.tryToGetSize(subsys, subname)
+		s, err := fsys.tryToGetSize(o)
 		if err != nil {
 			return nil, err
 		}

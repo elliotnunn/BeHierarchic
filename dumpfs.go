@@ -6,7 +6,7 @@ package main
 import (
 	"fmt"
 	"io/fs"
-	"path"
+	gopath "path"
 	"strings"
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
@@ -26,7 +26,7 @@ func dumpFS(fsys fs.FS) {
 			i.Mode(), i.Size(), i.ModTime().Format(tfmt))
 
 		// AppleDouble file
-		if strings.HasPrefix(path.Base(p), "._") {
+		if strings.HasPrefix(gopath.Base(p), "._") {
 			f, err := fsys.Open(p)
 			if err != nil {
 				fmt.Printf("    AppleDouble dump error: %s\n", err.Error())
