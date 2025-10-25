@@ -21,7 +21,7 @@ import (
 	"github.com/therootcompany/xz"
 )
 
-func (fsys *FS) probeArchive(o path) (fsysGenerator, error) {
+func (o path) probeArchive() (fsysGenerator, error) {
 	f, err := o.Open()
 	if err != nil {
 		return nil, err
@@ -100,7 +100,7 @@ func (fsys *FS) probeArchive(o path) (fsysGenerator, error) {
 			return apm.New(r2)
 		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		s, err := fsys.tryToGetSize(o)
+		s, err := o.tryToGetSize()
 		if err != nil {
 			return nil, err
 		}

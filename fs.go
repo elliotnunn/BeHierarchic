@@ -51,22 +51,22 @@ func Wrapper(fsys fs.FS) *FS {
 	}
 }
 
-func (fsys *FS) getArchive(o path, needFS bool) (bool, fs.FS, error) {
-	if o.fsys == fsys.root { // Undercooked files, do not touch
+func (o path) getArchive(needFS bool) (bool, fs.FS, error) {
+	if o.fsys == o.container.root { // Undercooked files, do not touch
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
 			return false, nil, nil
 		}
 	}
 
-	b := fsys.getB(o)
+	b := o.getB()
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
 again:
 	switch t := b.data.(type) {
 	default: // not yet decided
-		gen, err := fsys.probeArchive(o)
+		gen, err := o.probeArchive()
 		if err != nil {
 			return false, nil, err
 		}
@@ -93,7 +93,7 @@ again:
 		if !nativeReaderAt {
 			f.Close()
 			f = nil
-			r = fsys.rapool.ReaderAt(o)
+			r = o.container.rapool.ReaderAt(o)
 		}
 		fsys2, err := t(r)
 		if err != nil {
@@ -103,30 +103,30 @@ again:
 			return false, nil, err
 		}
 
-		fsys.rMu.Lock()
-		fsys.reverse[fsys2] = o
-		fsys.rMu.Unlock()
+		o.container.rMu.Lock()
+		o.container.reverse[fsys2] = o
+		o.container.rMu.Unlock()
 		b.data = fsys2
 		goto again
 	}
 }
 
-func (fsys *FS) getB(o path) *b {
-	fsys.bMu.RLock()
-	x, ok := fsys.burrows[o]
-	fsys.bMu.RUnlock()
+func (o path) getB() *b {
+	o.container.bMu.RLock()
+	x, ok := o.container.burrows[o]
+	o.container.bMu.RUnlock()
 
 	if ok {
 		return x
 	}
 
-	fsys.bMu.Lock()
-	x, ok = fsys.burrows[o]
+	o.container.bMu.Lock()
+	x, ok = o.container.burrows[o]
 	if !ok { // recheck because we relinquished the lock
 		x = new(b)
-		fsys.burrows[o] = x
+		o.container.burrows[o] = x
 	}
-	fsys.bMu.Unlock()
+	o.container.bMu.Unlock()
 
 	return x
 }
@@ -135,11 +135,11 @@ func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
 	t := time.Now()
 	o, _ := fsys.path(".")
-	fsys.prefetch(o, runtime.NumCPU())
+	o.prefetch(runtime.NumCPU())
 	slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 }
 
-func (fsys *FS) prefetch(o path, concurrency int) {
+func (o path) prefetch(concurrency int) {
 	waysort, files := walk.FilesInDiskOrder(o.fsys)
 	slog.Info("prefetchDir", "path", o.String(), "sortorder", waysort)
 
@@ -148,10 +148,10 @@ func (fsys *FS) prefetch(o path, concurrency int) {
 	for range concurrency {
 		go func() {
 			for name := range files {
-				isar, _, _ := fsys.getArchive(o.Join(name), true)
+				isar, _, _ := o.Join(name).getArchive(true)
 				if isar {
-					p, _ := fsys.path(o.Join(name).String() + Special) // we were promised this exists
-					fsys.prefetch(p, 1)                                // no sub concurrency, is that a good idea?
+					p, _ := o.container.path(o.Join(name).String() + Special) // we were promised this exists
+					p.prefetch(1)                                             // no sub concurrency, is that a good idea?
 				}
 			}
 			wg.Done()

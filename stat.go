@@ -76,14 +76,14 @@ type fileInfoWithoutSize interface {
 }
 
 // Slightly ugly, for when we need the size right away but have discarded the full path
-func (fsys *FS) tryToGetSize(o path) (int64, error) {
+func (o path) tryToGetSize() (int64, error) {
 	stat, err := o.Stat()
 	if err != nil {
 		return 0, err
 	}
 	size := stat.Size()
 	if size == sizeUnknown {
-		return fsys.rapool.ReaderAt(o).Size(), nil
+		return o.container.rapool.ReaderAt(o).Size(), nil
 	} else {
 		return size, nil
 	}

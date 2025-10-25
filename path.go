@@ -52,7 +52,7 @@ func (fsys *FS) path(name string) (path, error) {
 	subsys := fsys.root
 	for _, el := range warps {
 		p := path{fsys, subsys, internpath.New(el)}
-		isar, subsubsys, err := fsys.getArchive(p, true)
+		isar, subsubsys, err := p.getArchive(true)
 		if err != nil {
 			return path{}, err
 		} else if !isar {
