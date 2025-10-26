@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"slices"
-	"strings"
 )
 
 func (fsys *FS) ReadDir(name string) (list []fs.DirEntry, err error) {
@@ -44,8 +43,8 @@ func (o path) cookedReadDir() ([]fs.DirEntry, error) {
 
 	n := 0
 	for _, l := range listing {
-		if l.IsDir() || strings.HasPrefix(l.Name(), "._") {
-			continue // no to AppleDouble files, no to directories
+		if l.IsDir() {
+			continue // no to directories
 		}
 
 		go func() {

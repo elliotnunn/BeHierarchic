@@ -4,9 +4,9 @@
 package main
 
 import (
-	"io"
 	"io/fs"
 	gopath "path"
+	"strings"
 	"sync"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -36,7 +36,7 @@ type b struct {
 }
 
 type notAnArchive struct{}
-type fsysGenerator func(io.ReaderAt) (fs.FS, error)
+type fsysGenerator func() (fs.FS, error)
 
 func Wrapper(fsys fs.FS) *FS {
 	const blockShift = 13 // 8 kb
@@ -49,6 +49,9 @@ func Wrapper(fsys fs.FS) *FS {
 }
 
 func (o path) getArchive(needFS bool) (bool, path, error) {
+	if strings.HasPrefix(o.name.Base(), "._") {
+		return false, path{}, nil // AppleDouble files don't currently contain an archive
+	}
 	if o.fsys == o.container.root { // Undercooked files, do not touch
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
@@ -82,21 +85,8 @@ again:
 			return true, path{}, nil
 		}
 
-		f, err := o.rawOpen()
+		fsys2, err := t()
 		if err != nil {
-			return false, path{}, err
-		}
-		r, nativeReaderAt := f.(io.ReaderAt)
-		if !nativeReaderAt {
-			f.Close()
-			f = nil
-			r = o.container.rapool.ReaderAt(o)
-		}
-		fsys2, err := t(r)
-		if err != nil {
-			if f != nil {
-				f.Close()
-			}
 			return false, path{}, err
 		}
 
