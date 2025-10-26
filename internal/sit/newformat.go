@@ -92,7 +92,7 @@ func newFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 			return
 		}
 
-		ok := addToFS(fsys, f, headerReader, known)
+		ok := addToFS(fsys, f, dataReader, known)
 		if !ok {
 			pass2 = append(pass2, f)
 		}
