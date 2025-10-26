@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	gopath "path"
 	"strings"
 
+	bufra "github.com/avvmoto/buf-readerat"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
@@ -34,6 +36,7 @@ func (o path) rawOpen() (fs.File, error) { return o.fsys.Open(o.name.String()) }
 func (o path) cookedOpen() (fs.File, error) {
 	// Cases to cover:
 	// - all files must implement io.ReaderAt
+	// - syscalls to os.File are slow, so buffer them
 	// - all directories must have mountpoints added to their listing
 	f, err := o.rawOpen()
 	if err != nil {
@@ -48,7 +51,12 @@ func (o path) cookedOpen() (fs.File, error) {
 
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
-		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
+		if osFile, ok := f.(*os.File); ok {
+			withBuffer := bufra.NewBufReaderAt(osFile, 1024) // untuned buffer size
+			f = osFileBuffered{
+				allReadMethods: io.NewSectionReader(withBuffer, 0, s.Size()),
+				statCloser:     f}
+		} else if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
 			f.Close()
 			// TODO: check whether Size() returns something sensible, and if not,
 			// signal rapool to watch out for the size of this file
@@ -58,6 +66,21 @@ func (o path) cookedOpen() (fs.File, error) {
 		f = &dir{path: o, obj: f.(fs.ReadDirFile)}
 	}
 	return f, nil
+}
+
+type statCloser interface {
+	Stat() (fs.FileInfo, error)
+	Close() error
+}
+
+type allReadMethods interface {
+	io.ReadSeeker
+	io.ReaderAt
+}
+
+type osFileBuffered struct {
+	statCloser
+	allReadMethods
 }
 
 type dir struct {
