@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"math"
-	"slices"
 	"strings"
 	"testing/iotest"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
-	"github.com/elliotnunn/BeHierarchic/internal/inithint"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
@@ -24,29 +22,39 @@ import (
 const sizeUnknown = -77777777 // no special significance, just negative & eyecatching
 
 func (o path) probeArchive() (fsysGenerator, error) {
-	f, err := o.cookedOpen()
+	headerReader, err := o.prefetchCachedOpen()
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	dataReader := headerReader.withoutCaching()
 
-	var header []byte
-	var accessError error
-	matchAt := func(s string, offset int) bool {
-		if len(header) < offset+len(s) && len(header) == cap(header) {
-			target := (offset + len(s) + 63) &^ 63
-			header = slices.Grow(header, target-len(header))
-			n, err := io.ReadFull(f, header[len(header):cap(header)])
-			if err != nil && err != io.EOF && accessError == nil {
-				accessError = err
+	// read the bare minimum of bytes required to answer the question
+	cache := make(map[int]byte) // a little bit ick
+	// but it serves to make clear which bytes we are making our decision on
+	byteAt := func(offset int) int {
+		got, ok := cache[offset]
+		if !ok {
+			var buf [1]byte
+			n, _ := headerReader.ReadAt(buf[:], int64(offset))
+			if n == 0 {
+				return -1
 			}
-			header = header[:len(header)+n]
+			cache[offset] = buf[0]
+			got = buf[0]
 		}
-		return len(header) >= offset+len(s) && string(header[offset:][:len(s)]) == s
+		return int(got)
+	}
+	matchAt := func(s string, offset int) bool {
+		for i, c := range []byte(s) {
+			if byteAt(offset+i) != int(c) {
+				return false
+			}
+		}
+		return true
 	}
 
 	getTime := func() time.Time {
-		s, err := f.Stat()
+		s, err := headerReader.Stat()
 		if err != nil {
 			return time.Time{}
 		}
@@ -55,10 +63,10 @@ func (o path) probeArchive() (fsysGenerator, error) {
 
 	switch {
 	case matchAt("\x1f\x8b", 0): // gzip
-		return func(r io.ReaderAt) (fs.FS, error) {
+		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".gz .gzip .tgz=.tar")
 			opener := func() io.Reader {
-				r, err := gzip.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
+				r, err := gzip.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 				if err != nil {
 					return iotest.ErrReader(err)
 				}
@@ -70,10 +78,10 @@ func (o path) probeArchive() (fsysGenerator, error) {
 			return fsys, nil
 		}, nil
 	case matchAt("BZ", 0): // bzip2
-		return func(r io.ReaderAt) (fs.FS, error) {
+		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
 			opener := func() io.Reader {
-				return bzip2.NewReader(io.NewSectionReader(r, 0, math.MaxInt64))
+				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 			}
 			fsys := fskeleton.New()
 			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
@@ -81,10 +89,10 @@ func (o path) probeArchive() (fsysGenerator, error) {
 			return fsys, nil
 		}, nil
 	case matchAt("\xfd7zXZ\x00", 0): // xz
-		return func(r io.ReaderAt) (fs.FS, error) {
+		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".xz .txz=.tar")
 			opener := func() io.Reader {
-				r, err := xz.NewReader(io.NewSectionReader(r, 0, math.MaxInt64), xz.DefaultDictMax)
+				r, err := xz.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64), xz.DefaultDictMax)
 				if err != nil {
 					return iotest.ErrReader(err)
 				}
@@ -96,30 +104,29 @@ func (o path) probeArchive() (fsysGenerator, error) {
 			return fsys, nil
 		}, nil
 	case matchAt("ER", 0): // Apple Partition Map
-		return func(r io.ReaderAt) (fs.FS, error) {
-			r2 := inithint.NewReaderAt(r)
-			defer r2.Disable()
-			return apm.New(r2)
+		return func() (fs.FS, error) {
+			defer headerReader.stopCaching()
+			return apm.New(headerReader)
 		}, nil
 	case matchAt("PK", 0): // Zip file // ... essential that we get the size sorted out...
-		stat, err := f.Stat()
+		stat, err := headerReader.Stat()
 		if err != nil {
 			return nil, err
 		}
 		size := stat.Size()
-		return func(r io.ReaderAt) (fs.FS, error) {
-			r2 := inithint.NewReaderAt(r)
-			defer r2.Disable()
-			return zip.NewReader(r2, size)
+		return func() (fs.FS, error) {
+			defer headerReader.stopCaching()
+			return zip.NewReader(headerReader, size)
 		}, nil
-	case matchAt("rLau", 10) || matchAt("StuffIt (c)1997-", 0):
-		return func(r io.ReaderAt) (fs.FS, error) { return sit.New2(r, r) }, nil
-	case matchAt("ustar\x00\x30\x30", 257), matchAt("ustar\x20\x20\x00", 257): // posix tar
-		return func(r io.ReaderAt) (fs.FS, error) { return tar.New2(r, r), nil }, nil
-	case matchAt("BD", 1024):
-		return func(r io.ReaderAt) (fs.FS, error) { return hfs.New2(r, r) }, nil
+	case matchAt("StuffIt (c)1997-", 0) || matchAt("S", 0) && matchAt("rLau", 10):
+		return func() (fs.FS, error) { return sit.New2(headerReader, dataReader) }, nil
+	case matchAt("ustar\x00\x30\x30", 257) || matchAt("ustar\x20\x20\x00", 257): // posix tar
+		return func() (fs.FS, error) { return tar.New2(headerReader, dataReader), nil }, nil
+	case (matchAt("LK", 0) || matchAt("\x00\x00", 0)) && matchAt("BD", 1024): // don't want to read a whole KB!
+		return func() (fs.FS, error) { return hfs.New2(headerReader, dataReader) }, nil
 	}
-	return nil, accessError
+	headerReader.Close()
+	return nil, nil // not an archive
 }
 
 func changeSuffix(s string, suffixes string) string {
