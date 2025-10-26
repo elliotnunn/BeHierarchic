@@ -35,7 +35,7 @@ func (o path) cookedOpen() (fs.File, error) {
 	// Cases to cover:
 	// - all files must implement io.ReaderAt
 	// - all directories must have mountpoints added to their listing
-	f, err := o.Open()
+	f, err := o.rawOpen()
 	if err != nil {
 		return nil, err // would be nice to make this more informative
 	}
