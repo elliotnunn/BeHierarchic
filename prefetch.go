@@ -29,12 +29,14 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 	prf := &f.path.container.prf
 
+	// Get a hash of the path relative to the outermost archive file
+	// (saved to disk -- don't change!)
 	pivot := f.path
 	var hash cacheHash // zero hash means root
 	if pivot.fsys != pivot.container.root {
 		h := xxh3.New()
 		for pivot.fsys != pivot.container.root {
-			h.WriteString(pivot.name.Base())
+			h.WriteString(pivot.name.String())
 			h.WriteString("//")
 			pivot.container.rMu.RLock()
 			pivot = pivot.container.reverse[pivot.fsys]
