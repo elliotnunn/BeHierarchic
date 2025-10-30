@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	gopath "path"
+	"reflect"
 	"strings"
 
 	bufra "github.com/avvmoto/buf-readerat"
@@ -63,7 +65,15 @@ func (o path) cookedOpen() (fs.File, error) {
 			f = &file{path: o, rdr: o.container.rapool.ReaderAt(o)}
 		}
 	case fs.ModeDir:
-		f = &dir{path: o, obj: f.(fs.ReadDirFile)}
+		rd, ok := f.(fs.ReadDirFile)
+		if ok {
+			f = &dir{path: o, obj: rd}
+		} else {
+			slog.Warn("dirWithoutReadDir",
+				"path", o.String(),
+				"type", reflect.TypeOf(f).Name(),
+				"mode", s.Mode().String())
+		}
 	}
 	return f, nil
 }
