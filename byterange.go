@@ -8,22 +8,10 @@ import (
 	"strings"
 )
 
-// 32 byte header, similar properties to PNG
-// if bumping the version, put it in the last byte
-const brMagic = "\x89BeHierarchicCache\x50\x4e\x47\x0d\x0a\xa1\x0a\x00\x00\x00\x00\x00\x00\x00"
-
-// then the rest of the format is just a Go gob
-
-// 89	Has the high bit set to detect transmission systems that do not support 8-bit data and to reduce the chance that a text file is mistakenly interpreted as a PNG, or vice versa.
-// 504E47	In ASCII, the letters PNG, allowing a person to identify the format easily if it is viewed in a text editor.
-// 0D 0A	A DOS-style line ending (CRLF) to detect DOS-Unix line ending conversion of the data.
-// 1A	A byte that stops display of the file under DOS when the command type has been used—the end-of-file character.
-// 0A
-
 type byteRangeList []byteRange
 type byteRange struct {
-	Off int64
 	Buf []byte
+	Off int64
 }
 
 func (l *byteRangeList) Iterate() iter.Seq2[[]byte, int64] {
@@ -38,7 +26,7 @@ func (l *byteRangeList) Iterate() iter.Seq2[[]byte, int64] {
 
 func (l *byteRangeList) Get(p []byte, off int64) bool {
 	i, hit := slices.BinarySearchFunc(*l, off, func(a byteRange, b int64) int {
-		if a.Off+int64(len(a.Buf)) < b {
+		if a.end() <= b { // need it to be totally contained inside this one
 			return -1
 		} else if a.Off > b {
 			return 1
@@ -49,17 +37,20 @@ func (l *byteRangeList) Get(p []byte, off int64) bool {
 	if !hit {
 		return false
 	}
-	got, want := (*l)[i], byteRange{off, p}
+	got, want := (*l)[i], byteRange{p, off}
 	if got.end() < want.end() {
 		return false
 	}
-	copy(want.Buf, got.Buf[want.Off-got.Off:])
+	n := copy(want.Buf, got.Buf[want.Off-got.Off:])
+	if n != len(p) {
+		panic("failed sanity check!")
+	}
 	return true
 }
 
 func (l *byteRangeList) Set(p []byte, off int64) {
 	i, hit := slices.BinarySearchFunc(*l, off, func(a byteRange, b int64) int {
-		if a.Off+int64(len(a.Buf)) < b {
+		if a.end() < b {
 			return -1
 		} else if a.Off > b {
 			return 1
@@ -68,7 +59,7 @@ func (l *byteRangeList) Set(p []byte, off int64) {
 		}
 	})
 
-	r := byteRange{off, p}
+	r := byteRange{p, off}
 	if hit {
 		(*l)[i].incorporate(r)
 	} else {
