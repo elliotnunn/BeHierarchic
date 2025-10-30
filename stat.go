@@ -46,7 +46,6 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 			return nil, err
 		}
 		if stat.Mode().IsRegular() && stat.Size() < 0 {
-			// TODO: signal rapool to watch out for the size of this file
 			return sizeDeferredStat{stat, o.container.rapool.ReaderAt(o)}, nil
 		} else {
 			return stat, nil

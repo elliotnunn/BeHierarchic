@@ -60,9 +60,11 @@ func (o path) cookedOpen() (fs.File, error) {
 				statCloser:     f}
 		} else if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
 			f.Close()
-			// TODO: check whether Size() returns something sensible, and if not,
-			// signal rapool to watch out for the size of this file
-			f = &file{path: o, rdr: o.container.rapool.ReaderAt(o)}
+			ra := o.container.rapool.ReaderAt(o)
+			if size := s.Size(); size >= 0 {
+				ra.SetSize(size) // useful for the spinner to know the size
+			}
+			f = &file{path: o, rdr: ra}
 		}
 	case fs.ModeDir:
 		rd, ok := f.(fs.ReadDirFile)

@@ -22,6 +22,7 @@ func New(blockShift int, nBlock int, nReader int) *Pool {
 	p := &Pool{
 		jobs:    make(chan []*job),
 		sizeQ:   make(chan sizeQuery),
+		sizeS:   make(chan sizeSet),
 		shift:   blockShift,
 		readers: make(map[Path]*readerState),
 		dones:   make(chan Path),
@@ -38,6 +39,7 @@ func New(blockShift int, nBlock int, nReader int) *Pool {
 type Pool struct {
 	jobs    chan []*job
 	sizeQ   chan sizeQuery
+	sizeS   chan sizeSet
 	shift   int
 	readers map[Path]*readerState
 	dones   chan Path
@@ -111,9 +113,21 @@ func (r ReaderAt) Size() int64 {
 	}
 }
 
+func (r ReaderAt) SetSize(size int64) {
+	s := sizeSet{id: r.id, size: size, done: make(chan struct{})}
+	r.pool.sizeS <- s
+	<-s.done
+}
+
 type sizeQuery struct {
 	id  Path
 	ret chan int64
+}
+
+type sizeSet struct {
+	id   Path
+	size int64
+	done chan struct{}
 }
 
 type ckey struct {
@@ -188,6 +202,11 @@ func (p *Pool) multiplexer() {
 			} else {
 				q.ret <- -1
 			}
+		case s := <-p.sizeS: // call to SetSize()
+			r := p.ensureReader(s.id)
+			r.knowlen, r.len = true, s.size
+			close(s.done)
+			// no effort made to cancel waiting ReaderAts, this would be a rare case
 		case id := <-p.dones: // a Reader goroutine has returned
 			r := p.readers[id]
 			p.bcache.Add(ckey{id, r.seek}, r.data)
