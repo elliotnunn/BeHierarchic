@@ -9,4 +9,8 @@ require (
 	github.com/therootcompany/xz v1.0.1
 )
 
-require github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270 // indirect
+require (
+	github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270 // indirect
+	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/zeebo/xxh3 v1.0.2 // indirect
+)

@@ -6,8 +6,11 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	_ "net/http/pprof"
 
@@ -18,7 +21,8 @@ const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
 
 Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT
 
-(use the BEGB environment variable to set the cache size in GiB)`
+(use the BEGB environment variable to set the RAM block-cache size in GiB,
+ and the BECACHE environment variable to the on-disk cache path)`
 
 func main() {
 	err := cmdLine(os.Args)
@@ -35,14 +39,26 @@ func cmdLine(args []string) error {
 
 	port := args[1]
 
-	path := args[2]
-	s, err := os.Stat(path)
+	target := args[2]
+	s, err := os.Stat(target)
 	if err != nil {
 		return err
 	} else if !s.IsDir() {
-		return fmt.Errorf("%s: not a directory", path)
+		return fmt.Errorf("%s: not a directory", target)
 	}
-	fsys := Wrapper(os.DirFS(path))
+
+	cache := os.Getenv("BECACHE")
+	if cache != "" {
+		tail, _ := filepath.Abs(target)
+		v := filepath.VolumeName(tail)
+		if v != "" { // get the colon out of the Windows drive letter
+			tail = filepath.Join(strings.ReplaceAll(v, ":", ""), tail[len(v):])
+		}
+		cache = filepath.Join(cache, tail)
+		slog.Info("diskCache", "path", cache)
+	}
+
+	fsys := Wrapper(os.DirFS(target), cache)
 	go fsys.Prefetch()
 
 	http.Handle("/", &webdavfs.Handler{FS: fsys})

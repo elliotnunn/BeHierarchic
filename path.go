@@ -20,6 +20,18 @@ type path struct {
 	name      internpath.Path
 }
 
+func (o path) topLevelArchive() path {
+	if o.fsys == o.container.root {
+		return o
+	}
+	o.container.rMu.RLock()
+	defer o.container.rMu.RUnlock()
+	for o.fsys != o.container.root {
+		o = o.container.reverse[o.fsys]
+	}
+	return o
+}
+
 // ShallowJoin returns a path with some elements added. Caution! It is only a lexical operation,
 // and will return an unusable path if passed a Special character
 func (o path) ShallowJoin(p string) path { o.name = o.name.Join(p); return o }

@@ -22,6 +22,8 @@ type FS struct {
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
 
+	prf prefetcher
+
 	root   fs.FS
 	rapool *spinner.Pool
 }
@@ -38,12 +40,13 @@ type b struct {
 type notAnArchive struct{}
 type fsysGenerator func() (fs.FS, error)
 
-func Wrapper(fsys fs.FS) *FS {
+func Wrapper(fsys fs.FS, cachePath string) *FS {
 	const blockShift = 13 // 8 kb
 	return &FS{
 		root:    fsys,
 		burrows: make(map[path]*b),
 		reverse: make(map[fs.FS]path),
+		prf:     initPrefetcher(cachePath),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 }
