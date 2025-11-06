@@ -4,6 +4,7 @@
 package main
 
 import (
+	"database/sql"
 	"io/fs"
 	gopath "path"
 	"strings"
@@ -22,7 +23,7 @@ type FS struct {
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
 
-	prf prefetcher
+	db *sql.DB
 
 	root   fs.FS
 	rapool *spinner.Pool
@@ -42,11 +43,17 @@ type fsysGenerator func() (fs.FS, error)
 
 func Wrapper(fsys fs.FS, cachePath string) *FS {
 	const blockShift = 13 // 8 kb
+
+	conn, err := sql.Open("sqlite", "file"+cachePath+"BeHierarchic.sqlite")
+	if err != nil {
+		conn = nil
+	}
+
 	return &FS{
 		root:    fsys,
 		burrows: make(map[path]*b),
 		reverse: make(map[fs.FS]path),
-		prf:     initPrefetcher(cachePath),
+		db:      conn,
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 }

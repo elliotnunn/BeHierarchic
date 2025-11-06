@@ -1,16 +1,11 @@
 module github.com/elliotnunn/BeHierarchic
 
-go 1.24
+go 1.25
 
-toolchain go1.24.4
+toolchain go1.24.5
 
 require (
+	github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270
 	github.com/dgryski/go-tinylfu v0.1.0
 	github.com/therootcompany/xz v1.0.1
-)
-
-require (
-	github.com/avvmoto/buf-readerat v0.0.0-20171115124131-a17c8cb89270 // indirect
-	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
-	github.com/zeebo/xxh3 v1.0.2 // indirect
 )
