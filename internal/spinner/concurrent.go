@@ -114,6 +114,9 @@ func (r ReaderAt) Size() int64 {
 }
 
 func (r ReaderAt) SetSize(size int64) {
+	if size < 0 {
+		return
+	}
 	s := sizeSet{id: r.id, size: size, done: make(chan struct{})}
 	r.pool.sizeS <- s
 	<-s.done

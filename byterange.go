@@ -24,8 +24,8 @@ func (l *byteRangeList) Iterate() iter.Seq2[[]byte, int64] {
 	}
 }
 
-func (l *byteRangeList) Get(p []byte, off int64) bool {
-	i, hit := slices.BinarySearchFunc(*l, off, func(a byteRange, b int64) int {
+func (l byteRangeList) Get(p []byte, off int64) bool {
+	i, hit := slices.BinarySearchFunc(l, off, func(a byteRange, b int64) int {
 		if a.end() <= b { // need it to be totally contained inside this one
 			return -1
 		} else if a.Off > b {
@@ -37,7 +37,7 @@ func (l *byteRangeList) Get(p []byte, off int64) bool {
 	if !hit {
 		return false
 	}
-	got, want := (*l)[i], byteRange{p, off}
+	got, want := (l)[i], byteRange{p, off}
 	if got.end() < want.end() {
 		return false
 	}
@@ -48,8 +48,8 @@ func (l *byteRangeList) Get(p []byte, off int64) bool {
 	return true
 }
 
-func (l *byteRangeList) Set(p []byte, off int64) {
-	i, hit := slices.BinarySearchFunc(*l, off, func(a byteRange, b int64) int {
+func (l byteRangeList) Set(p []byte, off int64) byteRangeList {
+	i, hit := slices.BinarySearchFunc(l, off, func(a byteRange, b int64) int {
 		if a.end() < b {
 			return -1
 		} else if a.Off > b {
@@ -61,18 +61,19 @@ func (l *byteRangeList) Set(p []byte, off int64) {
 
 	r := byteRange{p, off}
 	if hit {
-		(*l)[i].incorporate(r)
+		l[i].incorporate(r)
 	} else {
-		*l = slices.Insert(*l, i, r)
+		l = slices.Insert(l, i, r)
 	}
 
-	for i+1 < len(*l) {
-		if (*l)[i].incorporate((*l)[i+1]) {
-			*l = slices.Delete(*l, i+1, i+2)
+	for i+1 < len(l) {
+		if l[i].incorporate(l[i+1]) {
+			l = slices.Delete(l, i+1, i+2)
 		} else {
 			break
 		}
 	}
+	return l
 }
 
 func (l *byteRangeList) String() string {

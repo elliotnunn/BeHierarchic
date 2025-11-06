@@ -19,7 +19,7 @@ import (
 	"github.com/therootcompany/xz"
 )
 
-const sizeUnknown = -77777777 // no special significance, just negative & eyecatching
+const sizeUnknown = -1 // small negative numbers are most efficient for the disk cache
 
 func (o path) probeArchive() (fsysGenerator, error) {
 	headerReader, err := o.prefetchCachedOpen()

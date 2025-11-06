@@ -53,6 +53,16 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 	}
 }
 
+func (o path) setKnownSize(s int64) {
+	stat, err := o.rawStat()
+	if err != nil {
+		return
+	}
+	if stat.Mode().IsRegular() && stat.Size() < 0 {
+		o.container.rapool.ReaderAt(o).SetSize(s)
+	}
+}
+
 type mountpointStat struct {
 	fs.FileInfo // inner
 	name        string

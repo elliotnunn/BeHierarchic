@@ -17,21 +17,17 @@ import (
 )
 
 type cacheFile struct { // will be gobbed, so take care with the format
-	Version string
-	Cache   map[cacheHash]byteRangeList
+	Size    map[cacheHash]int64 // 0 = unknown, ^size = known
+	Extents map[cacheHash]byteRangeList
+	dirty   bool
 }
 
 type cacheHash [2]uint64
 
-func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
-	if !f.enable {
-		return f.File.(io.ReaderAt).ReadAt(p, off)
-	}
-	prf := &f.path.container.prf
-
+func (o path) rootPair() (path, cacheHash) {
 	// Get a hash of the path relative to the outermost archive file
 	// (saved to disk -- don't change!)
-	pivot := f.path
+	pivot := o
 	var hash cacheHash // zero hash means root
 	if pivot.fsys != pivot.container.root {
 		h := xxh3.New()
@@ -46,35 +42,48 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 		hash[0] = hs.Hi
 		hash[1] = hs.Lo
 	}
+	return pivot, hash
+}
 
+func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
+	if !f.enable {
+		return f.File.(io.ReaderAt).ReadAt(p, off)
+	}
+	prf := &f.path.container.prf
+
+	pivot, hash := f.path.rootPair()
+
+	// Tricky file-length stuff
+	smallp := p
 	prf.cMu.Lock()
-	if c, ok := prf.cache[pivot]; ok {
-		if c, ok := c.Cache[hash]; ok {
-			if c.Get(p, off) {
-				prf.cMu.Unlock()
-				return len(p), nil // yay a cache hit!
-			}
+	size := prf.cache[pivot].Size[hash]
+	if size >= 0 {
+		if off >= size {
+			err = io.EOF
+			smallp = nil
+		} else if off+int64(len(p)) > size {
+			err = io.EOF
+			smallp = p[:size-off]
 		}
 	}
+	ok := prf.cache[pivot].Extents[hash].Get(smallp, off)
 	prf.cMu.Unlock()
+	if ok || len(smallp) == 0 {
+		return len(smallp), err // yay a cache hit!
+	}
 
 	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
-	if n < len(p) {
-		return n, err
-	}
 
 	// PUT IT IN THE CACHE
-	prf.cMu.Lock()
-	defer prf.cMu.Unlock()
-	if prf.cache[pivot] == nil {
-		return n, err // not actually interested in this one
+	if n > 0 {
+		prf.cMu.Lock()
+		defer prf.cMu.Unlock()
+		if prf.cache[pivot] == nil {
+			return n, err // not actually interested in this one
+		}
+		prf.cache[pivot].Extents[hash] = prf.cache[pivot].Extents[hash].Set(p, off)
+		prf.cache[pivot].dirty = true
 	}
-	if prf.cache[pivot].Cache[hash] == nil {
-
-	}
-	brl := prf.cache[pivot].Cache[hash]
-	brl.Set(p, off)
-	prf.cache[pivot].Cache[hash] = brl
 	return n, err
 }
 
@@ -113,61 +122,44 @@ func (fsys *FS) Prefetch() {
 	wg.Wait()
 }
 
-func (o path) prefetchRealFile() {
-	slog := slog.With("archive", o.String())
-
-	cpath := cacheFilePath(o.container.prf.path, o)
-	if cpath == "" { // caching disabled
-		isar, subfsys, _ := o.getArchive(true)
-		if isar {
-			subfsys.prefetch(1)
-		}
-		return
+func readCacheFile(name string) cacheFile {
+	dflt := cacheFile{
+		Size:    make(map[cacheHash]int64),
+		Extents: make(map[cacheHash]byteRangeList),
+		dirty:   true, // so that it will be written out
 	}
 
-	cache := cacheFile{Version: "BeHierarchic-1", Cache: make(map[cacheHash]byteRangeList)}
-
-	f, err := os.Open(cpath)
+	f, err := os.Open(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		goto freshCache
+		return dflt
 	} else if err != nil {
 		slog.Error("cacheReadError", "err", err)
-		goto freshCache
+		return dflt
 	}
+	defer f.Close()
 
+	var cache cacheFile
 	err = gob.NewDecoder(f).Decode(&cache)
-	f.Close()
 	if err != nil {
 		slog.Error("cacheReadError", "err", err)
-		goto freshCache
+		return dflt
 	}
+	return cache
+}
 
-freshCache:
-	o.container.prf.cMu.Lock()
-	o.container.prf.cache[o] = &cache
-	o.container.prf.cMu.Unlock()
-
-	// Do the hard work, might take a good while
-	isar, subfsys, _ := o.getArchive(true)
-	if isar {
-		subfsys.prefetch(1)
+func writeCacheFile(name string, cache cacheFile) {
+	for h, s := range cache.Size {
+		if s == 0 {
+			delete(cache.Size, h)
+		}
 	}
-	// this might take a while, and once it's done, the cache will be populated
-
-	o.container.prf.cMu.Lock()
-	delete(o.container.prf.cache, o)
-	o.container.prf.cMu.Unlock()
-
-	// Here decide whether it is a cache worth having...
-
-	// let's write it unconditionally for now
-	tmp := filepath.Join(filepath.Dir(cpath), "~"+filepath.Base(cpath))
-	err = os.MkdirAll(filepath.Dir(tmp), 0o777)
+	tmp := filepath.Join(filepath.Dir(name), "~"+filepath.Base(name))
+	err := os.MkdirAll(filepath.Dir(tmp), 0o777)
 	if err != nil {
 		slog.Warn("errorWhileSavingCache", "err", err)
 		return
 	}
-	f, err = os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
 	if err != nil {
 		slog.Warn("errorWhileSavingCache", "err", err)
 		return
@@ -179,32 +171,96 @@ freshCache:
 		return
 	}
 	f.Close()
-	err = os.Rename(tmp, cpath)
+	err = os.Rename(tmp, name)
 	if err != nil {
 		slog.Warn("errorWhileRenamingCache", "err", err)
 		return
 	}
-	slog.Info("successfulCache")
 }
 
-func (o path) prefetch(concurrency int) {
-	waysort, files := walk.FilesInDiskOrder(o.fsys)
-	slog.Info("prefetchDir", "path", o.String(), "sortorder", waysort)
-
-	wg := new(sync.WaitGroup)
-	wg.Add(concurrency)
-	for range concurrency {
-		go func() {
-			for name := range files {
-				isar, subfsys, _ := o.ShallowJoin(name).getArchive(true)
-				if isar {
-					subfsys.prefetch(1)
-				}
-			}
-			wg.Done()
-		}()
+func (o path) prefetchRealFile() {
+	cpath := cacheFilePath(o.container.prf.path, o)
+	if cpath == "" { // caching disabled
+		o.prefetch()
+		return
 	}
-	wg.Wait()
+
+	cache := readCacheFile(cpath)
+
+	o.container.prf.cMu.Lock()
+	o.container.prf.cache[o] = &cache
+	o.container.prf.cMu.Unlock()
+
+	o.prefetch() // take long time
+
+	o.container.prf.cMu.Lock()
+	delete(o.container.prf.cache, o)
+	o.container.prf.cMu.Unlock()
+
+	if cache.dirty {
+		writeCacheFile(cpath, cache)
+	}
+}
+
+func (o path) prefetch() {
+	pivot, hash := o.rootPair()
+
+	// Reconcile the size information in the archive header and the cache
+	// (either or both may be absent)
+	// Remembering that the size field in the cache is inverted for efficiency
+	easySize := int64(-1)
+	if s, err := o.rawStat(); err == nil {
+		easySize = s.Size()
+	}
+
+	o.container.prf.cMu.Lock()
+	sizeInCache := ^o.container.prf.cache[pivot].Size[hash]
+	o.container.prf.cMu.Unlock()
+
+	switch {
+	case easySize >= 0 && sizeInCache >= 0:
+		// happy, nothing we need to do
+	case easySize < 0 && sizeInCache < 0:
+		// sad, nothing we can do
+	case easySize < 0 && sizeInCache >= 0:
+		// use the cached value
+		o.container.rapool.ReaderAt(o).SetSize(sizeInCache)
+	case easySize > 0 && sizeInCache < 0:
+		// use the header value
+		o.container.prf.cMu.Lock()
+		o.container.prf.cache[pivot].Size[hash] = ^easySize
+		o.container.prf.cMu.Unlock()
+	}
+
+	isar, subfsys, _ := o.getArchive(true)
+	if isar {
+		waysort, files := walk.FilesInDiskOrder(subfsys.fsys)
+		slog.Info("prefetchDir", "path", subfsys.String(), "sortorder", waysort)
+		for name := range files {
+			subfsys.ShallowJoin(name).prefetch()
+		}
+	}
+
+	// This has the added welcome effect of ensuring that the actual size gets calced
+	s, err := o.cookedStat()
+	if err != nil {
+		slog.Error("prefetchStatFail", "err", err, "path", o.String())
+		return // we truly don't know the size
+	}
+	finalSize := s.Size()
+
+	slog.Info("prefetchSizes", "sizeInCache", sizeInCache, "easySize", easySize, "finalSize", finalSize, "path", o)
+
+	// Now leave the size in the cache iff it is hard to calculate
+	if easySize >= 0 {
+		finalSize = -1
+	}
+	o.container.prf.cMu.Lock()
+	o.container.prf.cache[pivot].Size[hash] = ^finalSize
+	if finalSize != sizeInCache {
+		o.container.prf.cache[pivot].dirty = true
+	}
+	o.container.prf.cMu.Unlock()
 }
 
 // please don't use on a directory!
