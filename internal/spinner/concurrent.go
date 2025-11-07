@@ -234,8 +234,12 @@ func (p *Pool) multiplexer() {
 			r := p.readers[id]
 			p.bcache.Add(ckey{id, r.seek}, r.data)
 
+			if r.err == io.EOF {
+				r.knowlen, r.len = true, bufend(r.data, r.seek)
+			}
+
 			for _, j := range r.pending[r.seek] { // satisfy waiting ReaderAts
-				if j.off < r.seek+int64(len(r.data)) {
+				if j.off < bufend(r.data, r.seek) {
 					j.n = copy(j.p, r.data[j.off-r.seek:])
 				}
 				if j.n < len(j.p) {
@@ -247,17 +251,15 @@ func (p *Pool) multiplexer() {
 
 			// and if there is an error, dissatisfy other waiting ReaderAts
 			if r.err != nil {
-				if r.err == io.EOF {
-					r.knowlen, r.len = true, r.seek+int64(len(r.data))
-				}
 				for offset, jobs := range r.pending {
-					if offset >= r.len {
-						for _, j := range jobs {
-							j.err, j.n = r.err, 0
-							close(j.wait)
-						}
-						delete(r.pending, offset)
+					if offset < r.seek {
+						continue
 					}
+					for _, j := range jobs {
+						j.err, j.n = r.err, 0
+						close(j.wait)
+					}
+					delete(r.pending, offset)
 				}
 			}
 
@@ -357,6 +359,8 @@ func smooshBuffer(buf []byte) []byte {
 		return buf
 	}
 }
+
+func bufend(p []byte, off int64) int64 { return off + int64(len(p)) }
 
 var seed = maphash.MakeSeed()
 
