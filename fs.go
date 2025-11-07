@@ -12,6 +12,7 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
+	_ "modernc.org/sqlite"
 )
 
 const Special = "◆"
@@ -23,7 +24,8 @@ type FS struct {
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
 
-	db *sql.DB
+	db  *sql.DB
+	dbq [nQuery]*sql.Stmt
 
 	root   fs.FS
 	rapool *spinner.Pool
@@ -44,18 +46,14 @@ type fsysGenerator func() (fs.FS, error)
 func Wrapper(fsys fs.FS, cachePath string) *FS {
 	const blockShift = 13 // 8 kb
 
-	conn, err := sql.Open("sqlite", "file"+cachePath+"BeHierarchic.sqlite")
-	if err != nil {
-		conn = nil
-	}
-
-	return &FS{
+	fsys2 := &FS{
 		root:    fsys,
 		burrows: make(map[path]*b),
 		reverse: make(map[fs.FS]path),
-		db:      conn,
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
+	fsys2.setupDB(cachePath)
+	return fsys2
 }
 
 func (o path) getArchive(needFS bool) (bool, path, error) {

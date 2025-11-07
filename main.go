@@ -6,11 +6,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 
 	_ "net/http/pprof"
 
@@ -47,18 +44,7 @@ func cmdLine(args []string) error {
 		return fmt.Errorf("%s: not a directory", target)
 	}
 
-	cache := os.Getenv("BECACHE")
-	if cache != "" {
-		tail, _ := filepath.Abs(target)
-		v := filepath.VolumeName(tail)
-		if v != "" { // get the colon out of the Windows drive letter
-			tail = filepath.Join(strings.ReplaceAll(v, ":", ""), tail[len(v):])
-		}
-		cache = filepath.Join(cache, tail)
-		slog.Info("diskCache", "path", cache)
-	}
-
-	fsys := Wrapper(os.DirFS(target), cache)
+	fsys := Wrapper(os.DirFS(target), "file:/Users/elliot/Library/Caches/BeHierarchic.sqlite")
 	go fsys.Prefetch()
 
 	http.Handle("/", &webdavfs.Handler{FS: fsys})

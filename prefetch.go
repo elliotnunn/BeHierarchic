@@ -1,6 +1,9 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -11,11 +14,89 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
+var bigmu sync.Mutex
+
+const (
+	doSomeStuffQuery = iota
+	nQuery
+)
+
+func (fsys *FS) setupDB(dsn string) {
+	var err error
+	fsys.db, err = sql.Open("sqlite", dsn)
+	if err != nil {
+		slog.Error("sqlFail", "dsn", dsn, "err", err)
+	}
+	slog.Info("sqlOK", "dsn", dsn)
+	// db errors after this point are worth a panic
+	fsys.db.SetMaxOpenConns(1)
+
+	_, err = fsys.db.Exec(`CREATE TABLE IF NOT EXISTS pfcache (
+		id BLOB PRIMARY KEY,
+		iseof BOOL,
+		data BLOB
+	) WITHOUT ROWID;
+	`)
+
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if !f.enable {
 		return f.File.(io.ReaderAt).ReadAt(p, off)
 	}
-	return f.File.(io.ReaderAt).ReadAt(p, off)
+
+	// have some fun here...
+	id := fmt.Sprintf("%s//%012x", f.path, off)
+
+	bigmu.Lock()
+	row := f.path.container.db.QueryRow("SELECT iseof, data FROM pfcache WHERE id = ?", id)
+	var (
+		iseof int
+		data  []byte
+	)
+	err = row.Scan(&iseof, &data)
+	bigmu.Unlock()
+	if errors.Is(err, sql.ErrNoRows) {
+		slog.Info("sqlMis", "id", id)
+		return f.readAtThru(p, off)
+	} else if err != nil {
+		panic(err)
+	}
+	slog.Info("sqlHit", "id", id)
+
+	if len(data) >= len(p) || iseof != 0 { // full satisfaction
+		n = copy(p, data)
+		if iseof != 0 && len(data) <= len(p) {
+			err = io.EOF
+		}
+		return n, err
+	}
+
+	// not satisfied
+	return f.readAtThru(p, off)
+}
+
+func (f *cachingFile) readAtThru(p []byte, off int64) (n int, err error) {
+	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
+	if n == 0 || err != nil && err != io.EOF {
+		return n, err // nothing worth caching
+	}
+
+	id := fmt.Sprintf("%s//%012x", f.path, off)
+
+	bigmu.Lock()
+	_, serr := f.path.container.db.Exec(
+		`INSERT OR REPLACE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
+		id, err == io.EOF, p)
+	bigmu.Unlock()
+	if serr != nil {
+		panic(serr)
+	}
+
+	return n, err
 }
 
 func (fsys *FS) Prefetch() {
