@@ -7,7 +7,9 @@ import (
 	"hash/maphash"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math"
+	"time"
 
 	"github.com/dgryski/go-tinylfu"
 )
@@ -165,8 +167,26 @@ type readerState struct {
 }
 
 func (p *Pool) multiplexer() {
+	var pulse <-chan time.Time
+	// pulse = time.Tick(time.Second * 15)
 	for {
 		select {
+		case <-pulse:
+			nQuiet := 0
+			for path, r := range p.readers {
+				if len(r.pending) == 0 {
+					nQuiet++
+					continue
+				}
+				slog.Info("activeReader", "path", path, "busy", r.busy, "diesoon", r.diesoon, "seek", r.seek)
+				for offset, j := range r.pending {
+					for _, j := range j {
+						slog.Info("activeReaderJob", "offset", offset, "size", len(j.p))
+					}
+				}
+			}
+			slog.Info("quietReaders", "count", nQuiet)
+
 		case joblist := <-p.jobs: // a ReadAt call
 			for _, j := range joblist {
 				// ensure we have a reader
