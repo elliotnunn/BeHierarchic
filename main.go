@@ -44,7 +44,7 @@ func cmdLine(args []string) error {
 		return fmt.Errorf("%s: not a directory", target)
 	}
 
-	fsys := Wrapper(os.DirFS(target), "file:/Users/elliot/Library/Caches/BeHierarchic.sqlite")
+	fsys := Wrapper(os.DirFS(target), os.Getenv("BECACHE"))
 	go fsys.Prefetch()
 
 	http.Handle("/", &webdavfs.Handler{FS: fsys})

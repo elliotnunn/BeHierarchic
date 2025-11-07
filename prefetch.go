@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
@@ -60,12 +61,12 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	err = row.Scan(&iseof, &data)
 	bigmu.Unlock()
 	if errors.Is(err, sql.ErrNoRows) {
-		slog.Info("sqlMis", "id", id)
+		// slog.Info("sqlMis", "id", id)
 		return f.readAtThru(p, off)
 	} else if err != nil {
 		panic(err)
 	}
-	slog.Info("sqlHit", "id", id)
+	// slog.Info("sqlHit", "id", id)
 
 	if len(data) >= len(p) || iseof != 0 { // full satisfaction
 		n = copy(p, data)
@@ -107,7 +108,7 @@ func (fsys *FS) Prefetch() {
 	_, files := walk.FilesInDiskOrder(fsys.root)
 
 	var wg sync.WaitGroup
-	for range 1 {
+	for range runtime.NumCPU() {
 		wg.Go(func() {
 			for p := range files {
 				o := path{fsys, fsys.root, internpath.New(p)}
@@ -150,3 +151,8 @@ type cachingFile struct {
 
 func (f *cachingFile) stopCaching()                { f.File.(io.ReaderAt).ReadAt(nil, 0); f.enable = false }
 func (f *cachingFile) withoutCaching() io.ReaderAt { return f.File.(io.ReaderAt) }
+
+func dbkey(o path, offset int64) string {
+	
+	// return o.stableString() + "\x00"
+}

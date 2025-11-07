@@ -20,16 +20,17 @@ type path struct {
 	name      internpath.Path
 }
 
-func (o path) topLevelArchive() path {
-	if o.fsys == o.container.root {
-		return o
-	}
+// stableString returns a path fit for use in the disk cache
+func (o path) stableString() string {
 	o.container.rMu.RLock()
 	defer o.container.rMu.RUnlock()
+	warps := []string{o.name.String()}
 	for o.fsys != o.container.root {
 		o = o.container.reverse[o.fsys]
+		warps = append(warps, o.name.String())
 	}
-	return o
+	slices.Reverse(warps)
+	return strings.Join(warps, "//")
 }
 
 // ShallowJoin returns a path with some elements added. Caution! It is only a lexical operation,
