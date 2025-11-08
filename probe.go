@@ -116,7 +116,14 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		size := stat.Size()
 		return func() (fs.FS, error) {
 			defer headerReader.stopCaching()
-			return zip.NewReader(headerReader, size)
+			r, err := zip.NewReader(headerReader, size)
+			if err != nil {
+				return nil, err
+			}
+			for _, f := range r.File {
+				f.DataOffset() // get all the metadata we need to read the archive
+			}
+			return r, nil
 		}, nil
 	case matchAt("StuffIt (c)1997-", 0) || matchAt("S", 0) && matchAt("rLau", 10):
 		return func() (fs.FS, error) { return sit.New2(headerReader, dataReader) }, nil
