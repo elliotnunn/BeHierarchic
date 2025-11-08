@@ -15,6 +15,7 @@ var _ node = new(fileent) // check satisfies interface
 
 type fileent struct {
 	name    internpath.Path
+	order   int64
 	size    int64
 	mode    fs.FileMode
 	modtime time.Time
@@ -38,6 +39,9 @@ func (f *fileent) Size() int64        { return f.size }
 func (f *fileent) Mode() fs.FileMode  { return f.mode &^ fs.ModeType }
 func (f *fileent) ModTime() time.Time { return f.modtime }
 func (f *fileent) Sys() any           { return f.sys }
+
+// extension to fs.FileInfo
+func (f *fileent) Order() int64 { return f.order }
 
 // fs.File
 func (*fileent) Close() error                 { return nil }

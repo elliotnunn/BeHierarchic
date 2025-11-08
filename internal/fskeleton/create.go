@@ -57,7 +57,8 @@ func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, 
 		return fs.ErrInvalid
 	}
 	nu := &fileent{name: internpath.New(name),
-		size: size, mode: mode, modtime: mtime, sys: sys, opener: open}
+		order: order,
+		size:  size, mode: mode, modtime: mtime, sys: sys, opener: open}
 	err := fsys.create(nu)
 	if err != nil {
 		return err
