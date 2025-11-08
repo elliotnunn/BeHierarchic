@@ -9,7 +9,6 @@ import (
 	"math"
 	"strings"
 	"testing/iotest"
-	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
@@ -22,6 +21,14 @@ import (
 const sizeUnknown = -1 // small negative numbers are most efficient for the disk cache
 
 func (o path) probeArchive() (fsysGenerator, error) {
+	info, err := o.rawStat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, err
+	}
+
 	headerReader, err := o.prefetchCachedOpen()
 	if err != nil {
 		return nil, err
@@ -29,14 +36,23 @@ func (o path) probeArchive() (fsysGenerator, error) {
 	dataReader := headerReader.withoutCaching()
 
 	// read the bare minimum of bytes required to answer the question
+	// lots of time is spent in this code, so try very hard not to hit the disk or even the database
 	cache := make(map[int]byte) // a little bit ick
+	eof := int(info.Size())
+	if eof < 0 {
+		eof = math.MaxInt
+	}
 	// but it serves to make clear which bytes we are making our decision on
 	byteAt := func(offset int) int {
+		if offset >= eof {
+			return -1
+		}
 		got, ok := cache[offset]
 		if !ok {
 			var buf [1]byte
 			n, _ := headerReader.ReadAt(buf[:], int64(offset))
 			if n == 0 {
+				eof = offset
 				return -1
 			}
 			cache[offset] = buf[0]
@@ -53,14 +69,6 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		return true
 	}
 
-	getTime := func() time.Time {
-		s, err := headerReader.Stat()
-		if err != nil {
-			return time.Time{}
-		}
-		return s.ModTime()
-	}
-
 	switch {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func() (fs.FS, error) {
@@ -73,7 +81,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return r
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -84,7 +92,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -99,7 +107,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return r
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, getTime(), nil)
+			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -129,7 +137,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		return func() (fs.FS, error) { return sit.New2(headerReader, dataReader) }, nil
 	case matchAt("ustar\x00\x30\x30", 257) || matchAt("ustar\x20\x20\x00", 257): // posix tar
 		return func() (fs.FS, error) { return tar.New2(headerReader, dataReader), nil }, nil
-	case (matchAt("LK", 0) || matchAt("\x00\x00", 0)) && matchAt("BD", 1024): // don't want to read a whole KB!
+	case eof >= 400*1024 && (matchAt("LK", 0) || matchAt("\x00\x00", 0)) && matchAt("BD", 1024): // don't want to read a whole KB!
 		return func() (fs.FS, error) { return hfs.New2(headerReader, dataReader) }, nil
 	}
 	headerReader.Close()
