@@ -131,7 +131,7 @@ func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 			reader, logisize := readerFromSparseHoles(dataReader, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
-				fsys.CreateRandomAccessFile(cleanPath, 0, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+				fsys.CreateRandomAccessFile(cleanPath, off, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
 			case TypeDir:
 				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
 			case TypeSymlink:

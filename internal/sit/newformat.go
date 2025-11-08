@@ -130,7 +130,7 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 	if f.Common.IsDir() {
 		fsys.CreateDir(name, 0, meta.ModTime, nil)
 		adfile, adlen := meta.ForDir()
-		fsys.CreateSequentialFile(appledouble.Sidecar(name), 0, adfile, adlen, 0, meta.ModTime, nil)
+		fsys.CreateSequentialFile(appledouble.Sidecar(name), f.Offset, adfile, adlen, 0, meta.ModTime, nil)
 	} else { // file
 		rOffset := f.HeaderEnd
 		if macstuff.Rsrc.Algo == 0 && f.RCrypt == "" {
@@ -138,7 +138,7 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 				io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Unpacked)),
 				int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
-				f.HeaderEnd,          // order
+				rOffset,              // order
 				adfile,               // reader
 				adsize,               // size
 				0, meta.ModTime, nil) // mode, mtime, sys
@@ -148,7 +148,7 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 					io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Packed)))
 			}, int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateSequentialFile(appledouble.Sidecar(name),
-				f.HeaderEnd,          // order
+				rOffset,              // order
 				adfile,               // reader
 				adsize,               // size
 				0, meta.ModTime, nil) // mode, mtime, sys
@@ -157,13 +157,13 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 		dOffset := f.HeaderEnd + int64(macstuff.Rsrc.Packed)
 		if f.Common.Data.Algo == 0 && f.DCrypt == "" {
 			fsys.CreateRandomAccessFile(name,
-				f.HeaderEnd+1, // order
+				dOffset, // order
 				io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
 				int64(f.Common.Data.Unpacked),                                           // size
 				0, meta.ModTime, nil)                                                    // mode, mtime, sys
 		} else {
 			fsys.CreateSequentialFile(name,
-				f.HeaderEnd+1, // order
+				dOffset, // order
 				func() io.Reader {
 					return readerFor(f.Common.Data.Algo, f.DCrypt, f.Common.Data.Unpacked, f.Common.Data.CRC,
 						io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Packed)))

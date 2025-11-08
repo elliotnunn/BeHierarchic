@@ -6,12 +6,12 @@
 package hfs
 
 import (
-	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -82,11 +82,7 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 
 	// Make sure fskeleton finds out about forks in the order that they exist on disk
 	// (and hope for no fragmented files)
-	type forkloc struct {
-		order  uint16
-		action func()
-	}
-	var deferred []forkloc
+	deferred := make(map[int64]func())
 
 	for _, rec := range catalog {
 		key, val := rec.Key(), rec.Val()
@@ -104,7 +100,7 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			adRead, adSize := meta.ForDir()
 
 			fsys.CreateDir(dirs[cnid], fs.FileMode(0), meta.ModTime, ino(cnid))
-			fsys.CreateSequentialFile(dirs[cnid], 0, adRead, adSize, 0, meta.ModTime, ino(cnid))
+			fsys.CreateSequentialFile(dirs[cnid], -2*int64(cnid) /*unorderable*/, adRead, adSize, 0, meta.ModTime, ino(cnid))
 
 		case 2: // file
 			cnid := binary.BigEndian.Uint32(val[0x14:])
@@ -118,33 +114,37 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			meta.Locked = val[3]&1 != 0
 
 			dfSize, rfSize := int64(binary.BigEndian.Uint32(val[0x1a:])), int64(binary.BigEndian.Uint32(val[0x24:]))
-			dfRead := parseExtents(val[0x4a:]).
+			dfExtents := parseExtents(val[0x4a:]).
 				chaseOverflow(overflow, cnid, false).
 				toBytes(drAlBlkSiz, drAlBlSt).
-				clipExtents(dfSize).
-				makeReader(dataReader)
-			rfRead := parseExtents(val[0x56:]).
+				clipExtents(dfSize)
+			rfExtents := parseExtents(val[0x56:]).
 				chaseOverflow(overflow, cnid, true).
 				toBytes(drAlBlkSiz, drAlBlSt).
-				clipExtents(int64(rfSize)).
-				makeReader(dataReader)
+				clipExtents(int64(rfSize))
+			dfReader, rfReader := dfExtents.makeReader(dataReader), rfExtents.makeReader(dataReader)
 
-			adRead, adSize := meta.WithResourceFork(rfRead, rfSize)
+			adReader, adSize := meta.WithResourceFork(rfReader, rfSize)
 
-			dfPut := func() { fsys.CreateRandomAccessFile(name, 0, dfRead, dfSize, 0, meta.ModTime, ino(cnid)) }
-			rfPut := func() {
-				fsys.CreateRandomAccessFile(appledouble.Sidecar(name), 0, adRead, adSize, 0, meta.ModTime, ino(cnid))
+			dfLoc, rfLoc := -2*int64(cnid)-1, -2*int64(cnid) // unorderable
+			if len(dfExtents) > 0 {
+				dfLoc = dfExtents[0]
+			}
+			if len(rfExtents) > 0 {
+				rfLoc = rfExtents[0]
 			}
 
-			deferred = append(deferred,
-				forkloc{binary.BigEndian.Uint16(val[0x4a:]), dfPut},
-				forkloc{binary.BigEndian.Uint16(val[0x56:]), rfPut})
+			deferred[dfLoc] = func() {
+				fsys.CreateRandomAccessFile(name, dfLoc, dfReader, dfSize, 0, meta.ModTime, ino(cnid))
+			}
+			deferred[rfLoc] = func() {
+				fsys.CreateRandomAccessFile(appledouble.Sidecar(name), rfLoc, adReader, adSize, 0, meta.ModTime, ino(cnid))
+			}
 		}
 	}
 
-	slices.SortStableFunc(deferred, func(a, b forkloc) int { return cmp.Compare(a.order, b.order) })
-	for _, d := range deferred {
-		d.action()
+	for _, offset := range slices.Sorted(maps.Keys(deferred)) {
+		deferred[offset]()
 	}
 	return fsys, nil
 }
