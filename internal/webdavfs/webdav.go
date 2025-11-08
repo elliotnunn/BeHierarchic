@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -100,6 +102,10 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	}
 	if fi.IsDir() {
 		return dirList(w, f.(fs.ReadDirFile))
+	}
+	if _, ok := f.(io.ReadSeeker); !ok {
+		slog.Error("neitherDirNorSeekReader", "type", reflect.TypeOf(f), "path", reqPath)
+		return http.StatusInternalServerError, err
 	}
 	etag, err := findETag(h.FS, reqPath, fi)
 	if err != nil {
