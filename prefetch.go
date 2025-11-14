@@ -304,7 +304,6 @@ func onekey(buf []byte, o path) []byte {
 
 	if s, err := o.rawStat(); err == nil {
 		if s, ok := s.(interface{ Order() int64 }); ok {
-			buf = append(buf, 0xfd)
 			buf = appendint(buf, uint64(s.Order()))
 			return buf
 		}
