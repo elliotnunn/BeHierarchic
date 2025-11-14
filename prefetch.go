@@ -294,8 +294,13 @@ func onekey(buf []byte, o path) []byte {
 		want := o.name.String()
 		for i, f := range zip.File {
 			if f.Name == want {
-				buf = append(buf, 0xfc)
-				buf = appendint(buf, uint64(i))
+				o, err := f.DataOffset()
+				if err != nil {
+					buf = append(buf, 0xfc)
+					buf = appendint(buf, uint64(i))
+				} else { // happier path
+					buf = appendint(buf, uint64(o))
+				}
 				return buf
 			}
 		}
