@@ -88,8 +88,6 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if docache {
 		n, err = f.getCache(p, off)
 		if err != errNotFound {
-			// fmt.Printf("%s: ReadAt(%d,%d) = (%v,%s)\n",
-			// 	f.path, len(p), off, err, hex.EncodeToString(p[:n]))
 			return
 		}
 	}
@@ -98,16 +96,6 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 
 	if docache {
 		f.setCache(p[:n], off, err)
-
-		// if n == len(p) {
-		// 	cp := make([]byte, len(p))
-		// 	_, cerr := f.getCache(cp, off)
-		// 	if !bytes.Equal(cp, p) {
-		// 		panic(fmt.Sprintf("%s: ReadAt(%d,%d) = (%v,%s) but got (%v,%s)\n",
-		// 			f.path, len(p), off, err, hex.EncodeToString(p[:n]),
-		// 			cerr, hex.EncodeToString(cp[:n])))
-		// 	}
-		// }
 	}
 
 	return
@@ -163,8 +151,6 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	bigmu.Lock()
 	defer bigmu.Unlock()
 
-	// fmt.Printf("searching %s-%s (%d bytes)\n", hex.EncodeToString(idPrefix), hex.EncodeToString(id[len(idPrefix):]), len(p))
-
 	for _, q := range []int{select_le, select_gt} {
 		rows, err := f.path.container.dbq[q].Query(id)
 		if err != nil {
@@ -183,14 +169,11 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 				panic(serr)
 			}
 
-			// fmt.Printf("nearby row %s (%d bytes)\n", hex.EncodeToString(xid), len(xp))
 			if !bytes.HasPrefix(xid, idPrefix) || bytes.Compare(xid, idMax) > 0 {
-				// fmt.Println("-- toofar")
 				break // gone too far
 			}
 			xoff, ok := read1int(xid[len(idPrefix):])
 			if !ok {
-				// fmt.Println("-- nan")
 				continue
 			}
 
@@ -198,7 +181,6 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 				iseof = iseof || xiseof
 				id = appendint(idPrefix, off)
 				delrows = append(delrows, xid)
-				// fmt.Printf("-- consuming: now %s-%s (%d bytes)\n", hex.EncodeToString(idPrefix), hex.EncodeToString(id[len(idPrefix):]), len(p))
 			}
 		}
 		rows.Close()
@@ -207,7 +189,6 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	for _, delid := range delrows {
 		f.path.container.dbq[pfcache_delete].Exec(delid)
 	}
-	// fmt.Println("---------------")
 	f.path.container.dbq[pfcache_insert].Exec(id, iseof, p)
 }
 
