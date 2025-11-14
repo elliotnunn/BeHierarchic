@@ -249,8 +249,8 @@ func appendint(buf []byte, n uint64) []byte {
 	return buf
 }
 
-func readint(buf []byte) ([]byte, uint64, bool) {
-	if len(buf) == 0 || buf[0] > 8 || len(buf) < int(buf[0])+1 {
+func read1int(buf []byte) ([]byte, uint64, bool) {
+	if len(buf) == 0 || buf[0] > 8 || len(buf) != int(buf[0])+1 {
 		return buf, 0, false
 	}
 	n := uint64(0)
