@@ -101,11 +101,12 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 	// slog.Info("sqlHit", "id", hex.EncodeToString(id))
 
-	if len(data) >= len(p) || iseof != 0 { // full satisfaction
-		n = copy(p, data)
-		if iseof != 0 && len(data) <= len(p) {
-			err = io.EOF
-		}
+	srcErr := error(nil)
+	if iseof != 0 {
+		srcErr = io.EOF
+	}
+	n, err = subRead(p, off, data, off, srcErr)
+	if err != errIncompleteRead {
 		return n, err
 	}
 
@@ -320,3 +321,42 @@ func onekey(buf []byte, o path) []byte {
 
 	return bypath()
 }
+
+var errIncompleteRead = errors.New("internal incompleteness error")
+
+func subRead(p []byte, off int64, srcP []byte, srcOff int64, srcErr error) (int, error) {
+	end, srcEnd := bufend(p, off), bufend(srcP, srcOff)
+	if srcOff > off {
+		// src:   []
+		// dst: []
+		return 0, errIncompleteRead
+	} else if srcEnd <= off {
+		// src: []
+		// dst:   []
+		if srcErr == nil {
+			return 0, errIncompleteRead
+		} else {
+			return 0, srcErr
+		}
+	} else if srcEnd < end {
+		// src: []
+		// dst: [  ]
+		n := copy(p, srcP[off-srcOff:])
+		if srcErr == nil {
+			return n, errIncompleteRead
+		} else {
+			return n, srcErr
+		}
+	} else {
+		// src: [  ]
+		// dst: []
+		n := copy(p, srcP[off-srcOff:])
+		if srcEnd == end {
+			return n, srcErr
+		} else {
+			return n, nil
+		}
+	}
+}
+
+func bufend(p []byte, off int64) int64 { return off + int64(len(p)) }
