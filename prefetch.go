@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"database/sql"
 	"errors"
 	"io"
@@ -20,7 +21,7 @@ import (
 var bigmu sync.RWMutex
 
 const (
-	select_iseof_data_from_pfcache_where_id_eq_x = iota
+	select_le = iota
 	select_size_from_scache_where_id_eq_x
 	insert_or_ignore_into_pfcache_id_iseof_data_values_xxx
 	insert_or_ignore_into_scache_id_size_values_xx
@@ -28,8 +29,8 @@ const (
 )
 
 var queriesToCompile = [...]string{
-	select_iseof_data_from_pfcache_where_id_eq_x:           `SELECT iseof, data FROM pfcache WHERE id = ?;`,
-	select_size_from_scache_where_id_eq_x:                  `SELECT size FROM scache WHERE id = ?;`,
+	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC LIMIT 1;`,
+	select_size_from_scache_where_id_eq_x: `SELECT size FROM scache WHERE id = ?;`,
 	insert_or_ignore_into_pfcache_id_iseof_data_values_xxx: `INSERT OR IGNORE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
 	insert_or_ignore_into_scache_id_size_values_xx:         `INSERT OR IGNORE INTO scache (id, size) VALUES (?, ?);`,
 }
@@ -83,29 +84,38 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 
 	// have some fun here...
-	id := appendint(dbkey(f.path), uint64(off))
+	idPrefix := dbkey(f.path)
+	id := appendint(idPrefix, uint64(off))
 
 	bigmu.RLock()
-	row := f.path.container.dbq[select_iseof_data_from_pfcache_where_id_eq_x].QueryRow(id)
 	var (
+		srcid []byte
 		iseof int
-		data  []byte
+		srcp  []byte
 	)
-	err = row.Scan(&iseof, &data)
+	err = f.path.container.dbq[select_le].QueryRow(id).Scan(&srcid, &iseof, &srcp)
 	bigmu.RUnlock()
+
 	if errors.Is(err, sql.ErrNoRows) {
-		// slog.Info("sqlMis", "offset", off, "size", len(p), "path", f.path, "id", hex.EncodeToString(id))
 		return f.readAtThru(p, off)
 	} else if err != nil {
 		panic(err)
 	}
-	// slog.Info("sqlHit", "id", hex.EncodeToString(id))
+
+	if !bytes.HasPrefix(srcid, idPrefix) {
+		return f.readAtThru(p, off)
+	}
+	srcoff, ok := read1int(srcid[len(idPrefix):])
+	if !ok {
+		return f.readAtThru(p, off)
+	}
 
 	srcErr := error(nil)
 	if iseof != 0 {
 		srcErr = io.EOF
 	}
-	n, err = subRead(p, off, data, off, srcErr)
+
+	n, err = subRead(p, off, srcp, int64(srcoff), srcErr)
 	if err != errIncompleteRead {
 		return n, err
 	}
@@ -249,9 +259,9 @@ func appendint(buf []byte, n uint64) []byte {
 	return buf
 }
 
-func read1int(buf []byte) ([]byte, uint64, bool) {
+func read1int(buf []byte) (uint64, bool) {
 	if len(buf) == 0 || buf[0] > 8 || len(buf) != int(buf[0])+1 {
-		return buf, 0, false
+		return 0, false
 	}
 	n := uint64(0)
 	for range buf[0] {
@@ -259,8 +269,7 @@ func read1int(buf []byte) ([]byte, uint64, bool) {
 		n |= uint64(buf[1])
 		buf = buf[1:]
 	}
-	buf = buf[1:]
-	return buf, n, true
+	return n, true
 }
 
 func dbkey(o path) []byte {
