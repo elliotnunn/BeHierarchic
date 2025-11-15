@@ -295,7 +295,7 @@ type cachingFile struct {
 	enable bool
 }
 
-func (f *cachingFile) stopCaching()                { f.File.(io.ReaderAt).ReadAt(nil, 0); f.enable = false }
+func (f *cachingFile) stopCaching()                { f.enable = false }
 func (f *cachingFile) makePanic()                  { f.File = nil }
 func (f *cachingFile) withoutCaching() io.ReaderAt { return f.File.(io.ReaderAt) }
 
