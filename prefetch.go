@@ -349,21 +349,10 @@ func onekey(buf []byte, o path) []byte {
 	}
 
 	// temporary special case to get zip files going faster
-	if zip, ok := o.fsys.(*zip.Reader); ok {
-		want := o.name.String()
-		for i, f := range zip.File {
-			if f.Name == want {
-				o, err := f.DataOffset()
-				if err != nil {
-					buf = append(buf, 0xfc)
-					buf = appendint(buf, int64(i))
-				} else { // happier path
-					buf = appendint(buf, o)
-				}
-				return buf
-			}
-		}
-		return bypath()
+	if _, ok := o.fsys.(*zip.Reader); ok {
+		o.container.zMu.RLock()
+		defer o.container.zMu.RUnlock()
+		return appendint(buf, o.container.zipLocs[o])
 	}
 
 	if s, err := o.rawStat(); err == nil {

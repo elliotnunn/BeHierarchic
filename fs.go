@@ -28,6 +28,9 @@ type FS struct {
 	db   *sql.DB
 	dbq  [nQuery]*sql.Stmt
 
+	zMu     sync.RWMutex
+	zipLocs map[path]int64
+
 	root   fs.FS
 	rapool *spinner.Pool
 }
