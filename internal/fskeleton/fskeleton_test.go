@@ -37,7 +37,7 @@ func TestOpenDir(t *testing.T) {
 }
 func TestIncompleteDir(t *testing.T) {
 	fsys := New()
-	fsys.CreateFile("a/b/c", 0, emptyFile, 0, 0, time.Time{}, nil)
+	fsys.createFile("a/b/c", 0, emptyFile, 0, 0, time.Time{}, nil)
 	expectStr(t, "c...", listDir(fsys, "a/b"))
 	fsys.NoMoreChildren("a/b")
 	expectStr(t, "c", listDir(fsys, "a/b"))
@@ -50,7 +50,7 @@ func TestIncompleteRootInfo(t *testing.T) {
 	stat, err := fs.Stat(fsys, ".")
 	expectErr(t, nil, err)
 	mustBlock(t, func() { stat.ModTime() })
-	fsys.CreateFile(".", 0, emptyFile, 0, 0, time.Time{}, nil)
+	fsys.createFile(".", 0, emptyFile, 0, 0, time.Time{}, nil)
 	mustBlock(t, func() { stat.ModTime() })
 	fsys.CreateDir(".", 0, time.Time{}, nil)
 	mustNotBlock(t, func() { stat.ModTime() })
@@ -75,7 +75,7 @@ func TestRootInfoWithNoMore(t *testing.T) {
 }
 func TestIncompleteDirInfo(t *testing.T) {
 	fsys := New()
-	err := fsys.CreateFile("d/f", 0, emptyFile, 0, 0, time.Time{}, nil)
+	err := fsys.createFile("d/f", 0, emptyFile, 0, 0, time.Time{}, nil)
 	expectErr(t, nil, err)
 	fstat, err := fs.Stat(fsys, "d/f")
 	expectErr(t, nil, err)
@@ -98,7 +98,7 @@ func TestDirCreation(t *testing.T) {
 }
 func TestFullyNonblocking(t *testing.T) {
 	fsys := New()
-	expectErr(t, nil, fsys.CreateFile("imp/exp", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.createFile("imp/exp", 0, emptyFile, 0, 0, time.Time{}, nil))
 	fsys.NoMore()
 	fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		mustNotBlock(t, func() { s, _ := fsys.Stat(name); s.Sys() })
@@ -114,8 +114,8 @@ func TestSymlink(t *testing.T) {
 	expectErr(t, nil, fsys.CreateSymlink("symlink4", "symlink3/file5", 0, time.Time{}, nil))
 	expectErr(t, nil, fsys.CreateSymlink("symlink6", "symlink6", 0, time.Time{}, nil)) // circular
 	expectErr(t, nil, fsys.CreateDir("dir3", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateFile("file2", 0, emptyFile, 0, 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateFile("dir3/file5", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.createFile("file2", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.createFile("dir3/file5", 0, emptyFile, 0, 0, time.Time{}, nil))
 
 	mustBlock(t, func() { fsys.Open("symlink1") })
 	fsys.NoMore()

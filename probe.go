@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"math"
 	"strings"
-	"testing/iotest"
 
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
@@ -74,41 +73,33 @@ func (o path) probeArchive() (fsysGenerator, error) {
 	case matchAt("\x1f\x8b", 0): // gzip
 		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".gz .gzip .tgz=.tar")
-			opener := func() io.Reader {
-				r, err := gzip.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
-				if err != nil {
-					return iotest.ErrReader(err)
-				}
-				return r
+			opener := func() (io.ReadCloser, error) {
+				return gzip.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReadCloserFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
 	case matchAt("BZ", 0): // bzip2
 		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
-			opener := func() io.Reader {
-				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
+			opener := func() (io.Reader, error) {
+				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64)), nil
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReaderFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
 	case matchAt("\xfd7zXZ\x00", 0): // xz
 		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".xz .txz=.tar")
-			opener := func() io.Reader {
-				r, err := xz.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64), xz.DefaultDictMax)
-				if err != nil {
-					return iotest.ErrReader(err)
-				}
-				return r
+			opener := func() (io.Reader, error) {
+				return xz.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64), xz.DefaultDictMax)
 			}
 			fsys := fskeleton.New()
-			fsys.CreateSequentialFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReaderFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
 			fsys.NoMore()
 			return fsys, nil
 		}, nil

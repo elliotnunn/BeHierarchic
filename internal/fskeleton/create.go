@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"slices"
-	"testing/iotest"
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -46,19 +45,19 @@ func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys an
 	return fsys.create(nu)
 }
 
-// CreateFile creates a regular file at the specified path.
-//
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+// createFile validates everything for one of the exported Create*() functions
+func (fsys *FS) createFile(name string, order int64, data any, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
 	if !fs.ValidPath(name) {
 		return fs.ErrInvalid
 	}
 	nu := &fileent{name: internpath.New(name),
-		order: order,
-		size:  size, mode: mode, modtime: mtime, sys: sys, opener: open}
+		order:   order,
+		size:    size,
+		mode:    mode,
+		modtime: mtime,
+		sys:     sys,
+		data:    data,
+	}
 	err := fsys.create(nu)
 	if err != nil {
 		return err
@@ -67,58 +66,48 @@ func (fsys *FS) CreateFile(name string, order int64, open OpenFunc, size int64, 
 	return nil
 }
 
-// CreateErrorFile creates a file that always returns the error of your choice on Read (but not on Close).
+// CreateErrorFile creates a regular file at the specified path,
+// which always returns the error of your choice on Read (but not on Close).
+//
+// In common with the other Create*() functions, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
+//
+// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
 func (fsys *FS) CreateErrorFile(name string, order int64, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	fn := func(stub fs.File) (fs.File, error) {
-		return rFile{metadata: stub, Reader: iotest.ErrReader(err)}, nil
-	}
-	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
+	fn := func() (io.Reader, error) { return nil, err }
+	return fsys.createFile(name, order, fn, size, mode, mtime, sys)
 }
 
-// CreateSequentialFile is like CreateFile, but sorts out the simple stuff for you.
-func (fsys *FS) CreateSequentialFile(name string, order int64, r func() io.Reader, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	fn := func(stub fs.File) (fs.File, error) {
-		return rFile{metadata: stub, Reader: r()}, nil
-	}
-	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
+// CreateReaderFile creates a regular file at the specified path, which implements the bare minimum of [fs.File],
+// with the Close() method stubbed out.
+//
+// In common with the other Create*() functions, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
+//
+// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
+func (fsys *FS) CreateReaderFile(name string, order int64, r func() (io.Reader, error), size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	return fsys.createFile(name, order, r, size, mode, mtime, sys)
 }
 
-type rFile struct {
-	io.Reader
-	metadata
+// CreateReadCloserFile creates a regular file at the specified path, which implements the bare minimum of [fs.File].
+//
+// In common with the other Create*() functions, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
+//
+// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
+func (fsys *FS) CreateReadCloserFile(name string, order int64, r func() (io.ReadCloser, error), size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	return fsys.createFile(name, order, r, size, mode, mtime, sys)
 }
 
-func (f rFile) Close() error {
-	if closer, ok := f.Reader.(io.Closer); ok {
-		return closer.Close()
-	}
-	return nil
+// CreateReadCloserFile creates a regular file at the specified path, which additionally implements [io.ReaderAt].
+//
+// In common with the other Create*() functions, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
+//
+// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
+func (fsys *FS) CreateReaderAtFile(name string, order int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
+	return fsys.createFile(name, order, r, size, mode, mtime, sys)
 }
-
-// CreateRandomAccessFile is like CreateSequentialFile, but when opened, the [fs.File] will also satisfy [io.ReadSeeker] and [io.ReaderAt].
-func (fsys *FS) CreateRandomAccessFile(name string, order int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	fn := func(stub fs.File) (fs.File, error) {
-		return raFile{metadata: stub, raData: io.NewSectionReader(r, 0, size)}, nil
-	}
-	return fsys.CreateFile(name, order, fn, size, mode, mtime, sys)
-}
-
-type metadata interface {
-	Stat() (fs.FileInfo, error)
-}
-
-type raData interface {
-	Read([]byte) (int, error)
-	Seek(offset int64, whence int) (int64, error)
-	ReadAt(p []byte, off int64) (n int, err error)
-}
-
-type raFile struct {
-	metadata
-	raData
-}
-
-func (raFile) Close() error { return nil }
 
 // CreateSymlink creates a symbolic link at the specified path.
 //

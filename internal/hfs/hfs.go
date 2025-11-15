@@ -100,7 +100,7 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			adRead, adSize := meta.ForDir()
 
 			fsys.CreateDir(dirs[cnid], fs.FileMode(0), meta.ModTime, ino(cnid))
-			fsys.CreateSequentialFile(dirs[cnid], -2*int64(cnid) /*unorderable*/, adRead, adSize, 0, meta.ModTime, ino(cnid))
+			fsys.CreateReaderFile(dirs[cnid], -2*int64(cnid) /*unorderable*/, adRead, adSize, 0, meta.ModTime, ino(cnid))
 
 		case 2: // file
 			cnid := binary.BigEndian.Uint32(val[0x14:])
@@ -135,10 +135,10 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			}
 
 			deferred[dfLoc] = func() {
-				fsys.CreateRandomAccessFile(name, dfLoc, dfReader, dfSize, 0, meta.ModTime, ino(cnid))
+				fsys.CreateReaderAtFile(name, dfLoc, dfReader, dfSize, 0, meta.ModTime, ino(cnid))
 			}
 			deferred[rfLoc] = func() {
-				fsys.CreateRandomAccessFile(appledouble.Sidecar(name), rfLoc, adReader, adSize, 0, meta.ModTime, ino(cnid))
+				fsys.CreateReaderAtFile(appledouble.Sidecar(name), rfLoc, adReader, adSize, 0, meta.ModTime, ino(cnid))
 			}
 		}
 	}

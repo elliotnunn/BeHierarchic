@@ -9,8 +9,8 @@ import (
 type reader struct {
 	ad     []byte
 	zero   int
-	opener func() io.Reader
-	fork   io.Reader
+	opener func() (io.ReadCloser, error)
+	fork   io.ReadCloser
 }
 
 func (r *reader) Read(p []byte) (n int, err error) {
@@ -26,9 +26,9 @@ func (r *reader) Read(p []byte) (n int, err error) {
 		return n, nil
 	default:
 		if r.fork == nil {
-			r.fork = r.opener()
-			if r.fork == nil {
-				r.fork = iotest.ErrReader(io.EOF)
+			r.fork, err = r.opener()
+			if err != nil {
+				r.fork = io.NopCloser(iotest.ErrReader(err))
 			}
 		}
 		return r.fork.Read(p)
@@ -36,8 +36,8 @@ func (r *reader) Read(p []byte) (n int, err error) {
 }
 
 func (r *reader) Close() error {
-	if closer, ok := r.fork.(io.Closer); ok {
-		return closer.Close()
+	if r.fork != nil {
+		return r.fork.Close()
 	}
 	return nil
 }

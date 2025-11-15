@@ -16,34 +16,19 @@ func TestResourceForkPassthruSequential(t *testing.T) {
 	const data = "hello this is a fork"
 
 	var ad AppleDouble
-	rfFunc, rfSize := ad.WithSequentialResourceFork(func() io.Reader { return strings.NewReader(data) }, int64(len(data)))
+	rfFunc := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(data)), nil }
+	rfFunc, rfSize := ad.WithSequentialResourceFork(rfFunc, int64(len(data)))
+	allData, _ := rfFunc()
 
-	got, err := io.ReadAll(rfFunc())
-	if len(got) != int(rfSize) {
-		t.Error("wrong size")
-	}
-	if err != nil {
-		t.Error(err)
-	}
-	if !bytes.HasSuffix(got, []byte(data)) {
-		t.Error("does not end with data")
-	}
-}
-
-func TestReader(t *testing.T) {
-	const data = "hello this is a fork"
-
-	var ad AppleDouble
-	rfFunc, rfSize := ad.WithSequentialResourceFork(func() io.Reader { return strings.NewReader(data) }, int64(len(data)))
-	rf := rfFunc().(*reader)
-
+	rf := allData.(*reader)
 	expect := append(rf.ad, make([]byte, rf.zero)...)
 	expect = append(expect, data...)
-	if len(expect) != int(rfSize) {
-		t.Error("wrong size")
+
+	if rfSize != int64(len(expect)) {
+		t.Error("size mismatch", rfSize, len(expect))
 	}
 
-	err := iotest.TestReader(rfFunc(), expect)
+	err := iotest.TestReader(allData, expect)
 	if err != nil {
 		t.Error(err)
 	}

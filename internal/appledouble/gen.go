@@ -147,14 +147,14 @@ func (m *AppleDouble) flagsRec() [4]byte {
 
 // These methods return reader interfaces: leaves scope to compress the data in future
 
-func (m *AppleDouble) ForDir() (func() io.Reader, int64) {
+func (m *AppleDouble) ForDir() (func() (io.Reader, error), int64) {
 	finder, dates, flags := m.dirInfoRec(), m.datesRec(), m.flagsRec()
 	recs := map[int][]byte{
 		FINDER_INFO:         finder[:],
 		FILE_DATES_INFO:     dates[:],
 		MACINTOSH_FILE_INFO: flags[:]}
 	ad, _ := MakePrefix(recs, 0, 0)
-	return func() io.Reader { return bytes.NewReader(ad) }, int64(len(ad))
+	return func() (io.Reader, error) { return bytes.NewReader(ad), nil }, int64(len(ad))
 }
 
 func (m *AppleDouble) WithResourceFork(r io.ReaderAt, size int64) (io.ReaderAt, int64) {
@@ -172,7 +172,7 @@ func (m *AppleDouble) WithResourceFork(r io.ReaderAt, size int64) (io.ReaderAt, 
 	return &readerAt{ad: ad, fork: r}, rfStart + size
 }
 
-func (m *AppleDouble) WithSequentialResourceFork(opener func() io.Reader, size int64) (func() io.Reader, int64) {
+func (m *AppleDouble) WithSequentialResourceFork(opener func() (io.ReadCloser, error), size int64) (func() (io.ReadCloser, error), int64) {
 	finder, dates, flags := m.fileInfoRec(), m.datesRec(), m.flagsRec()
 	recs := map[int][]byte{
 		FINDER_INFO:         finder[:],
@@ -181,10 +181,10 @@ func (m *AppleDouble) WithSequentialResourceFork(opener func() io.Reader, size i
 	ad, rfStart := MakePrefix(recs, size, 8192) // pad for performance reasons
 
 	if size == 0 {
-		return func() io.Reader { return bytes.NewReader(ad) }, int64(len(ad))
+		return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(ad)), nil }, int64(len(ad))
 	}
 
-	return func() io.Reader {
-		return &reader{ad: ad, zero: int(rfStart) - len(ad), opener: opener}
+	return func() (io.ReadCloser, error) {
+		return &reader{ad: ad, zero: int(rfStart) - len(ad), opener: opener}, nil
 	}, rfStart + size
 }

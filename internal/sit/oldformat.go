@@ -84,22 +84,22 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 			copy(meta.Type[:], hdr.FinderInfo[:])
 			copy(meta.Creator[:], hdr.FinderInfo[4:])
 			adfile, adlen := meta.ForDir()
-			fsys.CreateSequentialFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
+			fsys.CreateReaderFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
 		} else { // file
 			rOffset := int64(offset + 112)
 			if hdr.RAlgo == 0 {
 				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(dataReader, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
-				fsys.CreateRandomAccessFile(appledouble.Sidecar(name),
+				fsys.CreateReaderAtFile(appledouble.Sidecar(name),
 					rOffset,              // order
 					adfile,               // reader
 					adsize,               // size
 					0, meta.ModTime, nil) // mode, mtime, sys
 			} else {
-				adfile, adsize := meta.WithSequentialResourceFork(func() io.Reader {
+				adfile, adsize := meta.WithSequentialResourceFork(func() (io.ReadCloser, error) {
 					raw := io.NewSectionReader(dataReader, rOffset, int64(hdr.RPackLen))
 					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, raw)
 				}, int64(hdr.RUnpackLen))
-				fsys.CreateSequentialFile(appledouble.Sidecar(name),
+				fsys.CreateReadCloserFile(appledouble.Sidecar(name),
 					rOffset,              // order
 					adfile,               // reader
 					adsize,               // size
@@ -108,15 +108,15 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 
 			dOffset := offset + 112 + int64(hdr.RPackLen)
 			if hdr.DAlgo == 0 {
-				fsys.CreateRandomAccessFile(name,
+				fsys.CreateReaderAtFile(name,
 					dOffset, // order
 					io.NewSectionReader(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
 					int64(hdr.RUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {
-				fsys.CreateSequentialFile(name,
+				fsys.CreateReadCloserFile(name,
 					dOffset, // order
-					func() io.Reader {
+					func() (io.ReadCloser, error) {
 						raw := io.NewSectionReader(dataReader, dOffset, int64(hdr.DPackLen))
 						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
 					}, // reader

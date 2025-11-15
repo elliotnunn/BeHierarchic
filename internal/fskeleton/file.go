@@ -20,11 +20,35 @@ type fileent struct {
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
-	opener  func(fs.File) (fs.File, error)
+	data    any // io.ReaderAt or func() (io.Reader, error) or func() (io.ReadCloser, error)
+}
+
+type file struct {
+	ent *fileent
+	rd  io.Reader
+	cl  io.Closer
+}
+
+type rafile struct {
+	ent *fileent
+	*io.SectionReader
+}
+
+func (f *fileent) open() (fs.File, error) {
+	switch d := f.data.(type) {
+	case io.ReaderAt:
+		return &rafile{
+			ent:           f,
+			SectionReader: io.NewSectionReader(d, 0, f.size),
+		}, nil
+	default:
+		return &file{
+			ent: f,
+		}, nil
+	}
 }
 
 func (f *fileent) pathname() internpath.Path { return f.name }
-func (f *fileent) open() (fs.File, error)    { return f.opener(f) }
 
 // common to fs.DirEntry and fs.FileInfo
 func (f *fileent) Name() string { return f.name.Base() }
@@ -44,6 +68,33 @@ func (f *fileent) Sys() any           { return f.sys }
 func (f *fileent) Order() int64 { return f.order }
 
 // fs.File
-func (*fileent) Close() error                 { return nil }
-func (*fileent) Read([]byte) (int, error)     { return 0, io.EOF }
-func (f *fileent) Stat() (fs.FileInfo, error) { return f, nil }
+func (f *rafile) Stat() (fs.FileInfo, error) { return f.ent, nil }
+func (*rafile) Close() error                 { return nil }
+
+func (f *file) Stat() (fs.FileInfo, error) { return f.ent, nil }
+func (f *file) Read(p []byte) (n int, err error) {
+	if f.rd == nil {
+		switch d := f.ent.data.(type) {
+		case func() (io.Reader, error):
+			f.rd, err = d()
+			if err != nil {
+				return n, err
+			}
+		case func() (io.ReadCloser, error):
+			reader, err := d()
+			if err != nil {
+				return n, err
+			}
+			f.rd, f.cl = reader, reader
+		}
+	}
+	return f.rd.Read(p)
+}
+
+func (f *file) Close() error {
+	if f.cl == nil {
+		return nil
+	} else {
+		return f.cl.Close()
+	}
+}

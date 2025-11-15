@@ -87,7 +87,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 
 		pstart, plen := int64(mapEntryStep)*int64(pmPyPartStart), int64(mapEntryStep)*int64(pmPartBlkCnt)
 
-		fsys.CreateRandomAccessFile(name, pstart,
+		fsys.CreateReaderAtFile(name, pstart,
 			io.NewSectionReader(disk, pstart, plen), plen, 0, time.Time{}, nil)
 	}
 	return fsys, nil

@@ -19,7 +19,6 @@ import (
 	"io"
 	"io/fs"
 	"slices"
-	"testing/iotest"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 )
@@ -119,29 +118,29 @@ func creepBy(buf []byte, reader io.Reader, by int) ([]byte, error) {
 	}
 }
 
-func readerFor(algo AlgID, crypto string, unpacksz uint32, cksum uint16, r io.Reader) io.ReadCloser {
+func readerFor(algo AlgID, crypto string, unpacksz uint32, cksum uint16, r io.Reader) (io.ReadCloser, error) {
 	if crypto != "" {
-		return io.NopCloser(iotest.ErrReader(ErrPassword))
+		return nil, ErrPassword
 	}
 
 	// corpus includes algo 0, 2, 3, 5, 13, 15
 	switch algo {
 	case 0: // no compression
-		return &crc16reader{r: io.NopCloser(r), len: int64(unpacksz), want: cksum}
+		return &crc16reader{r: io.NopCloser(r), len: int64(unpacksz), want: cksum}, nil
 	// case 1: // RLE compression
 	case 2: // LZC compression
-		return &crc16reader{r: lzc(r, unpacksz), len: int64(unpacksz), want: cksum}
+		return &crc16reader{r: lzc(r, unpacksz), len: int64(unpacksz), want: cksum}, nil
 	case 3: // Huffman compression
-		return &crc16reader{r: huffman(r, unpacksz), len: int64(unpacksz), want: cksum}
+		return &crc16reader{r: huffman(r, unpacksz), len: int64(unpacksz), want: cksum}, nil
 	// case 5: // LZ with adaptive Huffman
 	// case 6: // Fixed Huffman table
 	// case 8: // Miller-Wegman encoding
 	case 13: // anonymous
-		return &crc16reader{r: sit13(r, unpacksz), len: int64(unpacksz), want: cksum}
+		return &crc16reader{r: sit13(r, unpacksz), len: int64(unpacksz), want: cksum}, nil
 	// case 14: // anonymous
 	case 15: // Arsenic
-		return arsenic(r, unpacksz) // has its own internal checksum
+		return arsenic(r, unpacksz), nil // has its own internal checksum
 	default:
-		return io.NopCloser(iotest.ErrReader(fmt.Errorf("%w: %d", ErrAlgo, algo)))
+		return nil, fmt.Errorf("%w: %d", ErrAlgo, algo)
 	}
 }
