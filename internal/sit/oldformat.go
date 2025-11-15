@@ -86,6 +86,10 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 			adfile, adlen := meta.ForDir()
 			fsys.CreateReaderFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
 		} else { // file
+			if strings.HasSuffix(name, "10-Key Racing") {
+				slog.Info("IMPORTANTRF", "RUnpackLen", hdr.RUnpackLen, "RPackLen", hdr.RPackLen,
+					"DUnpackLen", hdr.DUnpackLen, "DPackLen", hdr.DPackLen)
+			}
 			rOffset := int64(offset + 112)
 			if hdr.RAlgo == 0 {
 				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(dataReader, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
@@ -111,7 +115,7 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 				fsys.CreateReaderAtFile(name,
 					dOffset, // order
 					io.NewSectionReader(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
-					int64(hdr.RUnpackLen), // size
+					int64(hdr.DUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {
 				fsys.CreateReadCloserFile(name,
@@ -120,7 +124,7 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 						raw := io.NewSectionReader(dataReader, dOffset, int64(hdr.DPackLen))
 						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
 					}, // reader
-					int64(hdr.RUnpackLen), // size
+					int64(hdr.DUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			}
 		}
