@@ -18,8 +18,6 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
-var bigmu sync.RWMutex
-
 const (
 	select_le = iota
 	select_gt
@@ -83,18 +81,18 @@ func (fsys *FS) setupDB(dsn string) {
 }
 
 func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
-	docache := f.enable && f.path.container.db != nil
+	// if !f.enable {
+	// 	panic(fmt.Sprintf("uncached request (%d bytes at %d) on %q", len(p), off, f.path))
+	// }
 
-	if docache {
-		n, err = f.getCache(p, off)
-		if err != errNotFound {
-			return
-		}
+	n, err = f.getCache(p, off)
+	if err != errNotFound {
+		return
 	}
 
 	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
 
-	if docache {
+	if f.enable {
 		f.setCache(p[:n], off, err)
 	}
 
@@ -102,11 +100,15 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 }
 
 func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
+	if f.path.container.db == nil {
+		return 0, errNotFound
+	}
+
 	idPrefix := dbkey(f.path)
 	id := appendint(idPrefix, off)
 
-	bigmu.RLock()
-	defer bigmu.RUnlock()
+	f.path.container.dbMu.RLock()
+	defer f.path.container.dbMu.RUnlock()
 
 	var (
 		xid    []byte
@@ -148,8 +150,8 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	id := appendint(idPrefix, off)
 	var delrows [][]byte
 
-	bigmu.Lock()
-	defer bigmu.Unlock()
+	f.path.container.dbMu.Lock()
+	defer f.path.container.dbMu.Unlock()
 
 	for _, q := range []int{select_le, select_gt} {
 		rows, err := f.path.container.dbq[q].Query(id)
@@ -233,11 +235,11 @@ func (o path) prefetchThisFS(concurrency int) {
 				// if we have a valuable size then use it
 				if rawstat.Size() < 0 && o.container.db != nil {
 					id := dbkey(o) // important not to deadlock here
-					bigmu.RLock()
+					o.container.dbMu.RLock()
 					sizerow := o.container.dbq[select_size_from_scache_where_id_eq_x].QueryRow(id)
 					var size int64
 					sqerr := sizerow.Scan(&size)
-					bigmu.RUnlock()
+					o.container.dbMu.RUnlock()
 					if sqerr == nil {
 						o.container.rapool.ReaderAt(o).SetSize(size)
 					}
@@ -259,9 +261,9 @@ func (o path) prefetchThisFS(concurrency int) {
 						realsize := cookedstat.Size() // do the calculation while the reader is well advanced
 						if o.container.db != nil {
 							id := dbkey(o) // important not to deadlock here
-							bigmu.Lock()
+							o.container.dbMu.Lock()
 							_, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
-							bigmu.Unlock()
+							o.container.dbMu.Unlock()
 							if serr != nil {
 								panic(serr)
 							}

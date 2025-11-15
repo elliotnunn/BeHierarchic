@@ -24,8 +24,9 @@ type FS struct {
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
 
-	db  *sql.DB
-	dbq [nQuery]*sql.Stmt
+	dbMu sync.RWMutex
+	db   *sql.DB
+	dbq  [nQuery]*sql.Stmt
 
 	root   fs.FS
 	rapool *spinner.Pool
