@@ -189,7 +189,9 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	}
 
 	for _, delid := range delrows {
-		f.path.container.dbq[pfcache_delete].Exec(delid)
+		if !bytes.Equal(delid, id) {
+			f.path.container.dbq[pfcache_delete].Exec(delid)
+		}
 	}
 	f.path.container.dbq[pfcache_insert].Exec(id, iseof, p)
 }
@@ -313,10 +315,11 @@ func read1int(buf []byte) (int64, bool) {
 	if len(buf) == 0 || buf[0] > 8 || len(buf) != int(buf[0])+1 {
 		return 0, false
 	}
+	buf = buf[1:]
 	n := int64(0)
-	for range buf[0] {
+	for len(buf) != 0 {
 		n <<= 8
-		n |= int64(buf[1])
+		n |= int64(buf[0])
 		buf = buf[1:]
 	}
 	return n, true
