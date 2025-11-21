@@ -20,8 +20,10 @@ import (
 // Apple Partition Map
 func New(disk io.ReaderAt) (fs.FS, error) {
 	var ddm [514]byte
-	n, _ := disk.ReadAt(ddm[:], 0)
-	if n < 514 || ddm[0] != 'E' || ddm[1] != 'R' {
+	n, err := disk.ReadAt(ddm[:], 0)
+	if n < len(ddm) {
+		return nil, err
+	} else if ddm[0] != 'E' || ddm[1] != 'R' {
 		return nil, errors.New("not an Apple Partition Map")
 	}
 
