@@ -91,10 +91,14 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 					"DUnpackLen", hdr.DUnpackLen, "DPackLen", hdr.DPackLen)
 			}
 			rOffset := int64(offset + 112)
+			rOrder := rOffset
+			if hdr.RUnpackLen == 0 {
+				rOrder = -2*offset - 1
+			}
 			if hdr.RAlgo == 0 {
 				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(dataReader, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
 				fsys.CreateReaderAtFile(appledouble.Sidecar(name),
-					rOffset,              // order
+					rOrder,
 					adfile,               // reader
 					adsize,               // size
 					0, meta.ModTime, nil) // mode, mtime, sys
@@ -104,22 +108,26 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, raw)
 				}, int64(hdr.RUnpackLen))
 				fsys.CreateReadCloserFile(appledouble.Sidecar(name),
-					rOffset,              // order
+					rOrder,
 					adfile,               // reader
 					adsize,               // size
 					0, meta.ModTime, nil) // mode, mtime, sys
 			}
 
 			dOffset := offset + 112 + int64(hdr.RPackLen)
+			dOrder := dOffset
+			if hdr.DUnpackLen == 0 {
+				dOrder = -2 * offset
+			}
 			if hdr.DAlgo == 0 {
 				fsys.CreateReaderAtFile(name,
-					dOffset, // order
+					dOrder,
 					io.NewSectionReader(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
 					int64(hdr.DUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {
 				fsys.CreateReadCloserFile(name,
-					dOffset, // order
+					dOrder,
 					func() (io.ReadCloser, error) {
 						raw := io.NewSectionReader(dataReader, dOffset, int64(hdr.DPackLen))
 						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
