@@ -258,17 +258,16 @@ func (o path) prefetchThisFS(concurrency int) {
 				}
 
 				// if the size is a prized hard-to-calculate quantity then save it
+				// opportune to do the calc now while the reader would be well advanced into the file
 				if rawstat.Size() < 0 {
-					if cookedstat, cookederr := o.cookedStat(); cookederr == nil { // if hard to calculate...
-						realsize := cookedstat.Size() // do the calculation while the reader is well advanced
-						if o.container.db != nil {
-							id := dbkey(o) // important not to deadlock here
-							o.container.dbMu.Lock()
-							_, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
-							o.container.dbMu.Unlock()
-							if serr != nil {
-								panic(serr)
-							}
+					realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
+					if ok && o.container.db != nil {
+						id := dbkey(o) // important not to deadlock here
+						o.container.dbMu.Lock()
+						_, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
+						o.container.dbMu.Unlock()
+						if serr != nil {
+							panic(serr)
 						}
 					}
 				}

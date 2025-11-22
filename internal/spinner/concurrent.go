@@ -23,8 +23,7 @@ type Path interface { // keep in mind that this is used as a key
 func New(blockShift int, nBlock int, nReader int) *Pool {
 	p := &Pool{
 		jobs:    make(chan []*job),
-		sizeQ:   make(chan sizeQuery),
-		sizeS:   make(chan sizeSet),
+		sizeQ:   make(chan *sizeQuery),
 		shift:   blockShift,
 		readers: make(map[Path]*readerState),
 		dones:   make(chan Path),
@@ -40,8 +39,7 @@ func New(blockShift int, nBlock int, nReader int) *Pool {
 // A Pool is safe for concurrent use by multiple goroutines.
 type Pool struct {
 	jobs    chan []*job
-	sizeQ   chan sizeQuery
-	sizeS   chan sizeSet
+	sizeQ   chan *sizeQuery
 	shift   int
 	readers map[Path]*readerState
 	dones   chan Path
@@ -94,45 +92,69 @@ func (r ReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	return n, err
 }
 
-func (r ReaderAt) Size() int64 {
-	q := sizeQuery{r.id, make(chan int64)}
-
-	// Try to query our cache about the file size cheaply
-	r.pool.sizeQ <- q
-	if s := <-q.ret; s != -1 {
-		return s
-	}
-
-	// Then try reading to the end of the file
-	r.ReadAt(make([]byte, 1), math.MaxInt64-1000000) // prevents really unfortunate overflows
-
-	// Then query our cache again
-	r.pool.sizeQ <- q
-	if s := <-q.ret; s != -1 {
-		return s
-	} else {
-		return 0 // give up
-	}
-}
-
 func (r ReaderAt) SetSize(size int64) {
 	if size < 0 {
 		return
 	}
-	s := sizeSet{id: r.id, size: size, done: make(chan struct{})}
-	r.pool.sizeS <- s
+	s := sizeQuery{
+		id:       r.id,
+		size:     size,
+		knowsize: true,
+		done:     make(chan struct{})}
+	r.pool.sizeQ <- &s
+	<-s.done // questionable whether we even need to wait
+}
+
+func (r ReaderAt) SizeIfCheap() (int64, bool) {
+	s := sizeQuery{
+		id:       r.id,
+		knowsize: false,
+		done:     make(chan struct{})}
+	r.pool.sizeQ <- &s
+	<-s.done // questionable whether we even need to wait
+	return s.size, s.knowsize
+}
+
+func (r ReaderAt) SizeIfPossible() (size int64, ok bool) {
+	defer func() {
+		slog.Info("sizeIfPossible", "path", r.id, "size", size, "ok", ok)
+	}()
+
+	s := sizeQuery{
+		id:       r.id,
+		knowsize: false,
+		done:     make(chan struct{})}
+	r.pool.sizeQ <- &s
 	<-s.done
+	if s.knowsize {
+		return s.size, true
+	}
+
+	// The cheap query failed, so try reading to the end of the file
+	r.ReadAt(make([]byte, 1), math.MaxInt64-1000000) // prevents really unfortunate overflows
+	s = sizeQuery{
+		id:       r.id,
+		knowsize: false,
+		done:     make(chan struct{})}
+	r.pool.sizeQ <- &s
+	<-s.done
+	return s.size, s.knowsize
+}
+
+// Best effort, may return 0 if the size is not knowable
+func (r ReaderAt) Size() int64 {
+	s, ok := r.SizeIfPossible()
+	if !ok {
+		return 0
+	}
+	return s
 }
 
 type sizeQuery struct {
-	id  Path
-	ret chan int64
-}
-
-type sizeSet struct {
-	id   Path
-	size int64
-	done chan struct{}
+	id       Path
+	size     int64
+	knowsize bool
+	done     chan struct{}
 }
 
 type ckey struct {
@@ -218,18 +240,15 @@ func (p *Pool) multiplexer() {
 					}
 				}
 			}
-		case q := <-p.sizeQ: // call to Size()
+		case q := <-p.sizeQ:
 			r := p.ensureReader(q.id)
-			if r.knowlen {
-				q.ret <- p.readers[q.id].len
-			} else {
-				q.ret <- -1
+			if q.knowsize { // set
+				r.knowlen, r.len = true, q.size
+			} else { // get
+				q.knowsize, q.size = r.knowlen, r.len
+				// no effort made to cancel waiting ReaderAts, this would be a rare case
 			}
-		case s := <-p.sizeS: // call to SetSize()
-			r := p.ensureReader(s.id)
-			r.knowlen, r.len = true, s.size
-			close(s.done)
-			// no effort made to cancel waiting ReaderAts, this would be a rare case
+			close(q.done)
 		case id := <-p.dones: // a Reader goroutine has returned
 			r := p.readers[id]
 			p.bcache.Add(ckey{id, r.seek}, r.data)
