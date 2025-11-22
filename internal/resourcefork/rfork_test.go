@@ -15,8 +15,11 @@ import (
 var large []byte
 
 func TestLarge(t *testing.T) {
-	fsys := &FS{AppleDouble: bytes.NewReader(large)}
-	err := fstest.TestFS(fsys, "0b  /-32768", "0b  /32767", "99b /-32768", "99b /32767")
+	fsys, err := New(bytes.NewReader(large))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fstest.TestFS(fsys, "0b  /-32768", "0b  /32767", "99b /-32768", "99b /32767")
 	if err != nil {
 		t.Error(err)
 	}
@@ -42,9 +45,31 @@ func TestLarge(t *testing.T) {
 var empty []byte
 
 func TestEmpty(t *testing.T) {
-	fsys := &FS{AppleDouble: bytes.NewReader(empty)}
-	err := fstest.TestFS(fsys)
+	fsys, err := New(bytes.NewReader(empty))
 	if err != nil {
+		t.Fatal(err)
+	}
+	err = fstest.TestFS(fsys)
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+//go:embed testbinaries/named.rsrc
+var named []byte
+
+func TestNamed(t *testing.T) {
+	fsys, err := New(bytes.NewReader(named))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fstest.TestFS(fsys, "blan/128", "long/128")
+	if err != nil {
+		t.Error(err)
+	}
+
+	to, err := fs.ReadLink(fsys, "blan/named/_")
+	if err != nil || to != "blan/128" {
 		t.Error(err)
 	}
 }

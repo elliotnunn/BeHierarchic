@@ -3,10 +3,12 @@
 
 package resourcefork
 
-func stringFromType(t [4]byte) string {
+func filenameFrom(t []byte) string {
 	var buf []byte
 	for _, roman := range t {
-		if roman < 128 {
+		if roman == '/' {
+			buf = append(buf, ':')
+		} else if roman < 128 {
 			buf = append(buf, roman)
 		} else {
 			triple := u8list[roman-128]
@@ -15,6 +17,17 @@ func stringFromType(t [4]byte) string {
 				triple >>= 8
 			}
 		}
+	}
+	// convert leading dots to underscores
+	for i := range buf {
+		if buf[i] == '.' {
+			buf[i] = '_'
+		} else {
+			break
+		}
+	}
+	if len(buf) == 0 {
+		buf = []byte{'_'}
 	}
 	return string(buf)
 }
