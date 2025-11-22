@@ -86,7 +86,8 @@ func (o path) probeArchive() (fsysGenerator, error) {
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
-	case at("BZh", 0) && head[3] >= '0' && head[3] <= '9' && at("\x31\x41\x59\x26\x53\x59", 4):
+	case at("BZh", 0) && head[3] >= '0' && head[3] <= '9' && at("\x31\x41\x59\x26\x53\x59", 4) &&
+		!strings.HasSuffix(o.name.Base(), ".dmg"): // UDIFs have a more complex format, ignore the bzip2 header
 		return func() (fs.FS, error) {
 			innerName := changeSuffix(o.name.Base(), ".bz .bz2 .bzip2 .tbz=.tar .tb2=.tar")
 			opener := func() (io.Reader, error) {
