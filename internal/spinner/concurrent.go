@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/dgryski/go-tinylfu"
 )
@@ -27,9 +29,10 @@ func New(blockShift int, nBlock int, nReader int) *Pool {
 		shift:   blockShift,
 		readers: make(map[Path]*readerState),
 		dones:   make(chan Path),
-		bcache:  tinylfu.New[ckey, []byte](nBlock, nBlock*10, bhasher),
+		bufpool: sync.Pool{New: func() any { return unsafe.SliceData(make([]byte, 1<<blockShift)) }},
 	}
-	p.rcache = tinylfu.New[Path, struct{}](nReader, nReader*10, rhasher, tinylfu.OnEvict(p.evict))
+	p.bcache = tinylfu.New[ckey, []byte](nBlock, nBlock*10, bhasher, tinylfu.OnEvict(p.bevict))
+	p.rcache = tinylfu.New[Path, struct{}](nReader, nReader*10, rhasher, tinylfu.OnEvict(p.revict))
 	go p.multiplexer()
 	return p
 }
@@ -45,6 +48,7 @@ type Pool struct {
 	dones   chan Path
 	bcache  *tinylfu.T[ckey, []byte]
 	rcache  *tinylfu.T[Path, struct{}]
+	bufpool sync.Pool // use *byte rather than []byte to save slice-header allocations
 }
 
 // A ReaderAt is safe for concurrent use by multiple goroutines.
@@ -337,17 +341,21 @@ func (p *Pool) startJob(id Path) {
 		}
 
 		var n int
-		r.data = make([]byte, 1<<p.shift)
+		r.data = unsafe.Slice(p.bufpool.Get().(*byte), 1<<p.shift)
 		n, r.err = io.ReadFull(r, r.data)
 		if r.err == io.ErrUnexpectedEOF {
 			r.err = io.EOF
 		}
-		r.data = smooshBuffer(r.data[:n])
+		r.data = r.data[:n]
 	}()
 }
 
+func (p *Pool) bevict(k ckey, buf []byte) {
+	p.bufpool.Put(unsafe.SliceData(buf))
+}
+
 // only ever called via startJob, so don't worry about sync
-func (p *Pool) evict(id Path, _ struct{}) {
+func (p *Pool) revict(id Path, _ struct{}) {
 	r := p.readers[id]
 	if r.busy {
 		r.diesoon = true
@@ -366,17 +374,6 @@ func (p *Pool) ensureReader(id Path) *readerState {
 		p.readers[id] = r
 	}
 	return r
-}
-
-// Use a smaller memory block
-func smooshBuffer(buf []byte) []byte {
-	if len(buf) == 0 {
-		return nil
-	} else if len(buf) <= cap(buf)/2 {
-		return append(make([]byte, 0, len(buf)), buf...)
-	} else {
-		return buf
-	}
 }
 
 func bufend(p []byte, off int64) int64 { return off + int64(len(p)) }
