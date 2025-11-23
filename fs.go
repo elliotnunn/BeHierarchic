@@ -31,6 +31,8 @@ type FS struct {
 	zMu     sync.RWMutex
 	zipLocs map[path]int64
 
+	scoreGood, scoreBad int64
+
 	root   fs.FS
 	rapool *spinner.Pool
 }

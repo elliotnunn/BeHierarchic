@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -88,12 +89,16 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 
 	n, err = f.getCache(p, off)
 	if err != errNotFound {
+		if f.enable {
+			atomic.AddInt64(&f.path.container.scoreGood, int64(n))
+		}
 		return
 	}
 
 	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
 
 	if f.enable {
+		atomic.AddInt64(&f.path.container.scoreBad, int64(n))
 		f.setCache(p[:n], off, err)
 	}
 
@@ -202,9 +207,12 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 
 func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
+	atomic.StoreInt64(&fsys.scoreGood, 0)
+	atomic.StoreInt64(&fsys.scoreBad, 0)
 	t := time.Now()
 	defer func() {
 		slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
+		slog.Info("prefetchSummary", "cachedBytes", atomic.LoadInt64(&fsys.scoreGood), "uncachedBytes", atomic.LoadInt64(&fsys.scoreBad))
 		if fsys.db != nil {
 			slog.Info("vacuumStart")
 			t := time.Now()
