@@ -6,6 +6,7 @@ package resourcefork
 import (
 	"bytes"
 	_ "embed"
+	"encoding/hex"
 	"io/fs"
 	"testing"
 	"testing/fstest"
@@ -38,6 +39,10 @@ func TestLarge(t *testing.T) {
 	}
 	if s.Size() != 99 {
 		t.Errorf("expected resource of type '99b ' to be 99 bytes, got %d", s.Size())
+	}
+	data, err := fs.ReadFile(fsys, "99b /-32768")
+	if len(data) != 99 || len(bytes.ReplaceAll(data, []byte{0xee}, nil)) != 0 {
+		t.Errorf("expected resource of type '99b ' to contain 0xee x 99, got %s", hex.EncodeToString(data))
 	}
 }
 
