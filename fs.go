@@ -48,7 +48,7 @@ type notAnArchive struct{}
 type fsysGenerator func() (fs.FS, error)
 
 func Wrapper(fsys fs.FS, cachePath string) *FS {
-	const blockShift = 13 // 8 kb
+	const blockShift = 12 // 4 kb -- must match the AppleDouble resourcefork padding!
 
 	fsys2 := &FS{
 		root:    fsys,
@@ -61,9 +61,14 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 }
 
 func (o path) getArchive(needFS bool) (bool, path, error) {
-	if strings.HasPrefix(o.name.Base(), "._") {
-		return false, path{}, nil // AppleDouble files don't currently contain an archive
+	// Do not probe resources in a resource fork: expensive and unproductive
+	o.container.rMu.RLock()
+	inResourceFork := strings.HasPrefix(o.container.reverse[o.fsys].name.Base(), "._")
+	o.container.rMu.RUnlock()
+	if inResourceFork {
+		return false, path{}, nil
 	}
+
 	if o.fsys == o.container.root { // Undercooked files, do not touch
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":

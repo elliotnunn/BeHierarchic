@@ -178,7 +178,9 @@ func (m *AppleDouble) WithSequentialResourceFork(opener func() (io.ReadCloser, e
 		FINDER_INFO:         finder[:],
 		FILE_DATES_INFO:     dates[:],
 		MACINTOSH_FILE_INFO: flags[:]}
-	ad, rfStart := MakePrefix(recs, size, 8192) // pad for performance reasons
+	ad, rfStart := MakePrefix(recs, size, 4096)
+	// trouble spot: if this 4k padding misaligns with the cache block size then inefficiency will ensue
+	// and if it changes then the sqlite cache data will be out of date
 
 	if size == 0 {
 		return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(ad)), nil }, int64(len(ad))
