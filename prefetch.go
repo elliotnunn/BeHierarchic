@@ -31,7 +31,7 @@ const (
 )
 
 var queriesToCompile = [...]string{
-	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC;`,
+	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC LIMIT 1;`,
 	select_gt:                             `SELECT id, iseof, data FROM pfcache WHERE id > ? ORDER BY id ASC;`,
 	select_size_from_scache_where_id_eq_x: `SELECT size FROM scache WHERE id = ?;`,
 	pfcache_insert:                        `INSERT OR REPLACE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
