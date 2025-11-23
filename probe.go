@@ -5,6 +5,7 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"encoding/binary"
+	"errors"
 	"io"
 	"io/fs"
 	"math"
@@ -15,6 +16,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
+	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/therootcompany/xz"
@@ -47,6 +49,20 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		return nil, err
 	}
 	dataReader := headerReader.withoutCaching()
+
+	// Easiest: AppleDouble file
+	if strings.HasPrefix(o.name.Base(), "._") {
+		roffset, rsize, err := resourceForkRange(headerReader)
+		if err != nil {
+			return nil, err
+		}
+		if rsize < 256 {
+			return nil, nil // empty resource forks are valid
+		}
+		headerReader := io.NewSectionReader(headerReader, roffset, rsize)
+		dataReader := io.NewSectionReader(dataReader, roffset, rsize)
+		return func() (fs.FS, error) { return resourcefork.New2(headerReader, dataReader) }, nil
+	}
 
 	// Easy: switch on file extension
 	switch gopath.Ext(o.name.Base()) {
@@ -200,4 +216,39 @@ func changeSuffix(s string, suffixes string) string {
 		}
 	}
 	return s
+}
+
+var ErrNotAppleDouble = errors.New("not a correct AppleDouble file")
+
+func resourceForkRange(r io.ReaderAt) (offset, size int64, err error) {
+	defer func() {
+		if err == io.EOF {
+			err = ErrNotAppleDouble
+		}
+	}()
+
+	header := make([]byte, 26)
+	n, err := r.ReadAt(header, 0)
+	if n < len(header) {
+		return 0, 0, err
+	} else if string(header[:3]) != "\x00\x05\x16" {
+		return 0, 0, ErrNotAppleDouble
+	}
+	entryCnt := binary.BigEndian.Uint16(header[24:])
+	if entryCnt > 255 {
+		return 0, 0, ErrNotAppleDouble
+	}
+	recList := make([]byte, 12*entryCnt)
+	n, err = r.ReadAt(recList, 26)
+	if n < len(recList) {
+		return 0, 0, err
+	}
+	for ; len(recList) > 0; recList = recList[12:] {
+		if binary.BigEndian.Uint32(recList) == 2 && binary.BigEndian.Uint32(recList[8:]) >= 286 {
+			offset := int64(binary.BigEndian.Uint32(recList[4:]))
+			size := int64(binary.BigEndian.Uint32(recList[8:]))
+			return offset, size, nil
+		}
+	}
+	return 0, 0, nil
 }
