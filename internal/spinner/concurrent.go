@@ -255,7 +255,6 @@ func (p *Pool) multiplexer() {
 			close(q.done)
 		case id := <-p.dones: // a Reader goroutine has returned
 			r := p.readers[id]
-			p.bcache.Add(ckey{id, r.seek}, r.data)
 
 			if r.err == io.EOF {
 				r.knowlen, r.len = true, bufend(r.data, r.seek)
@@ -284,6 +283,14 @@ func (p *Pool) multiplexer() {
 					}
 					delete(r.pending, offset)
 				}
+			}
+
+			// Only put the block in the cache if it is trustworthy
+			// Reason is subtle: we don't want to accidentally succeed on that in future
+			if r.err == nil || r.err == io.EOF {
+				p.bcache.Add(ckey{id, r.seek}, r.data)
+			} else {
+				p.bevict(ckey{id, r.seek}, r.data)
 			}
 
 			r.seek += int64(len(r.data))
