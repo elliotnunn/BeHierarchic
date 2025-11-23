@@ -30,10 +30,10 @@ const (
 )
 
 var queriesToCompile = [...]string{
-	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC LIMIT 1;`,
+	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC;`,
 	select_gt:                             `SELECT id, iseof, data FROM pfcache WHERE id > ? ORDER BY id ASC;`,
 	select_size_from_scache_where_id_eq_x: `SELECT size FROM scache WHERE id = ?;`,
-	pfcache_insert:                        `INSERT OR IGNORE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
+	pfcache_insert:                        `INSERT OR REPLACE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
 	pfcache_delete:                        `DELETE FROM pfcache WHERE id = ?;`,
 	insert_or_ignore_into_scache_id_size_values_xx: `INSERT OR IGNORE INTO scache (id, size) VALUES (?, ?);`,
 }
@@ -111,28 +111,32 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 	f.path.container.dbMu.RLock()
 	defer f.path.container.dbMu.RUnlock()
 
-	var (
-		xid    []byte
-		xiseof bool
-		xp     []byte
-	)
-	err = f.path.container.dbq[select_le].QueryRow(id).Scan(&xid, &xiseof, &xp)
-
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, errNotFound
-	} else if err != nil {
+	rows, err := f.path.container.dbq[select_le].Query(id)
+	if err != nil {
 		panic(err)
 	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			xid    []byte
+			xiseof bool
+			xp     []byte
+		)
+		serr := rows.Scan(&xid, &xiseof, &xp)
+		if serr != nil {
+			panic(serr)
+		}
 
-	if !bytes.HasPrefix(xid, idPrefix) {
-		return 0, errNotFound
+		if !bytes.HasPrefix(xid, idPrefix) {
+			return 0, errNotFound
+		}
+		xoff, ok := read1int(xid[len(idPrefix):])
+		if !ok {
+			continue // maybe the next row back will match?
+		}
+		return subRead(p, off, xp, xoff, iseof2err(xiseof))
 	}
-	xoff, ok := read1int(xid[len(idPrefix):])
-	if !ok {
-		return 0, errNotFound
-	}
-
-	return subRead(p, off, xp, xoff, iseof2err(xiseof))
+	return 0, errNotFound
 }
 
 func (f *cachingFile) setCache(p []byte, off int64, err error) {
@@ -159,6 +163,7 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 		if err != nil {
 			panic(err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var (
 				xid    []byte
@@ -166,9 +171,7 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 				xp     []byte
 			)
 			serr := rows.Scan(&xid, &xiseof, &xp)
-			if serr == sql.ErrNoRows {
-				break
-			} else if serr != nil {
+			if serr != nil {
 				panic(serr)
 			}
 
