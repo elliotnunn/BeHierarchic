@@ -11,6 +11,7 @@ import (
 	"math/bits"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -253,7 +254,7 @@ func (o path) prefetchThisFS(concurrency int) {
 				if err != nil {
 					slog.Error("getArchiveError", "err", err, "path", o)
 				}
-				if isar {
+				if isar && !strings.HasPrefix(o.name.Base(), "._") { // no use probing resource forks!
 					fsys.prefetchThisFS(1)
 				}
 
