@@ -6,12 +6,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"os"
 	gopath "path"
 	"reflect"
 	"strings"
 
-	bufra "github.com/avvmoto/buf-readerat"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
@@ -53,12 +51,7 @@ func (o path) cookedOpen() (fs.File, error) {
 
 	switch s.Mode() & fs.ModeType {
 	case 0: // regular file
-		if osFile, ok := f.(*os.File); ok {
-			withBuffer := bufra.NewBufReaderAt(osFile, 1024) // untuned buffer size
-			f = osFileBuffered{
-				allReadMethods: io.NewSectionReader(withBuffer, 0, s.Size()),
-				statCloser:     f}
-		} else if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
+		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
 			f.Close()
 			ra := o.container.rapool.ReaderAt(o)
 			if size := s.Size(); size >= 0 {
