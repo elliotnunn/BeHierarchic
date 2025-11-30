@@ -21,8 +21,7 @@ import (
 )
 
 const (
-	select_le = iota
-	select_gt
+	select_ge = iota
 	select_size_from_scache_where_id_eq_x
 	pfcache_insert
 	pfcache_delete
@@ -31,8 +30,7 @@ const (
 )
 
 var queriesToCompile = [...]string{
-	select_le:                             `SELECT id, iseof, data FROM pfcache WHERE id <= ? ORDER BY id DESC LIMIT 1;`,
-	select_gt:                             `SELECT id, iseof, data FROM pfcache WHERE id > ? ORDER BY id ASC;`,
+	select_ge:                             `SELECT id, iseof, data FROM pfcache WHERE id >= ?;`,
 	select_size_from_scache_where_id_eq_x: `SELECT size FROM scache WHERE id = ?;`,
 	pfcache_insert:                        `INSERT OR REPLACE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
 	pfcache_delete:                        `DELETE FROM pfcache WHERE id = ?;`,
@@ -116,7 +114,51 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 	f.path.container.dbMu.RLock()
 	defer f.path.container.dbMu.RUnlock()
 
-	rows, err := f.path.container.dbq[select_le].Query(id)
+	row := f.path.container.dbq[select_ge].QueryRow(id)
+
+	var (
+		xid    []byte
+		xiseof bool
+		xp     []byte
+	)
+	serr := row.Scan(&xid, &xiseof, &xp)
+	if serr == sql.ErrNoRows {
+		return 0, errNotFound
+	} else if serr != nil {
+		panic(row.Err)
+	}
+	if !bytes.HasPrefix(xid, idPrefix) {
+		return 0, errNotFound
+	}
+
+	xbufend, ok := read1int(xid[len(idPrefix):])
+	if !ok {
+		return 0, errNotFound
+	}
+	xoff := xbufend - int64(len(xp))
+
+	return subRead(p, off, xp, xoff, iseof2err(xiseof))
+}
+
+func (f *cachingFile) setCache(p []byte, off int64, err error) {
+	if f.path.container.db == nil || len(p) == 0 {
+		return
+	}
+
+	// do not accidentally append over someone else's data!
+	p = p[:len(p):len(p)]
+	iseof := err == io.EOF
+
+	idPrefix := dbkey(f.path)
+	// idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
+	// idEnd := appendint(idPrefix, bufEnd(p, off))
+	id := appendint(idPrefix, off)
+	var delrows [][]byte
+
+	f.path.container.dbMu.Lock()
+	defer f.path.container.dbMu.Unlock()
+
+	rows, err := f.path.container.dbq[select_ge].Query(id)
 	if err != nil {
 		panic(err)
 	}
@@ -133,76 +175,33 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 		}
 
 		if !bytes.HasPrefix(xid, idPrefix) {
-			return 0, errNotFound
+			break
 		}
-		xoff, ok := read1int(xid[len(idPrefix):])
+		xbufend, ok := read1int(xid[len(idPrefix):])
 		if !ok {
-			continue // maybe the next row back will match?
+			break // questionable whether this is actually a good idea
 		}
-		return subRead(p, off, xp, xoff, iseof2err(xiseof))
-	}
-	return 0, errNotFound
-}
+		xoff := xbufend - int64(len(xp))
 
-func (f *cachingFile) setCache(p []byte, off int64, err error) {
-	if len(p) == 0 || err != nil && err != io.EOF {
-		return // no point caching
-	}
-
-	// do not accidentally append over someone else's data!
-	p = p[:len(p):len(p)]
-	iseof := err == io.EOF
-
-	// slight subtlety about which rows we want
-	idPrefix := dbkey(f.path)
-	idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
-	idMax := appendint(idPrefix, bufEnd(p, off))
-	id := appendint(idPrefix, off)
-	var delrows [][]byte
-
-	f.path.container.dbMu.Lock()
-	defer f.path.container.dbMu.Unlock()
-
-	for _, q := range []int{select_le, select_gt} {
-		rows, err := f.path.container.dbq[q].Query(id)
-		if err != nil {
-			panic(err)
+		if bufJoin(&p, &off, xp, xoff) {
+			iseof = iseof || xiseof
+			id = appendint(idPrefix, off)
+			delrows = append(delrows, xid)
+			if iseof {
+				break
+			}
+		} else {
+			break
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var (
-				xid    []byte
-				xiseof bool
-				xp     []byte
-			)
-			serr := rows.Scan(&xid, &xiseof, &xp)
-			if serr != nil {
-				panic(serr)
-			}
-
-			if !bytes.HasPrefix(xid, idPrefix) || bytes.Compare(xid, idMax) > 0 {
-				break // gone too far
-			}
-			xoff, ok := read1int(xid[len(idPrefix):])
-			if !ok {
-				continue
-			}
-
-			if bufJoin(&p, &off, xp, xoff) {
-				iseof = iseof || xiseof
-				id = appendint(idPrefix, off)
-				delrows = append(delrows, xid)
-			}
-		}
-		rows.Close()
 	}
+	rows.Close()
 
 	for _, delid := range delrows {
 		if !bytes.Equal(delid, id) {
 			f.path.container.dbq[pfcache_delete].Exec(delid)
 		}
 	}
-	f.path.container.dbq[pfcache_insert].Exec(id, iseof, p)
+	f.path.container.dbq[pfcache_insert].Exec(appendint(idPrefix, bufEnd(p, off)), iseof, p)
 }
 
 func (fsys *FS) Prefetch() {
@@ -351,6 +350,7 @@ func dbkey(o path) []byte {
 	for _, o := range warps {
 		accum = onekey(accum, o)
 	}
+	accum = append(accum, 0xee) // separator from the file offset
 	return accum
 }
 
