@@ -151,7 +151,7 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 
 		if err != nil {
 			slog.Warn("StuffIt read error", "err", err, "offset", offset)
-			return
+			break
 		}
 
 		var hdr header

@@ -89,7 +89,7 @@ func newFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 		err = notExpectingEOF(err)
 		if err != nil {
 			slog.Warn("StuffIt read error", "err", err, "offset", offset)
-			return
+			break
 		}
 
 		ok := addToFS(fsys, f, dataReader, known)
