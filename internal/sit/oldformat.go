@@ -86,10 +86,6 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 			adfile, adlen := meta.ForDir()
 			fsys.CreateReaderFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
 		} else { // file
-			if strings.HasSuffix(name, "10-Key Racing") {
-				slog.Info("IMPORTANTRF", "RUnpackLen", hdr.RUnpackLen, "RPackLen", hdr.RPackLen,
-					"DUnpackLen", hdr.DUnpackLen, "DPackLen", hdr.DPackLen)
-			}
 			rOffset := int64(offset + 112)
 			rOrder := rOffset
 			if hdr.RUnpackLen == 0 {
