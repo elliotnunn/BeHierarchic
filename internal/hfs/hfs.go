@@ -107,7 +107,7 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			name := path.Join(dirs[parent], strings.ReplaceAll(stringFromRoman(rec[7:][:rec[6]]), "/", ":"))
 
 			var meta appledouble.AppleDouble
-			meta.LoadDInfo((*[16]byte)(val[4:]))
+			meta.LoadFInfo((*[16]byte)(val[4:]))
 			meta.CreateTime = appledouble.MacTime(binary.BigEndian.Uint32(val[0x2c:]))
 			meta.ModTime = appledouble.MacTime(binary.BigEndian.Uint32(val[0x30:]))
 			meta.BkTime = appledouble.MacTime(binary.BigEndian.Uint32(val[0x34:]))

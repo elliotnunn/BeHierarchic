@@ -81,11 +81,11 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 
 		if hdr.RAlgo.isDirStart() {
 			fsys.CreateDir(name, 0, meta.ModTime, nil)
-			copy(meta.Type[:], hdr.FinderInfo[:])
-			copy(meta.Creator[:], hdr.FinderInfo[4:])
 			adfile, adlen := meta.ForDir()
 			fsys.CreateReaderFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
 		} else { // file
+			copy(meta.Type[:], hdr.FinderInfo[:])
+			copy(meta.Creator[:], hdr.FinderInfo[4:])
 			rOffset := int64(offset + 112)
 			rOrder := rOffset
 			if hdr.RUnpackLen == 0 {
