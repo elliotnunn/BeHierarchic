@@ -28,6 +28,9 @@ type FS struct {
 	zMu     sync.RWMutex
 	zipLocs map[path]int64
 
+	iMu sync.RWMutex
+	ino map[internpath.Path]uint64
+
 	scoreGood, scoreBad int64
 
 	root   fs.FS

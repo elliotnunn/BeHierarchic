@@ -16,15 +16,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
 const (
-	prefixSep = 0x99
-	sizeByte  = 0x55
-	eofByte   = 0xee
+	// meant to be eye-catching, and must never be <= 8 (see appendint)
+	offsetByte  = 0xcc // appended to a dbkey ~ "offset follows, value is data"
+	sizeByte    = 0x55 // appended to a dbkey ~ "value is a size"
+	inodeByte   = 0xfe // precedes a onekey ~ "inode + namehash follows"
+	unicodeByte = 0xff // flanks onekey, never part of valid UTF-8 ~ "filename"
+	eofByte     = 0xee // appended twice to a dbvalue ~ EOF
 )
 
 func (fsys *FS) setupDB(dsn string) {
@@ -96,7 +100,7 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 		return 0, errNotFound
 	}
 
-	idPrefix := dbkey(f.path)
+	idPrefix := append(dbkey(f.path), offsetByte)
 	id := appendint(idPrefix, off)
 
 	iter, dberr := f.path.container.db.NewIter(&pebble.IterOptions{
@@ -140,7 +144,7 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	// do not accidentally append over someone else's data!
 	p = p[:len(p):len(p)]
 
-	idPrefix := dbkey(f.path)
+	idPrefix := append(dbkey(f.path), offsetByte)
 	idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
 	id := appendint(idPrefix, off)
 
@@ -192,6 +196,28 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 	}
 }
 
+func (o path) getCacheSize() (int64, bool) {
+	id := append(dbkey(o), sizeByte)
+	val, closer, err := o.container.db.Get(id)
+	if err == pebble.ErrNotFound {
+		return 0, false
+	} else if err != nil {
+		slog.Error("getCacheSizeError", "path", o, "err", err)
+		return 0, false
+	}
+	defer closer.Close()
+	return read1int(val)
+}
+
+func (o path) setCacheSize(s int64) {
+	id := append(dbkey(o), sizeByte)
+	val := appendint([]byte(nil), s)
+	err := o.container.db.Set(id, val, &pebble.WriteOptions{})
+	if err != nil {
+		slog.Error("setCacheSizeError", "path", o, "err", err)
+	}
+}
+
 func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
 	atomic.StoreInt64(&fsys.scoreGood, 0)
@@ -229,16 +255,13 @@ func (o path) prefetchThisFS(concurrency int) {
 				}
 
 				// if we have a valuable size then use it
+				sizeInCache := false
 				if rawstat.Size() < 0 && o.container.db != nil {
-					// id := dbkey(o) // important not to deadlock here
-					// o.container.dbMu.RLock()
-					// sizerow := o.container.dbq[select_size_from_scache_where_id_eq_x].QueryRow(id)
-					// var size int64
-					// sqerr := sizerow.Scan(&size)
-					// o.container.dbMu.RUnlock()
-					// if sqerr == nil {
-					// 	o.container.rapool.ReaderAt(o).SetSize(size)
-					// }
+					size, ok := o.getCacheSize()
+					if ok {
+						o.container.rapool.ReaderAt(o).SetSize(size)
+						sizeInCache = true
+					}
 				}
 
 				timer := time.AfterFunc(time.Second, func() { slog.Info("takingLongTime", "path", o) })
@@ -253,17 +276,11 @@ func (o path) prefetchThisFS(concurrency int) {
 
 				// if the size is a prized hard-to-calculate quantity then save it
 				// opportune to do the calc now while the reader would be well advanced into the file
-				if rawstat.Size() < 0 {
-					// realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
-					// if ok && o.container.db != nil {
-					// id := dbkey(o) // important not to deadlock here
-					// o.container.dbMu.Lock()
-					// _, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
-					// o.container.dbMu.Unlock()
-					// if serr != nil {
-					// 	panic(serr)
-					// }
-					// }
+				if easysize := rawstat.Size(); easysize < 0 && !sizeInCache {
+					realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
+					if ok {
+						o.setCacheSize(realsize)
+					}
 				}
 			}
 		})
@@ -318,6 +335,11 @@ func read1int(buf []byte) (int64, bool) {
 	return n, true
 }
 
+// dbkey creates a key for a file using a series of [onekey] calls
+// - remember to append offsetByte or sizeByte
+// - durable across appends
+// - inherits the sort-order properties from onekey
+// - likely to have capacity to append -- be careful of clashing appends
 func dbkey(o path) []byte {
 	o.container.rMu.RLock()
 	warps := []path{o}
@@ -333,15 +355,28 @@ func dbkey(o path) []byte {
 	for _, o := range warps {
 		accum = onekey(accum, o)
 	}
-	accum = append(accum, prefixSep) // separator from the file offset
 	return accum
 }
 
+// onekey appends bytes identifying one path-within-a-filesystem
+// - must be unique among paths in that filesystem
+// - must not start with byte(offsetByte), or it will clash with other data
+// - should sort in an order somewhat corresponding to the expected tree walk order
+// - should be as short as possible
 func onekey(buf []byte, o path) []byte {
 	bypath := func() []byte {
-		buf = append(buf, 0xff) // never used in UTF-8
+		buf = append(buf, unicodeByte) // never used in UTF-8
 		buf = append(buf, o.name.String()...)
-		buf = append(buf, 0xff)
+		buf = append(buf, unicodeByte)
+		return buf
+	}
+
+	byinode := func(i uint64) []byte {
+		buf = append(buf, inodeByte)
+		buf = appendint(buf, int64(i))
+		var hash xxhash.Digest // salt k with hashed name to avoid inode number collisions
+		hash.WriteString(o.name.String())
+		buf = appendint(buf, int64(hash.Sum64()&0xffffffff))
 		return buf
 	}
 
@@ -352,19 +387,31 @@ func onekey(buf []byte, o path) []byte {
 		return appendint(buf, o.container.zipLocs[o])
 	}
 
+	if o.fsys == o.container.root {
+		o.container.iMu.RLock()
+		ino, ok := o.container.ino[o.name]
+		o.container.iMu.RUnlock()
+		if ok {
+			return byinode(ino)
+		}
+	}
+
 	if s, err := o.rawStat(); err == nil {
 		if s, ok := s.(interface{ Order() int64 }); ok {
 			buf = appendint(buf, s.Order())
 			return buf
 		}
 
-		if id, ok := fileID(s); ok {
-			t := s.ModTime()
-			buf = append(buf, 0xfe)
-			buf = appendint(buf, int64(id))
-			buf = appendint(buf, t.Unix())
-			buf = appendint(buf, int64(t.Nanosecond()))
-			return buf
+		if o.fsys == o.container.root {
+			if ino, ok := inodeNum(s); ok {
+				o.container.iMu.Lock()
+				if o.container.ino == nil {
+					o.container.ino = make(map[internpath.Path]uint64)
+				}
+				o.container.ino[o.name] = ino
+				o.container.iMu.Unlock()
+				return byinode(ino)
+			}
 		}
 	}
 
