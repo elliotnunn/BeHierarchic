@@ -4,15 +4,14 @@
 package main
 
 import (
-	"database/sql"
 	"io/fs"
 	gopath "path"
 	"strings"
 	"sync"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
-	_ "modernc.org/sqlite"
 )
 
 const Special = "◆"
@@ -24,9 +23,7 @@ type FS struct {
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
 
-	dbMu sync.RWMutex
-	db   *sql.DB
-	dbq  [nQuery]*sql.Stmt
+	db *pebble.DB
 
 	zMu     sync.RWMutex
 	zipLocs map[path]int64

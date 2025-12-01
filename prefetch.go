@@ -3,7 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"database/sql"
+	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
@@ -16,67 +16,38 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
-
-const (
-	select_ge = iota
-	select_size_from_scache_where_id_eq_x
-	pfcache_insert
-	pfcache_delete
-	insert_or_ignore_into_scache_id_size_values_xx
-	nQuery
-)
-
-var queriesToCompile = [...]string{
-	select_ge:                             `SELECT id, iseof, data FROM pfcache WHERE id >= ?;`,
-	select_size_from_scache_where_id_eq_x: `SELECT size FROM scache WHERE id = ?;`,
-	pfcache_insert:                        `INSERT OR REPLACE INTO pfcache (id, iseof, data) VALUES (?, ?, ?);`,
-	pfcache_delete:                        `DELETE FROM pfcache WHERE id = ?;`,
-	insert_or_ignore_into_scache_id_size_values_xx: `INSERT OR IGNORE INTO scache (id, size) VALUES (?, ?);`,
-}
 
 func (fsys *FS) setupDB(dsn string) {
 	if dsn == "" {
 		return
 	}
 
-	var err error
-	fsys.db, err = sql.Open("sqlite", dsn)
+	db, err := pebble.Open(dsn, &pebble.Options{})
 	if err != nil {
-		slog.Error("sqlFail", "dsn", dsn, "err", err)
+		slog.Error("dbFail", "path", dsn, "err", err)
+		return
 	}
-	slog.Info("sqlOK", "dsn", dsn)
-	// db errors after this point are worth a panic
-	fsys.db.SetMaxOpenConns(1)
+	slog.Info("dbOK", "dsn", dsn)
+	fsys.db = db
+}
 
-	_, err = fsys.db.Exec(`
-	PRAGMA journal_mode = WAL;
-	PRAGMA synchronous = OFF;
-	PRAGMA mmap_size = 0x1000000000;
-	PRAGMA page_size = 65536;
-	CREATE TABLE IF NOT EXISTS pfcache (
-		id BLOB PRIMARY KEY,
-		iseof BOOL,
-		data BLOB
-	) WITHOUT ROWID;
-	CREATE TABLE IF NOT EXISTS scache (
-		id BLOB PRIMARY KEY,
-		size INTEGER
-	) WITHOUT ROWID;
-	`)
-
-	for i, query := range queriesToCompile {
-		q, err := fsys.db.Prepare(query)
-		if err != nil {
-			panic(err.Error() + ": " + query)
-		}
-		fsys.dbq[i] = q
-	}
-
+func (fsys *FS) dumpDB() {
+	iter, err := fsys.db.NewIter(&pebble.IterOptions{})
 	if err != nil {
 		panic(err)
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		p, err := unmarshalBufErr(iter.Value())
+		slog.Info("dbDump",
+			"key", hex.EncodeToString(iter.Key()),
+			"len", len(p),
+			"data", hex.EncodeToString(p),
+			"err", err)
 	}
 }
 
@@ -98,6 +69,17 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if f.enable {
 		atomic.AddInt64(&f.path.container.scoreBad, int64(n))
 		f.setCache(p[:n], off, err)
+
+		// if n > 0 {
+		// 	p2 := make([]byte, len(p))
+		// 	n2, err2 := f.getCache(p2, off)
+		// 	if n2 != n || err2 != err || !bytes.Equal(p2[:n2], p[:n]) {
+		// 		slog.Error("expected", "key", hex.EncodeToString(dbkey(f.path)), "path", f.path, "off", off, "len", len(p), "n", n, "err", err, "data", hex.EncodeToString(p[:n]))
+		// 		slog.Error("got", "off", off, "len", len(p), "n", n2, "err", err2, "data", hex.EncodeToString(p2[:n2]))
+		// 		f.path.container.dumpDB()
+		// 		panic("dread mismatch")
+		// 	}
+		// }
 	}
 
 	return
@@ -111,33 +93,37 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 	idPrefix := dbkey(f.path)
 	id := appendint(idPrefix, off)
 
-	f.path.container.dbMu.RLock()
-	defer f.path.container.dbMu.RUnlock()
-
-	row := f.path.container.dbq[select_ge].QueryRow(id)
-
-	var (
-		xid    []byte
-		xiseof bool
-		xp     []byte
-	)
-	serr := row.Scan(&xid, &xiseof, &xp)
-	if serr == sql.ErrNoRows {
-		return 0, errNotFound
-	} else if serr != nil {
-		panic(row.Err)
+	iter, dberr := f.path.container.db.NewIter(&pebble.IterOptions{
+		LowerBound: id,
+	})
+	if dberr != nil {
+		panic(err)
 	}
+	defer iter.Close()
+
+	if !iter.First() {
+		return 0, errNotFound
+	}
+
+	xid := iter.Key()
 	if !bytes.HasPrefix(xid, idPrefix) {
 		return 0, errNotFound
 	}
+
+	dbbuf, dberr := iter.ValueAndErr()
+	if dberr != nil {
+		slog.Error("pebbleIteratorValueErr", "err", dberr)
+		return 0, errNotFound
+	}
+	xp, xerr := unmarshalBufErr(dbbuf)
 
 	xbufend, ok := read1int(xid[len(idPrefix):])
 	if !ok {
 		return 0, errNotFound
 	}
-	xoff := xbufend - int64(len(xp))
+	xoff := bufStart(xp, xbufend)
 
-	return subRead(p, off, xp, xoff, iseof2err(xiseof))
+	return subRead(p, off, xp, xoff, xerr)
 }
 
 func (f *cachingFile) setCache(p []byte, off int64, err error) {
@@ -147,61 +133,57 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 
 	// do not accidentally append over someone else's data!
 	p = p[:len(p):len(p)]
-	iseof := err == io.EOF
 
 	idPrefix := dbkey(f.path)
-	// idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
-	// idEnd := appendint(idPrefix, bufEnd(p, off))
+	idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
 	id := appendint(idPrefix, off)
-	var delrows [][]byte
 
-	f.path.container.dbMu.Lock()
-	defer f.path.container.dbMu.Unlock()
+	batch := f.path.container.db.NewBatch()
 
-	rows, err := f.path.container.dbq[select_ge].Query(id)
-	if err != nil {
-		panic(err)
+	iter, dberr := f.path.container.db.NewIter(&pebble.IterOptions{
+		LowerBound: id,
+	})
+	if dberr != nil {
+		panic(dberr)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			xid    []byte
-			xiseof bool
-			xp     []byte
-		)
-		serr := rows.Scan(&xid, &xiseof, &xp)
-		if serr != nil {
-			panic(serr)
-		}
 
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() { // be *super* careful not to munge values from the db
+		xid := iter.Key()
 		if !bytes.HasPrefix(xid, idPrefix) {
 			break
 		}
+		xid = slices.Clone(xid)
+
+		dbbuf, dberr := iter.ValueAndErr()
+		if dberr != nil {
+			panic(dberr)
+		}
+		xp, xerr := unmarshalBufErr(dbbuf)
+		xp = slices.Clone(xp) // a copy that we own
+
 		xbufend, ok := read1int(xid[len(idPrefix):])
 		if !ok {
 			break // questionable whether this is actually a good idea
 		}
-		xoff := xbufend - int64(len(xp))
+		xoff := bufStart(xp, xbufend)
 
 		if bufJoin(&p, &off, xp, xoff) {
-			iseof = iseof || xiseof
-			id = appendint(idPrefix, off)
-			delrows = append(delrows, xid)
-			if iseof {
-				break
+			if xerr != nil {
+				err = xerr
 			}
+			batch.Delete(xid, &pebble.WriteOptions{})
 		} else {
 			break
 		}
 	}
-	rows.Close()
-
-	for _, delid := range delrows {
-		if !bytes.Equal(delid, id) {
-			f.path.container.dbq[pfcache_delete].Exec(delid)
-		}
+	batch.Set(appendint(idPrefix, bufEnd(p, off)),
+		marshalBufErr(p, err),
+		&pebble.WriteOptions{})
+	dberr = batch.Commit(&pebble.WriteOptions{})
+	if dberr != nil {
+		panic(dberr)
 	}
-	f.path.container.dbq[pfcache_insert].Exec(appendint(idPrefix, bufEnd(p, off)), iseof, p)
 }
 
 func (fsys *FS) Prefetch() {
@@ -210,14 +192,9 @@ func (fsys *FS) Prefetch() {
 	atomic.StoreInt64(&fsys.scoreBad, 0)
 	t := time.Now()
 	defer func() {
+		fsys.db.Flush()
 		slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 		slog.Info("prefetchSummary", "cachedBytes", atomic.LoadInt64(&fsys.scoreGood), "uncachedBytes", atomic.LoadInt64(&fsys.scoreBad))
-		if fsys.db != nil {
-			slog.Info("vacuumStart")
-			t := time.Now()
-			fsys.db.Exec(`VACUUM;`)
-			slog.Info("vacuumStop", "duration", time.Since(t).Truncate(time.Second).String())
-		}
 	}()
 
 	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1))
@@ -247,15 +224,15 @@ func (o path) prefetchThisFS(concurrency int) {
 
 				// if we have a valuable size then use it
 				if rawstat.Size() < 0 && o.container.db != nil {
-					id := dbkey(o) // important not to deadlock here
-					o.container.dbMu.RLock()
-					sizerow := o.container.dbq[select_size_from_scache_where_id_eq_x].QueryRow(id)
-					var size int64
-					sqerr := sizerow.Scan(&size)
-					o.container.dbMu.RUnlock()
-					if sqerr == nil {
-						o.container.rapool.ReaderAt(o).SetSize(size)
-					}
+					// id := dbkey(o) // important not to deadlock here
+					// o.container.dbMu.RLock()
+					// sizerow := o.container.dbq[select_size_from_scache_where_id_eq_x].QueryRow(id)
+					// var size int64
+					// sqerr := sizerow.Scan(&size)
+					// o.container.dbMu.RUnlock()
+					// if sqerr == nil {
+					// 	o.container.rapool.ReaderAt(o).SetSize(size)
+					// }
 				}
 
 				timer := time.AfterFunc(time.Second, func() { slog.Info("takingLongTime", "path", o) })
@@ -271,16 +248,16 @@ func (o path) prefetchThisFS(concurrency int) {
 				// if the size is a prized hard-to-calculate quantity then save it
 				// opportune to do the calc now while the reader would be well advanced into the file
 				if rawstat.Size() < 0 {
-					realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
-					if ok && o.container.db != nil {
-						id := dbkey(o) // important not to deadlock here
-						o.container.dbMu.Lock()
-						_, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
-						o.container.dbMu.Unlock()
-						if serr != nil {
-							panic(serr)
-						}
-					}
+					// realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
+					// if ok && o.container.db != nil {
+					// id := dbkey(o) // important not to deadlock here
+					// o.container.dbMu.Lock()
+					// _, serr := o.container.dbq[insert_or_ignore_into_scache_id_size_values_xx].Exec(id, realsize)
+					// o.container.dbMu.Unlock()
+					// if serr != nil {
+					// 	panic(serr)
+					// }
+					// }
 				}
 			}
 		})
@@ -441,11 +418,33 @@ func bufJoin(p1 *[]byte, off1 *int64, p2 []byte, off2 int64) bool {
 	return true
 }
 
-func bufEnd(p []byte, off int64) int64 { return off + int64(len(p)) }
-func iseof2err(iseof bool) error {
-	if iseof {
-		return io.EOF
+func bufEnd(p []byte, off int64) int64   { return off + int64(len(p)) }
+func bufStart(p []byte, end int64) int64 { return end - int64(len(p)) }
+
+func marshalBufErr(p []byte, err error) []byte {
+	p = p[:len(p):len(p)] // append could be catastrophic
+	if bytes.HasSuffix(p, []byte{0xee}) {
+		if err == io.EOF {
+			return append(p, 0xee, 0xee)
+		} else {
+			return append(p, 0x00, 0xee)
+		}
 	} else {
-		return nil
+		if err == io.EOF {
+			return append(p, 0xee, 0xee)
+		} else {
+			return p // common case
+		}
 	}
+}
+
+func unmarshalBufErr(buf []byte) (p []byte, err error) {
+	if len(buf) >= 2 && buf[len(buf)-1] == 0xee {
+		if buf[len(buf)-2] == 0xee {
+			return buf[:len(buf)-2], io.EOF
+		} else {
+			return buf[:len(buf)-2], nil
+		}
+	}
+	return buf, nil
 }
