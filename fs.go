@@ -25,9 +25,6 @@ type FS struct {
 
 	db *pebble.DB
 
-	zMu     sync.RWMutex
-	zipLocs map[path]int64
-
 	iMu sync.RWMutex
 	ino map[internpath.Path]uint64
 

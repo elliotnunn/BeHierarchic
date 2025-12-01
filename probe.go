@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"compress/bzip2"
 	"compress/gzip"
 	"encoding/binary"
@@ -15,10 +14,10 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/apm"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
+	"github.com/elliotnunn/BeHierarchic/internal/zip"
 	"github.com/therootcompany/xz"
 )
 
@@ -153,27 +152,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		}
 		size := stat.Size()
 		return func() (fs.FS, error) {
-			defer headerReader.stopCaching()
-			r, err := zip.NewReader(headerReader, size)
-			if err != nil {
-				return nil, err
-			}
-			for _, f := range r.File { // hack to make zips fast
-				if strings.HasSuffix(f.Name, "/") {
-					continue
-				}
-				ofs, err := f.DataOffset() // get all the metadata we need to read the archive
-				if err != nil {
-					continue
-				}
-				o.container.zMu.Lock()
-				if o.container.zipLocs == nil {
-					o.container.zipLocs = make(map[path]int64)
-				}
-				o.container.zipLocs[path{o.container, r, internpath.New(f.Name)}] = ofs
-				o.container.zMu.Unlock()
-			}
-			return r, nil
+			return zip.New2(headerReader, dataReader, size)
 		}, nil
 	}
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"bytes"
 	"encoding/hex"
 	"errors"
@@ -66,12 +65,14 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	// 	panic(fmt.Sprintf("uncached request (%d bytes at %d) on %q", len(p), off, f.path))
 	// }
 
-	n, err = f.getCache(p, off)
-	if err != errNotFound {
-		if f.enable {
-			atomic.AddInt64(&f.path.container.scoreGood, int64(n))
+	if f.enable {
+		n, err = f.getCache(p, off)
+		if err != errNotFound {
+			if f.enable {
+				atomic.AddInt64(&f.path.container.scoreGood, int64(n))
+			}
+			return
 		}
-		return
 	}
 
 	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
@@ -378,13 +379,6 @@ func onekey(buf []byte, o path) []byte {
 		hash.WriteString(o.name.String())
 		buf = appendint(buf, int64(hash.Sum64()&0xffffffff))
 		return buf
-	}
-
-	// temporary special case to get zip files going faster
-	if _, ok := o.fsys.(*zip.Reader); ok {
-		o.container.zMu.RLock()
-		defer o.container.zMu.RUnlock()
-		return appendint(buf, o.container.zipLocs[o])
 	}
 
 	if o.fsys == o.container.root {
