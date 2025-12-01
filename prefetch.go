@@ -21,6 +21,12 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
+const (
+	prefixSep = 0x99
+	sizeByte  = 0x55
+	eofByte   = 0xee
+)
+
 func (fsys *FS) setupDB(dsn string) {
 	if dsn == "" {
 		return
@@ -327,7 +333,7 @@ func dbkey(o path) []byte {
 	for _, o := range warps {
 		accum = onekey(accum, o)
 	}
-	accum = append(accum, 0xee) // separator from the file offset
+	accum = append(accum, prefixSep) // separator from the file offset
 	return accum
 }
 
@@ -421,26 +427,29 @@ func bufJoin(p1 *[]byte, off1 *int64, p2 []byte, off2 int64) bool {
 func bufEnd(p []byte, off int64) int64   { return off + int64(len(p)) }
 func bufStart(p []byte, end int64) int64 { return end - int64(len(p)) }
 
+// marshalBufErr makes the buffer end with {eofByte, eofByte} IFF it is EOF
 func marshalBufErr(p []byte, err error) []byte {
 	p = p[:len(p):len(p)] // append could be catastrophic
-	if bytes.HasSuffix(p, []byte{0xee}) {
+	if len(p) > 0 && p[len(p)-1] == eofByte {
+		// less desirable case: need to lengthen by 2 bytes
 		if err == io.EOF {
-			return append(p, 0xee, 0xee)
+			return append(p, eofByte, eofByte)
 		} else {
-			return append(p, 0x00, 0xee)
+			return append(p, 0, eofByte)
 		}
 	} else {
 		if err == io.EOF {
-			return append(p, 0xee, 0xee)
+			return append(p, eofByte, eofByte)
 		} else {
 			return p // common case
 		}
 	}
 }
 
+// unmarshalBufErr trickily undoes the work of marshalBufErr
 func unmarshalBufErr(buf []byte) (p []byte, err error) {
-	if len(buf) >= 2 && buf[len(buf)-1] == 0xee {
-		if buf[len(buf)-2] == 0xee {
+	if len(buf) >= 2 && buf[len(buf)-1] == eofByte {
+		if buf[len(buf)-2] == eofByte {
 			return buf[:len(buf)-2], io.EOF
 		} else {
 			return buf[:len(buf)-2], nil
