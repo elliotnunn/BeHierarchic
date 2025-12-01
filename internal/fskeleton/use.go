@@ -54,7 +54,7 @@ func (fsys *FS) Lstat(name string) (info fs.FileInfo, err error) {
 func (fsys *FS) Stat(name string) (info fs.FileInfo, err error) {
 	defer func() {
 		if err != nil {
-			err = &fs.PathError{Op: "lstat", Path: name, Err: err}
+			err = &fs.PathError{Op: "stat", Path: name, Err: err}
 		}
 	}()
 
