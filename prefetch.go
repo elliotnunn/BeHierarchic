@@ -198,6 +198,9 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 }
 
 func (o path) getCacheSize() (int64, bool) {
+	if o.container.db == nil {
+		return 0, false
+	}
 	id := append(dbkey(o), sizeByte)
 	val, closer, err := o.container.db.Get(id)
 	if err == pebble.ErrNotFound {
@@ -211,6 +214,9 @@ func (o path) getCacheSize() (int64, bool) {
 }
 
 func (o path) setCacheSize(s int64) {
+	if o.container.db == nil {
+		return
+	}
 	id := append(dbkey(o), sizeByte)
 	val := appendint([]byte(nil), s)
 	err := o.container.db.Set(id, val, &pebble.WriteOptions{})
