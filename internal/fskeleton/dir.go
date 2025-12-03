@@ -16,21 +16,25 @@ var _ node = new(dirent)
 var _ fs.ReadDirFile = new(dir) // check satisfies interface
 
 func newDir() *dirent {
-	return &dirent{iCond: sync.NewCond(new(sync.Mutex)),
-		cCond: sync.NewCond(new(sync.Mutex)),
-		chm:   make(map[internpath.Path]node)}
+	var de dirent
+	de.iCond.L = &de.iMu // little bit awkward, to relieve heap pressure
+	de.cCond.L = &de.cMu
+	de.chm = make(map[internpath.Path]node)
+	return &de
 }
 
 type dirent struct {
 	name internpath.Path
 
-	iCond   *sync.Cond
+	iCond   sync.Cond
+	iMu     sync.Mutex
 	iOK     bool
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
 
-	cCond    *sync.Cond
+	cCond    sync.Cond
+	cMu      sync.Mutex
 	complete bool
 	chs      []node
 	chm      map[internpath.Path]node
@@ -45,8 +49,8 @@ func (d *dirent) pathname() internpath.Path { return d.name }
 func (d *dirent) open() (fs.File, error)    { return &dir{ent: d, listOffset: 0}, nil }
 
 func (d *dirent) lookup(name internpath.Path) (node, error) {
-	d.cCond.L.Lock()
-	defer d.cCond.L.Unlock()
+	d.cMu.Lock()
+	defer d.cMu.Unlock()
 	for {
 		if got, ok := d.chm[name]; ok {
 			return got, nil
@@ -59,8 +63,8 @@ func (d *dirent) lookup(name internpath.Path) (node, error) {
 
 // may return fs.ErrExist if a non-dir with this name exists
 func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
-	d.cCond.L.Lock()
-	defer d.cCond.L.Unlock()
+	d.cMu.Lock()
+	defer d.cMu.Unlock()
 	if d.complete {
 		return nil, fs.ErrPermission
 	}
@@ -81,8 +85,8 @@ func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
 
 // may return fs.ErrExist
 func (d *dirent) put(thing node) error {
-	d.cCond.L.Lock()
-	defer d.cCond.L.Unlock()
+	d.cMu.Lock()
+	defer d.cMu.Unlock()
 	if d.complete {
 		return fs.ErrPermission
 	}
@@ -103,8 +107,8 @@ func (d *dirent) put(thing node) error {
 }
 
 func (d *dirent) replace(with *dirent) error {
-	d.iCond.L.Lock()
-	defer d.iCond.L.Unlock()
+	d.iMu.Lock()
+	defer d.iMu.Unlock()
 	if d.iOK {
 		return fs.ErrExist
 	}
@@ -115,20 +119,20 @@ func (d *dirent) replace(with *dirent) error {
 }
 
 func (d *dirent) noMore(recursive bool) {
-	d.cCond.L.Lock()
+	d.cMu.Lock()
 	d.complete = true
 	d.cCond.Broadcast()
-	d.cCond.L.Unlock()
+	d.cMu.Unlock()
 
 	for _, c := range d.chs {
 		c, ok := c.(*dirent)
 		if !ok {
 			continue
 		}
-		c.iCond.L.Lock()
+		c.iMu.Lock()
 		c.iOK = true
 		c.iCond.Broadcast()
-		c.iCond.L.Unlock()
+		c.iMu.Unlock()
 		if recursive {
 			c.noMore(true)
 		}
@@ -146,24 +150,24 @@ func (d *dirent) Info() (fs.FileInfo, error) { return d, nil }
 // fs.FileInfo
 func (d *dirent) Size() int64 { return 0 }
 func (d *dirent) Mode() fs.FileMode {
-	d.iCond.L.Lock()
-	defer d.iCond.L.Unlock()
+	d.iMu.Lock()
+	defer d.iMu.Unlock()
 	for !d.iOK {
 		d.iCond.Wait()
 	}
 	return d.mode&^fs.ModeType | fs.ModeDir
 }
 func (d *dirent) ModTime() time.Time {
-	d.iCond.L.Lock()
-	defer d.iCond.L.Unlock()
+	d.iMu.Lock()
+	defer d.iMu.Unlock()
 	for !d.iOK {
 		d.iCond.Wait()
 	}
 	return d.modtime
 }
 func (d *dirent) Sys() any {
-	d.iCond.L.Lock()
-	defer d.iCond.L.Unlock()
+	d.iMu.Lock()
+	defer d.iMu.Unlock()
 	for !d.iOK {
 		d.iCond.Wait()
 	}
@@ -174,8 +178,8 @@ func (*dir) Close() error                 { return nil }
 func (*dir) Read([]byte) (int, error)     { return 0, io.EOF }
 func (d *dir) Stat() (fs.FileInfo, error) { return d.ent, nil }
 func (d *dir) ReadDir(count int) ([]fs.DirEntry, error) {
-	d.ent.cCond.L.Lock()
-	defer d.ent.cCond.L.Unlock()
+	d.ent.cMu.Lock()
+	defer d.ent.cMu.Unlock()
 
 	var err error
 	if count <= 0 { // "give me everything"
