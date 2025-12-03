@@ -12,6 +12,8 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
+const implicitDir fs.FileMode = 0xffffffff
+
 var _ node = new(dirent)
 var _ fs.ReadDirFile = new(dir) // check satisfies interface
 
@@ -19,6 +21,8 @@ func newDir() *dirent {
 	var de dirent
 	de.iCond.L = &de.iMu // little bit awkward, to relieve heap pressure
 	de.cCond.L = &de.cMu
+	de.mode = implicitDir // directories are born implicit
+	// i.e. inferred to exist as a parent of an explicitly created file
 	return &de
 }
 
@@ -27,7 +31,6 @@ type dirent struct {
 
 	iCond   sync.Cond
 	iMu     sync.Mutex
-	iOK     bool
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
@@ -44,6 +47,11 @@ type dir struct { // in its open state
 	listOffset int
 }
 
+func (d *dirent) makeExplicit() {
+	if d.mode == implicitDir {
+		d.mode = fs.ModeDir
+	}
+}
 func (d *dirent) pathname() internpath.Path { return d.name }
 func (d *dirent) open() (fs.File, error)    { return &dir{ent: d, listOffset: 0}, nil }
 
@@ -114,11 +122,10 @@ func (d *dirent) put(thing node) error {
 func (d *dirent) replace(with *dirent) error {
 	d.iMu.Lock()
 	defer d.iMu.Unlock()
-	if d.iOK {
+	if d.mode != implicitDir {
 		return fs.ErrExist
 	}
 	d.mode, d.modtime, d.sys = with.mode, with.modtime, with.sys
-	d.iOK = true
 	d.iCond.Broadcast()
 	return nil
 }
@@ -135,7 +142,7 @@ func (d *dirent) noMore(recursive bool) {
 			continue
 		}
 		c.iMu.Lock()
-		c.iOK = true
+		c.makeExplicit()
 		c.iCond.Broadcast()
 		c.iMu.Unlock()
 		if recursive {
@@ -157,7 +164,7 @@ func (d *dirent) Size() int64 { return 0 }
 func (d *dirent) Mode() fs.FileMode {
 	d.iMu.Lock()
 	defer d.iMu.Unlock()
-	for !d.iOK {
+	for d.mode == implicitDir {
 		d.iCond.Wait()
 	}
 	return d.mode&^fs.ModeType | fs.ModeDir
@@ -165,7 +172,7 @@ func (d *dirent) Mode() fs.FileMode {
 func (d *dirent) ModTime() time.Time {
 	d.iMu.Lock()
 	defer d.iMu.Unlock()
-	for !d.iOK {
+	for d.mode == implicitDir {
 		d.iCond.Wait()
 	}
 	return d.modtime
@@ -173,7 +180,7 @@ func (d *dirent) ModTime() time.Time {
 func (d *dirent) Sys() any {
 	d.iMu.Lock()
 	defer d.iMu.Unlock()
-	for !d.iOK {
+	for d.mode == implicitDir {
 		d.iCond.Wait()
 	}
 	return d.sys

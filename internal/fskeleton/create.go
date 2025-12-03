@@ -40,8 +40,7 @@ func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys an
 		return fs.ErrInvalid
 	}
 	nu := newDir()
-	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode, mtime, sys
-	nu.iOK = true
+	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode&^fs.ModeType, mtime, sys
 	return fsys.create(nu)
 }
 
@@ -53,7 +52,7 @@ func (fsys *FS) createFile(name string, order int64, data any, size int64, mode 
 	nu := &fileent{name: internpath.New(name),
 		order:   order,
 		size:    size,
-		mode:    mode,
+		mode:    mode &^ fs.ModeType,
 		modtime: mtime,
 		sys:     sys,
 		data:    data,
@@ -123,7 +122,7 @@ func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.
 		return fs.ErrInvalid
 	}
 	nu := &linkent{name: internpath.New(name),
-		target: internpath.New(target), mode: mode, modtime: mtime, sys: sys}
+		target: internpath.New(target), mode: mode &^ fs.ModeType, modtime: mtime, sys: sys}
 	return fsys.create(nu)
 }
 
@@ -136,7 +135,7 @@ func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.
 func (fsys *FS) NoMoreChildren(name string) error {
 	if name == ".." {
 		fsys.root.iCond.L.Lock()
-		fsys.root.iOK = true
+		fsys.root.makeExplicit()
 		fsys.root.iCond.Broadcast()
 		fsys.root.iCond.L.Unlock()
 		return nil
@@ -164,7 +163,7 @@ func (fsys *FS) NoMoreChildren(name string) error {
 func (fsys *FS) NoMore() {
 	fsys.walkstuff.done()
 	fsys.root.iCond.L.Lock()
-	fsys.root.iOK = true
+	fsys.root.makeExplicit()
 	fsys.root.iCond.Broadcast()
 	fsys.root.iCond.L.Unlock()
 	fsys.root.noMore(true)
