@@ -31,11 +31,11 @@ type dirent struct {
 	cond sync.Cond
 	mu   sync.Mutex
 
-	mode    fs.FileMode
 	modtime time.Time
 	sys     any
+	mode    fs.FileMode
 
-	complete bool
+	complete bool // colocate with mode for better alignment
 	chs      []node
 	chm      map[internpath.Path]uint32
 }
