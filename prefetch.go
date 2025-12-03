@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -229,17 +230,43 @@ func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStart")
 	atomic.StoreInt64(&fsys.scoreGood, 0)
 	atomic.StoreInt64(&fsys.scoreBad, 0)
+
 	t := time.Now()
+	var progress atomic.Int64
+	stopTick := make(chan struct{})
+	go func() {
+		tick := time.Tick(time.Second * 5)
+		var mem runtime.MemStats
+		for {
+			select {
+			case <-tick:
+				runtime.ReadMemStats(&mem)
+				ram := mem.HeapInuse + mem.StackInuse
+				disk := progress.Load()
+				slog.Info("prefetchProgress",
+					"archiveBytes", disk,
+					"archiveBytesPerSec", disk/int64(time.Since(t)/time.Second),
+					"heapBytes", mem.HeapInuse,
+					"stackBytes", mem.StackInuse,
+					"ramArchiveRatio", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 4, 64),
+				)
+			case <-stopTick:
+				return
+			}
+		}
+	}()
+
 	defer func() {
+		close(stopTick)
 		fsys.db.Flush()
 		slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 		slog.Info("prefetchSummary", "cachedBytes", atomic.LoadInt64(&fsys.scoreGood), "uncachedBytes", atomic.LoadInt64(&fsys.scoreBad))
 	}()
 
-	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1))
+	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1), &progress)
 }
 
-func (o path) prefetchThisFS(concurrency int) {
+func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 	if o.name != internpath.New(".") {
 		panic("this should be a filesystem!!")
 	}
@@ -270,6 +297,9 @@ func (o path) prefetchThisFS(concurrency int) {
 						sizeInCache = true
 					}
 				}
+				if progress != nil {
+					progress.Add(rawstat.Size())
+				}
 
 				timer := time.AfterFunc(time.Second, func() { slog.Info("takingLongTime", "path", o) })
 				isar, fsys, err := o.getArchive(true)
@@ -278,7 +308,7 @@ func (o path) prefetchThisFS(concurrency int) {
 					slog.Error("getArchiveError", "err", err, "path", o)
 				}
 				if isar && !strings.HasPrefix(o.name.Base(), "._") { // no use probing resource forks!
-					fsys.prefetchThisFS(1)
+					fsys.prefetchThisFS(1, nil)
 				}
 
 				// if the size is a prized hard-to-calculate quantity then save it
