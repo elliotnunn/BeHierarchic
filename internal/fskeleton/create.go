@@ -40,7 +40,7 @@ func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys an
 		return fs.ErrInvalid
 	}
 	nu := newDir()
-	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode&^fs.ModeType, mtime, sys
+	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode&^fs.ModeType, timeFromStdlib(mtime), sys
 	return fsys.create(nu)
 }
 
@@ -53,7 +53,7 @@ func (fsys *FS) createFile(name string, order int64, data any, size int64, mode 
 		order:   order,
 		size:    size,
 		mode:    mode &^ fs.ModeType,
-		modtime: mtime,
+		modtime: timeFromStdlib(mtime),
 		sys:     sys,
 		data:    data,
 	}
@@ -122,7 +122,7 @@ func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.
 		return fs.ErrInvalid
 	}
 	nu := &linkent{name: internpath.New(name),
-		target: internpath.New(target), mode: mode &^ fs.ModeType, modtime: mtime, sys: sys}
+		target: internpath.New(target), mode: mode &^ fs.ModeType, modtime: timeFromStdlib(mtime), sys: sys}
 	return fsys.create(nu)
 }
 

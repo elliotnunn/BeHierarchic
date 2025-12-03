@@ -31,7 +31,7 @@ type dirent struct {
 	cond sync.Cond
 	mu   sync.Mutex
 
-	modtime time.Time
+	modtime int64
 	sys     any
 	mode    fs.FileMode
 
@@ -173,7 +173,7 @@ func (d *dirent) ModTime() time.Time {
 	for d.mode == implicitDir {
 		d.cond.Wait()
 	}
-	return d.modtime
+	return timeToStdlib(d.modtime)
 }
 func (d *dirent) Sys() any {
 	d.mu.Lock()

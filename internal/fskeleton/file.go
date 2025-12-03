@@ -18,7 +18,7 @@ type fileent struct {
 	order   int64
 	size    int64
 	mode    fs.FileMode
-	modtime time.Time
+	modtime int64
 	sys     any
 	data    any // io.ReaderAt or func() (io.Reader, error) or func() (io.ReadCloser, error)
 }
@@ -61,7 +61,7 @@ func (f *fileent) Info() (fs.FileInfo, error) { return f, nil }
 // fs.FileInfo
 func (f *fileent) Size() int64        { return f.size }
 func (f *fileent) Mode() fs.FileMode  { return f.mode &^ fs.ModeType }
-func (f *fileent) ModTime() time.Time { return f.modtime }
+func (f *fileent) ModTime() time.Time { return timeToStdlib(f.modtime) }
 func (f *fileent) Sys() any           { return f.sys }
 
 // extension to fs.FileInfo

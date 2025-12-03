@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -157,6 +158,27 @@ func TestSymlink(t *testing.T) {
 	target, err = fsys.ReadLink("symlink6")
 	expectErr(t, err, nil)
 	expectStr(t, "symlink6", target)
+}
+func TestTime(t *testing.T) {
+	times := []time.Time{
+		{},
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(1900, 1, 1, 0, 0, 0, 0, time.FixedZone("obscura", 120)),
+		time.Now(),
+		time.Now().In(time.FixedZone("obscura", 120)),
+		time.Now().UTC(),
+	}
+	fsys := New()
+	for i, time := range times {
+		fsys.CreateErrorFile(strconv.Itoa(i), int64(i), io.EOF, 0, 0, time, nil)
+	}
+	for i, time := range times {
+		inf, _ := fs.Stat(fsys, strconv.Itoa(i))
+		gottime := inf.ModTime()
+		if !time.Equal(gottime) {
+			t.Errorf("expected %s, got %s", time, gottime)
+		}
+	}
 }
 
 func mustBlock(t *testing.T, f func()) {
