@@ -134,10 +134,10 @@ func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.
 // As a special case, if ".." is specified, then CreateDir on the root "." will be ignored.
 func (fsys *FS) NoMoreChildren(name string) error {
 	if name == ".." {
-		fsys.root.iCond.L.Lock()
+		fsys.root.cond.L.Lock()
 		fsys.root.makeExplicit()
-		fsys.root.iCond.Broadcast()
-		fsys.root.iCond.L.Unlock()
+		fsys.root.cond.Broadcast()
+		fsys.root.cond.L.Unlock()
 		return nil
 	}
 
@@ -162,10 +162,10 @@ func (fsys *FS) NoMoreChildren(name string) error {
 // NoMore unblocks any blocked [fs.ReadDirFile.ReadDir] calls.
 func (fsys *FS) NoMore() {
 	fsys.walkstuff.done()
-	fsys.root.iCond.L.Lock()
+	fsys.root.cond.L.Lock()
 	fsys.root.makeExplicit()
-	fsys.root.iCond.Broadcast()
-	fsys.root.iCond.L.Unlock()
+	fsys.root.cond.Broadcast()
+	fsys.root.cond.L.Unlock()
 	fsys.root.noMore(true)
 }
 

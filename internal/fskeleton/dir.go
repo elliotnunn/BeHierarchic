@@ -19,8 +19,7 @@ var _ fs.ReadDirFile = new(dir) // check satisfies interface
 
 func newDir() *dirent {
 	var de dirent
-	de.iCond.L = &de.iMu // little bit awkward, to relieve heap pressure
-	de.cCond.L = &de.cMu
+	de.cond.L = &de.mu    // little bit awkward, to relieve heap pressure
 	de.mode = implicitDir // directories are born implicit
 	// i.e. inferred to exist as a parent of an explicitly created file
 	return &de
@@ -29,14 +28,13 @@ func newDir() *dirent {
 type dirent struct {
 	name internpath.Path
 
-	iCond   sync.Cond
-	iMu     sync.Mutex
+	cond sync.Cond
+	mu   sync.Mutex
+
 	mode    fs.FileMode
 	modtime time.Time
 	sys     any
 
-	cCond    sync.Cond
-	cMu      sync.Mutex
 	complete bool
 	chs      []node
 	chm      map[internpath.Path]uint32
@@ -56,22 +54,22 @@ func (d *dirent) pathname() internpath.Path { return d.name }
 func (d *dirent) open() (fs.File, error)    { return &dir{ent: d, listOffset: 0}, nil }
 
 func (d *dirent) lookup(name internpath.Path) (node, error) {
-	d.cMu.Lock()
-	defer d.cMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	for {
 		if index, ok := d.chm[name]; ok {
 			return d.chs[index], nil
 		} else if d.complete {
 			return nil, fs.ErrNotExist
 		}
-		d.cCond.Wait()
+		d.cond.Wait()
 	}
 }
 
 // may return fs.ErrExist if a non-dir with this name exists
 func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
-	d.cMu.Lock()
-	defer d.cMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.complete {
 		return nil, fs.ErrPermission
 	}
@@ -84,7 +82,7 @@ func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
 		}
 		d.chm[name] = uint32(len(d.chs))
 		d.chs = append(d.chs, nu)
-		d.cCond.Broadcast()
+		d.cond.Broadcast()
 		return nu, nil
 	} else if de, isdir := d.chs[index].(*dirent); isdir {
 		return de, nil
@@ -95,8 +93,8 @@ func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
 
 // may return fs.ErrExist
 func (d *dirent) put(thing node) error {
-	d.cMu.Lock()
-	defer d.cMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.complete {
 		return fs.ErrPermission
 	}
@@ -115,36 +113,36 @@ func (d *dirent) put(thing node) error {
 	}
 	d.chm[thing.pathname()] = uint32(len(d.chs))
 	d.chs = append(d.chs, thing)
-	d.cCond.Broadcast()
+	d.cond.Broadcast()
 	return nil
 }
 
 func (d *dirent) replace(with *dirent) error {
-	d.iMu.Lock()
-	defer d.iMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.mode != implicitDir {
 		return fs.ErrExist
 	}
 	d.mode, d.modtime, d.sys = with.mode, with.modtime, with.sys
-	d.iCond.Broadcast()
+	d.cond.Broadcast()
 	return nil
 }
 
 func (d *dirent) noMore(recursive bool) {
-	d.cMu.Lock()
+	d.mu.Lock()
 	d.complete = true
-	d.cCond.Broadcast()
-	d.cMu.Unlock()
+	d.cond.Broadcast()
+	d.mu.Unlock()
 
 	for _, c := range d.chs {
 		c, ok := c.(*dirent)
 		if !ok {
 			continue
 		}
-		c.iMu.Lock()
+		c.mu.Lock()
 		c.makeExplicit()
-		c.iCond.Broadcast()
-		c.iMu.Unlock()
+		c.cond.Broadcast()
+		c.mu.Unlock()
 		if recursive {
 			c.noMore(true)
 		}
@@ -162,26 +160,26 @@ func (d *dirent) Info() (fs.FileInfo, error) { return d, nil }
 // fs.FileInfo
 func (d *dirent) Size() int64 { return 0 }
 func (d *dirent) Mode() fs.FileMode {
-	d.iMu.Lock()
-	defer d.iMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	for d.mode == implicitDir {
-		d.iCond.Wait()
+		d.cond.Wait()
 	}
 	return d.mode&^fs.ModeType | fs.ModeDir
 }
 func (d *dirent) ModTime() time.Time {
-	d.iMu.Lock()
-	defer d.iMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	for d.mode == implicitDir {
-		d.iCond.Wait()
+		d.cond.Wait()
 	}
 	return d.modtime
 }
 func (d *dirent) Sys() any {
-	d.iMu.Lock()
-	defer d.iMu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	for d.mode == implicitDir {
-		d.iCond.Wait()
+		d.cond.Wait()
 	}
 	return d.sys
 }
@@ -190,19 +188,19 @@ func (*dir) Close() error                 { return nil }
 func (*dir) Read([]byte) (int, error)     { return 0, io.EOF }
 func (d *dir) Stat() (fs.FileInfo, error) { return d.ent, nil }
 func (d *dir) ReadDir(count int) ([]fs.DirEntry, error) {
-	d.ent.cMu.Lock()
-	defer d.ent.cMu.Unlock()
+	d.ent.mu.Lock()
+	defer d.ent.mu.Unlock()
 
 	var err error
 	if count <= 0 { // "give me everything"
 		for !d.ent.complete {
-			d.ent.cCond.Wait()
+			d.ent.cond.Wait()
 		}
 		count = len(d.ent.chs) - d.listOffset
 		err = nil
 	} else { // "give me up to count"
 		for !d.ent.complete && len(d.ent.chs) <= d.listOffset {
-			d.ent.cCond.Wait()
+			d.ent.cond.Wait()
 		}
 		count = min(count, len(d.ent.chs)-d.listOffset)
 		if d.ent.complete && len(d.ent.chs) == d.listOffset+count {
