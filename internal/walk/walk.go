@@ -2,10 +2,10 @@ package walk
 
 import (
 	"archive/zip"
-	"fmt"
 	"io/fs"
 	"iter"
 	"path"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -38,37 +38,30 @@ func FilesInDiskOrder(fsys fs.FS) (string, <-chan string) {
 }
 
 func walkAsync(fsys fs.FS) <-chan string {
-	ch, wg := make(chan string), new(sync.WaitGroup)
-	wg.Add(1)
-	go recurse(fsys, ".", ch, wg)
+	var (
+		ch       = make(chan string, 1024)
+		wg       sync.WaitGroup
+		throttle = make(chan struct{}, runtime.GOMAXPROCS(-1)*4)
+	)
+	wg.Go(func() { recurse(fsys, ".", ch, &wg, throttle) })
 	go func() { wg.Wait(); close(ch) }()
 	return ch
 }
 
-func recurse(fsys fs.FS, name string, ch chan<- string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	f, err := fsys.Open(name)
+func recurse(fsys fs.FS, name string, ch chan<- string, wg *sync.WaitGroup, throttle chan struct{}) {
+	throttle <- struct{}{}
+	listing, err := fs.ReadDir(fsys, name)
+	<-throttle
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	dir, ok := f.(fs.ReadDirFile)
-	if !ok {
-		panic(fmt.Sprintf("%q is a %T, does not satisfy ReadDirFile", name, f))
-	}
-	for {
-		l, err := dir.ReadDir(10)
-		for _, de := range l {
-			switch de.Type() {
-			case fs.ModeDir:
-				wg.Add(1)
-				go recurse(fsys, path.Join(name, de.Name()), ch, wg)
-			case 0: // regular file
-				ch <- path.Join(name, de.Name())
-			}
-		}
-		if err != nil {
-			return
+
+	for _, de := range listing {
+		switch de.Type() {
+		case fs.ModeDir:
+			wg.Go(func() { recurse(fsys, path.Join(name, de.Name()), ch, wg, throttle) })
+		case 0: // regular file
+			ch <- path.Join(name, de.Name())
 		}
 	}
 }
