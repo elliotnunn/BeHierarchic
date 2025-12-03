@@ -19,7 +19,6 @@ func newDir() *dirent {
 	var de dirent
 	de.iCond.L = &de.iMu // little bit awkward, to relieve heap pressure
 	de.cCond.L = &de.cMu
-	de.chm = make(map[internpath.Path]node)
 	return &de
 }
 
@@ -37,7 +36,7 @@ type dirent struct {
 	cMu      sync.Mutex
 	complete bool
 	chs      []node
-	chm      map[internpath.Path]node
+	chm      map[internpath.Path]uint32
 }
 
 type dir struct { // in its open state
@@ -52,8 +51,8 @@ func (d *dirent) lookup(name internpath.Path) (node, error) {
 	d.cMu.Lock()
 	defer d.cMu.Unlock()
 	for {
-		if got, ok := d.chm[name]; ok {
-			return got, nil
+		if index, ok := d.chm[name]; ok {
+			return d.chs[index], nil
 		} else if d.complete {
 			return nil, fs.ErrNotExist
 		}
@@ -69,14 +68,17 @@ func (d *dirent) implicitSubdir(name internpath.Path) (*dirent, error) {
 		return nil, fs.ErrPermission
 	}
 
-	if got, exist := d.chm[name]; !exist {
-		got := newDir()
-		got.name = name
-		d.chm[name] = got
-		d.chs = append(d.chs, got)
+	if index, exist := d.chm[name]; !exist {
+		nu := newDir()
+		nu.name = name
+		if d.chm == nil {
+			d.chm = make(map[internpath.Path]uint32)
+		}
+		d.chm[name] = uint32(len(d.chs))
+		d.chs = append(d.chs, nu)
 		d.cCond.Broadcast()
-		return got, nil
-	} else if de, isdir := got.(*dirent); isdir {
+		return nu, nil
+	} else if de, isdir := d.chs[index].(*dirent); isdir {
 		return de, nil
 	} else {
 		return nil, fs.ErrExist
@@ -91,8 +93,8 @@ func (d *dirent) put(thing node) error {
 		return fs.ErrPermission
 	}
 
-	if got, exist := d.chm[thing.pathname()]; exist {
-		if got, ok := got.(*dirent); ok {
+	if index, exist := d.chm[thing.pathname()]; exist {
+		if got, ok := d.chs[index].(*dirent); ok {
 			if want, ok := thing.(*dirent); ok {
 				return got.replace(want)
 			}
@@ -100,7 +102,10 @@ func (d *dirent) put(thing node) error {
 		return fs.ErrExist
 	}
 
-	d.chm[thing.pathname()] = thing
+	if d.chm == nil {
+		d.chm = make(map[internpath.Path]uint32)
+	}
+	d.chm[thing.pathname()] = uint32(len(d.chs))
 	d.chs = append(d.chs, thing)
 	d.cCond.Broadcast()
 	return nil
