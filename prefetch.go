@@ -254,7 +254,9 @@ func (fsys *FS) Prefetch() {
 
 	defer func() {
 		close(stopTick)
-		fsys.db.Flush()
+		if fsys.db != nil {
+			fsys.db.Flush()
+		}
 		slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
 		slog.Info("prefetchSummary", "cachedBytes", atomic.LoadInt64(&fsys.scoreGood), "uncachedBytes", atomic.LoadInt64(&fsys.scoreBad))
 	}()
