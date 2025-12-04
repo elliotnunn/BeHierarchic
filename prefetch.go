@@ -71,7 +71,7 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 		}
 	}
 
-	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
+	n, err = f.randomAccessFile.ReadAt(p, off)
 
 	if f.isCaching() {
 		atomic.AddInt64(&f.path.container.scoreBad, int64(n))
@@ -327,22 +327,28 @@ func (o path) prefetchCachedOpen() (*cachingFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, ok := f.(io.ReaderAt)
+	rdr, ok := f.(randomAccessFile)
 	if !ok { // ???not a file
 		return nil, fs.ErrInvalid
 	}
-	return &cachingFile{path: o, File: f}, nil
+	return &cachingFile{path: o, randomAccessFile: rdr}, nil
+}
+
+type randomAccessFile interface {
+	io.ReaderAt
+	Stat() (fs.FileInfo, error)
+	io.Closer
 }
 
 type cachingFile struct {
 	path path
-	fs.File
+	randomAccessFile
 }
 
-func (f *cachingFile) isCaching() bool             { return f.path.container != nil }
-func (f *cachingFile) stopCaching()                { f.path = path{} }
-func (f *cachingFile) makePanic()                  { f.File = nil }
-func (f *cachingFile) withoutCaching() io.ReaderAt { return f.File.(io.ReaderAt) }
+func (f *cachingFile) isCaching() bool                  { return f.path.container != nil }
+func (f *cachingFile) stopCaching()                     { f.path = path{} }
+func (f *cachingFile) makePanic()                       { f.randomAccessFile = nil }
+func (f *cachingFile) withoutCaching() randomAccessFile { return f.randomAccessFile }
 
 func appendint(buf []byte, n int64) []byte {
 	u := uint64(n)
