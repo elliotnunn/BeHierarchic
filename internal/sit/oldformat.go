@@ -10,6 +10,7 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 type header struct {
@@ -118,7 +119,7 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 			if hdr.DAlgo == 0 {
 				fsys.CreateReaderAtFile(name,
 					dOrder,
-					io.NewSectionReader(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
+					sectionreader.Section(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
 					int64(hdr.DUnpackLen), // size
 					0, meta.ModTime, nil)  // mode, mtime, sys
 			} else {

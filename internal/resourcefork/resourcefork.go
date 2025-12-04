@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 var ErrFormat = errors.New("not a valid resource fork")
@@ -115,7 +116,10 @@ func New2(headerReader, dataReader io.ReaderAt) (fs.FS, error) {
 			path3 = path1 + "/named/" + filenameFrom(r.ne[1:][:nlen])
 		}
 
-		fsys.CreateReaderAtFile(path2, r.offset, io.NewSectionReader(dataReader, r.offset, size), size, 0, time.Time{}, nil)
+		fsys.CreateReaderAtFile(path2, r.offset, sectionreader.Section(dataReader, r.offset, size), size, 0, time.Time{}, nil)
+		type a struct {
+			f io.SectionReader
+		}
 		if path3 != "" {
 			fsys.CreateSymlink(path3, path2, 0, time.Time{}, nil)
 		}

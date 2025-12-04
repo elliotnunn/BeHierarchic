@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 // Apple Partition Map
@@ -90,7 +91,7 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 		pstart, plen := int64(mapEntryStep)*int64(pmPyPartStart), int64(mapEntryStep)*int64(pmPartBlkCnt)
 
 		fsys.CreateReaderAtFile(name, pstart,
-			io.NewSectionReader(disk, pstart, plen), plen, 0, time.Time{}, nil)
+			sectionreader.Section(disk, pstart, plen), plen, 0, time.Time{}, nil)
 	}
 	return fsys, nil
 }

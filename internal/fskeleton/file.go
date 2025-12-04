@@ -71,6 +71,11 @@ func (f *fileent) Order() int64 { return f.order }
 func (f *rafile) Stat() (fs.FileInfo, error) { return f.ent, nil }
 func (*rafile) Close() error                 { return nil }
 
+// optimisation to strip the seek info
+func (f *rafile) Outer() (r io.ReaderAt, offset int64, n int64) {
+	return f.ent.data.(io.ReaderAt), 0, f.ent.size
+}
+
 func (f *file) Stat() (fs.FileInfo, error) { return f.ent, nil }
 func (f *file) Read(p []byte) (n int, err error) {
 	if f.rd == nil {

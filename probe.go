@@ -15,6 +15,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/hfs"
 	"github.com/elliotnunn/BeHierarchic/internal/resourcefork"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 	"github.com/elliotnunn/BeHierarchic/internal/sit"
 	"github.com/elliotnunn/BeHierarchic/internal/tar"
 	"github.com/elliotnunn/BeHierarchic/internal/zip"
@@ -58,8 +59,8 @@ func (o path) probeArchive() (fsysGenerator, error) {
 		if rsize < 256 {
 			return nil, nil // empty resource forks are valid
 		}
-		headerReader := io.NewSectionReader(headerReader, roffset, rsize)
-		dataReader := io.NewSectionReader(dataReader, roffset, rsize)
+		headerReader := sectionreader.Section(headerReader, roffset, rsize)
+		dataReader := sectionreader.Section(dataReader, roffset, rsize)
 		return func() (fs.FS, error) { return resourcefork.New2(headerReader, dataReader) }, nil
 	}
 

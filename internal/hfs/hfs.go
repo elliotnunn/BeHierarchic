@@ -19,6 +19,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/multireaderat"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 // New opens an HFS image
@@ -165,7 +166,7 @@ func (x byteExtents) makeReader(fs io.ReaderAt) multireaderat.SizeReaderAt {
 	subreaders := make([]multireaderat.SizeReaderAt, 0, len(x)/2)
 	for i := 0; i < len(x); i += 2 {
 		xstart, xlen := x[i], x[i+1]
-		subreaders = append(subreaders, io.NewSectionReader(fs, xstart, xlen))
+		subreaders = append(subreaders, sectionreader.Section(fs, xstart, xlen))
 	}
 	return multireaderat.New(subreaders...)
 }

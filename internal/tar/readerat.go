@@ -7,11 +7,13 @@ package tar
 import (
 	"io"
 	"math"
+
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 func readerFromSparseHoles(r io.ReaderAt, physStart, physLength int64, sph sparseHoles) (io.ReaderAt, int64) {
 	if len(sph) == 0 {
-		return io.NewSectionReader(r, physStart, physLength), physLength
+		return sectionreader.Section(r, physStart, physLength), physLength
 	}
 
 	var x []extent

@@ -633,14 +633,3 @@ func splitUSTARPath(name string) (prefix, suffix string, ok bool) {
 	}
 	return name[:i], name[i+1:], true
 }
-
-func inner(sr *io.SectionReader, innerOffset, innerN int64) *io.SectionReader {
-	outer, outerOffset, outerN := sr.Outer()
-	offset := outerOffset + innerOffset
-	n := innerN
-	if outerOffset < math.MaxInt64 {
-		n = min(n, outerOffset+outerN-offset)
-	}
-	n = max(n, 0)
-	return io.NewSectionReader(outer, offset, n)
-}

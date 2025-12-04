@@ -11,6 +11,7 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/appledouble"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
+	"github.com/elliotnunn/BeHierarchic/internal/sectionreader"
 )
 
 type file struct {
@@ -139,7 +140,7 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 		}
 		if macstuff.Rsrc.Algo == 0 && f.RCrypt == "" {
 			adfile, adsize := meta.WithResourceFork(
-				io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Unpacked)),
+				sectionreader.Section(dataReader, rOffset, int64(macstuff.Rsrc.Unpacked)),
 				int64(macstuff.Rsrc.Unpacked))
 			fsys.CreateReaderAtFile(appledouble.Sidecar(name),
 				rOrder,
@@ -166,9 +167,9 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 		if f.Common.Data.Algo == 0 && f.DCrypt == "" {
 			fsys.CreateReaderAtFile(name,
 				dOrder,
-				io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
-				int64(f.Common.Data.Unpacked),                                           // size
-				0, meta.ModTime, nil)                                                    // mode, mtime, sys
+				sectionreader.Section(dataReader, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
+				int64(f.Common.Data.Unpacked), // size
+				0, meta.ModTime, nil)          // mode, mtime, sys
 		} else {
 			fsys.CreateReadCloserFile(name,
 				dOrder,
