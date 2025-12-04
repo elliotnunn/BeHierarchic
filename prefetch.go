@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"math/bits"
 	"runtime"
@@ -62,23 +63,17 @@ func (fsys *FS) dumpDB() {
 }
 
 func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
-	// if !f.enable {
-	// 	panic(fmt.Sprintf("uncached request (%d bytes at %d) on %q", len(p), off, f.path))
-	// }
-
-	if f.enable {
+	if f.isCaching() {
 		n, err = f.getCache(p, off)
 		if err != errNotFound {
-			if f.enable {
-				atomic.AddInt64(&f.path.container.scoreGood, int64(n))
-			}
+			atomic.AddInt64(&f.path.container.scoreGood, int64(n))
 			return
 		}
 	}
 
 	n, err = f.File.(io.ReaderAt).ReadAt(p, off)
 
-	if f.enable {
+	if f.isCaching() {
 		atomic.AddInt64(&f.path.container.scoreBad, int64(n))
 		f.setCache(p[:n], off, err)
 
@@ -250,6 +245,7 @@ func (fsys *FS) Prefetch() {
 					"stackBytes", mem.StackInuse,
 					"ramArchiveRatio", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 4, 64),
 				)
+				log.Printf("pebbleStats\n%+v", fsys.db.Metrics())
 			case <-stopTick:
 				return
 			}
@@ -335,16 +331,16 @@ func (o path) prefetchCachedOpen() (*cachingFile, error) {
 	if !ok { // ???not a file
 		return nil, fs.ErrInvalid
 	}
-	return &cachingFile{path: o, File: f, enable: true}, nil
+	return &cachingFile{path: o, File: f}, nil
 }
 
 type cachingFile struct {
 	path path
 	fs.File
-	enable bool
 }
 
-func (f *cachingFile) stopCaching()                { f.enable = false }
+func (f *cachingFile) isCaching() bool             { return f.path.container != nil }
+func (f *cachingFile) stopCaching()                { f.path = path{} }
 func (f *cachingFile) makePanic()                  { f.File = nil }
 func (f *cachingFile) withoutCaching() io.ReaderAt { return f.File.(io.ReaderAt) }
 
