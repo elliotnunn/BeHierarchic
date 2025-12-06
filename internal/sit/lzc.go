@@ -36,8 +36,8 @@ func lzc(r io.Reader, dstsize uint32) io.ReadCloser {
 
 func lzccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	var reterr error
-	br := bufio.NewReaderSize(src, 1024)
-	bw := bufio.NewWriterSize(dst, 1024)
+	br := bufio.NewReaderSize(src, 4096)
+	bw := bufio.NewWriterSize(dst, 4096)
 	defer func() {
 		bw.Flush()
 		dst.CloseWithError(reterr)

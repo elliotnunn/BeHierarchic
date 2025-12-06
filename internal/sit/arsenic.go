@@ -347,8 +347,8 @@ func arsenic(r io.Reader, dstsize uint32) io.ReadCloser {
 
 func arseniccopy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	var sa arsenicData
-	sa.br = bufio.NewReaderSize(src, 1024)
-	sa.bw = bufio.NewWriterSize(dst, 1024)
+	sa.br = bufio.NewReaderSize(src, 4096)
+	sa.bw = bufio.NewWriterSize(dst, 4096)
 
 	defer func() {
 		sa.bw.Flush()

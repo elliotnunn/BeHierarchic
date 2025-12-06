@@ -413,8 +413,8 @@ func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	}()
 
 	var s SIT13Data
-	s.br = bufio.NewReaderSize(src, 1024)
-	bw := bufio.NewWriterSize(dst, 1024)
+	s.br = bufio.NewReaderSize(src, 4096)
+	bw := bufio.NewWriterSize(dst, 4096)
 	defer bw.Flush()
 
 	var i, j uint32

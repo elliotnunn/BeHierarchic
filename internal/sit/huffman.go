@@ -49,8 +49,8 @@ func huffman(r io.Reader, dstsize uint32) io.ReadCloser { // should it be possib
 
 func huffcopy(dst io.WriteCloser, src io.Reader, dstsize uint32) {
 	defer dst.Close()
-	br := bufio.NewReaderSize(src, 1024)
-	bw := bufio.NewWriterSize(dst, 1024)
+	br := bufio.NewReaderSize(src, 4096)
+	bw := bufio.NewWriterSize(dst, 4096)
 	defer bw.Flush()
 
 	bitbuf := InitialBigEndian
