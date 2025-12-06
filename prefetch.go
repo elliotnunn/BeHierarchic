@@ -382,7 +382,7 @@ func dbkey(o path) []byte {
 	o.container.rMu.RLock()
 	warps := []path{o}
 	for o.fsys != o.container.root {
-		o = o.container.reverse[o.fsys]
+		o = o.container.reverse[o.fsys].Thick(o.container)
 		warps = append(warps, o)
 	}
 	o.container.rMu.RUnlock()

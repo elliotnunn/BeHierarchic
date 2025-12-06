@@ -19,10 +19,10 @@ const Special = "◆"
 
 type FS struct {
 	mMu    sync.RWMutex
-	mounts map[path]*mount // nonexistent or nil or pointer
+	mounts map[thinPath]*mount // nonexistent or nil or pointer
 
 	rMu     sync.RWMutex
-	reverse map[fs.FS]path
+	reverse map[fs.FS]thinPath
 
 	db *pebble.DB
 
@@ -55,8 +55,8 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 
 	fsys2 := &FS{
 		root:    fsys,
-		mounts:  make(map[path]*mount),
-		reverse: make(map[fs.FS]path),
+		mounts:  make(map[thinPath]*mount),
+		reverse: make(map[fs.FS]thinPath),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 	fsys2.setupDB(cachePath)
@@ -90,7 +90,7 @@ lockloop:
 	for i, mu := range locksets {
 		mu.lock()
 		var ok bool
-		b, ok = o.container.mounts[o]
+		b, ok = o.container.mounts[o.Thin()]
 		mu.unlock()
 		switch {
 		case !ok && i == 0:
@@ -142,7 +142,7 @@ again:
 		}
 
 		o.container.rMu.Lock()
-		o.container.reverse[fsys2] = o
+		o.container.reverse[fsys2] = o.Thin()
 		o.container.rMu.Unlock()
 		b.data = fsys2
 		goto again
@@ -150,7 +150,7 @@ again:
 
 notAnArchive:
 	o.container.mMu.Lock()
-	o.container.mounts[o] = nil
+	o.container.mounts[o.Thin()] = nil
 	o.container.mMu.Unlock()
 	// small chance that another instance of this function raced to get this mount structure
 	b.data = fsysGeneratorNop

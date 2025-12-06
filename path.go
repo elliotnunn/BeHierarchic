@@ -20,6 +20,19 @@ type path struct {
 	name      internpath.Path
 }
 
+// Save memory when the container pointer is redundant
+type thinPath struct {
+	fsys fs.FS
+	name internpath.Path
+}
+
+func (tp thinPath) Thick(container *FS) path {
+	return path{container: container, fsys: tp.fsys, name: tp.name}
+}
+func (o path) Thin() thinPath {
+	return thinPath{o.fsys, o.name}
+}
+
 // ShallowJoin returns a path with some elements added. Caution! It is only a lexical operation,
 // and will return an unusable path if passed a Special character
 func (o path) ShallowJoin(p string) path { o.name = o.name.Join(p); return o }
@@ -32,9 +45,10 @@ func (o path) String() string {
 	o.container.rMu.RLock()
 	defer o.container.rMu.RUnlock()
 	warps := []string{o.name.String()}
-	for o.fsys != o.container.root {
-		o = o.container.reverse[o.fsys]
-		warps = append(warps, o.name.String()+Special)
+	thin := o.Thin()
+	for thin.fsys != o.container.root {
+		thin = o.container.reverse[thin.fsys]
+		warps = append(warps, thin.name.String()+Special)
 	}
 	slices.Reverse(warps)
 	return gopath.Join(warps...)

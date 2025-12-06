@@ -35,7 +35,7 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 	isMountpoint := o.fsys != o.container.root && o.name == internpath.New(".")
 	if isMountpoint {
 		o.container.rMu.RLock()
-		diskImage := o.container.reverse[o.fsys]
+		diskImage := o.container.reverse[o.fsys].Thick(o.container)
 		o.container.rMu.RUnlock()
 		imgStat, err := diskImage.rawStat()
 		if err != nil {
