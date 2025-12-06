@@ -58,8 +58,9 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			parseExtents(mdb[0x86:]).
 				toBytes(drAlBlkSiz, drAlBlSt).
 				makeReader(headerReader)))
-	if err != nil {
-		return nil, fmt.Errorf("extents overflow file: %w", err)
+	if err != nil && err != errNotBtree {
+		ofs := parseExtents(mdb[0x86:]).toBytes(drAlBlkSiz, drAlBlSt)[0]
+		return nil, fmt.Errorf("probable compressed HFS: extents overflow file at %#x: %w", ofs, err)
 	}
 	overflow := parseExtentsOverflow(overflowTree)
 
@@ -70,7 +71,8 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 				toBytes(drAlBlkSiz, drAlBlSt).
 				makeReader(headerReader)))
 	if err != nil {
-		return nil, fmt.Errorf("catalog file: %w", err)
+		ofs := parseExtents(mdb[0x96:]).toBytes(drAlBlkSiz, drAlBlSt)[0]
+		return nil, fmt.Errorf("probable compressed HFS: catalog file at %#x: %w", ofs, err)
 	}
 
 	dirs := dirPaths(catalog)
