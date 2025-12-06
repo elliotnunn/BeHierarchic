@@ -91,21 +91,24 @@ lockloop:
 		mu.lock()
 		var ok bool
 		b, ok = o.container.mounts[o.Thin()]
-		mu.unlock()
 		switch {
 		case !ok && i == 0:
 			// Unknown file, but we lack write access, so try again
+			mu.unlock()
 			continue
 		case !ok && i == 1:
 			// Unknown file, create a blank mount struct
 			b = new(mount)
+			o.container.mounts[o.Thin()] = b
+			mu.unlock()
 			break lockloop
 		case ok && b == nil:
 			// Known NOT to be a mount
+			mu.unlock()
 			return false, path{}
 		case ok && b != nil:
 			// Either a suspected mount, or a certain mount
-			b = b
+			mu.unlock()
 			break lockloop
 		}
 	}
