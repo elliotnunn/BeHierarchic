@@ -102,7 +102,6 @@ lockloop:
 			break lockloop
 		case ok && b == nil:
 			// Known NOT to be a mount
-			mu.unlock()
 			return false, path{}
 		case ok && b != nil:
 			// Either a suspected mount, or a certain mount
