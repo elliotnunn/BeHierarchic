@@ -29,12 +29,6 @@ func New(r io.ReaderAt) (fs.FS, error) {
 
 // New2 routes headers and data requests through different readers, to help exotic caching schemes
 func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
-	defer func() {
-		if r := recover(); r != nil {
-			retfs, reterr = nil, fmt.Errorf("%v", r)
-		}
-	}()
-
 	var mdb [512]byte
 	_, err := headerReader.ReadAt(mdb[:], 0x400)
 	if err != nil {
@@ -59,23 +53,25 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 		}
 	}
 
-	// Open question: can the extents overflow file depend on extents stored in itself?
-	overflow :=
-		parseExtentsOverflow(
-			parseBTree(
-				mustReadAll(
-					parseExtents(mdb[0x86:]).
-						toBytes(drAlBlkSiz, drAlBlSt).
-						makeReader(headerReader))))
+	overflowTree, err := parseBTree(
+		newAccumReader(
+			parseExtents(mdb[0x86:]).
+				toBytes(drAlBlkSiz, drAlBlSt).
+				makeReader(headerReader)))
+	if err != nil {
+		return nil, fmt.Errorf("extents overflow file: %w", err)
+	}
+	overflow := parseExtentsOverflow(overflowTree)
 
-	catalog :=
-		parseBTree(
-			mustReadAll(
-				parseExtents(
-					mdb[0x96:]).
-					chaseOverflow(overflow, 4, false).
-					toBytes(drAlBlkSiz, drAlBlSt).
-					makeReader(headerReader)))
+	catalog, err := parseBTree(
+		newAccumReader(
+			parseExtents(mdb[0x96:]).
+				chaseOverflow(overflow, 4, false).
+				toBytes(drAlBlkSiz, drAlBlSt).
+				makeReader(headerReader)))
+	if err != nil {
+		return nil, fmt.Errorf("catalog file: %w", err)
+	}
 
 	dirs := dirPaths(catalog)
 	fsys := fskeleton.New()
@@ -174,15 +170,6 @@ func (x byteExtents) makeReader(fs io.ReaderAt) multireaderat.SizeReaderAt {
 func (c bRecord) Val() []byte { return c[(int(c[0])+2)&^1:] }
 func (c bRecord) Key() []byte { return c[1:][:c[0]] }
 
-func mustReadAll(r multireaderat.SizeReaderAt) []byte {
-	b := make([]byte, r.Size())
-	_, err := r.ReadAt(b, 0)
-	if err != nil && !errors.Is(err, io.EOF) {
-		panic("unable to read a special file")
-	}
-	return b
-}
-
 func parseExtents(record []byte) blockExtents {
 	var extents blockExtents
 	for i := 0; i < 12; i += 4 {
@@ -247,50 +234,7 @@ func (a byteExtents) clipExtents(size int64) byteExtents {
 			break
 		}
 	}
-	if sofar != size {
-		panic("not enough extents to satisfy logical length")
-	}
 	return a
-}
-
-func parseBTree(tree []byte) (records []bRecord) {
-	// Special first node has special header record
-	headerRec := parseBNode(tree)[0]
-
-	// Ends of a linked list of leaf nodes
-	bthFNode := int(binary.BigEndian.Uint32(headerRec[10:]))
-	bthLNode := int(binary.BigEndian.Uint32(headerRec[14:]))
-
-	i := bthFNode
-	for {
-		offset := 512 * i
-		records = append(records, parseBNode(tree[offset:][:512])...)
-
-		if i == bthLNode {
-			break
-		}
-		i = int(binary.BigEndian.Uint32(tree[offset:]))
-	}
-
-	return records
-}
-
-func parseBNode(node []byte) []bRecord {
-	cnt := int(binary.BigEndian.Uint16(node[10:]))
-
-	boundaries := make([]int, 0, cnt+1)
-	for i := 0; i < cnt+1; i++ {
-		boundaries = append(boundaries, int(binary.BigEndian.Uint16(node[512-2-2*i:])))
-	}
-
-	records := make([]bRecord, 0, cnt)
-	for i := 0; i < cnt; i++ {
-		start := boundaries[i]
-		stop := boundaries[i+1]
-		records = append(records, node[start:stop])
-	}
-
-	return records
 }
 
 func parseExtentsOverflow(btree []bRecord) map[extKey]blockExtents {
