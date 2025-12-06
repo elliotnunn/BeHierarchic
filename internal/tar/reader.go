@@ -85,7 +85,7 @@ func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 			// The old GNU sparse format is handled here since it is technically
 			// just a regular file with additional attributes.
 
-			if err := mergePAX(hdr, paxHdrs); err != nil {
+			if err := mergePAX(&hdr, paxHdrs); err != nil {
 				return err
 			}
 			if gnuLongName != "" {
@@ -104,7 +104,7 @@ func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 
 			// One of the sparse-file formats can read a few more 512-byte header blocks
 			moreHdr := io.NewSectionReader(headerReader, off, math.MaxInt64)
-			sph, err := getSparseHoles(hdr, &rawHdr, moreHdr)
+			sph, err := getSparseHoles(&hdr, &rawHdr, moreHdr)
 			if err != nil {
 				return err
 			}
@@ -131,15 +131,15 @@ func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 			reader, logisize := readerFromSparseHoles(dataReader, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
-				fsys.CreateReaderAtFile(cleanPath, off, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+				fsys.CreateReaderAtFile(cleanPath, off, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
 			case TypeDir:
-				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
 			case TypeSymlink:
 				targ := path.Join(cleanPath, "..", hdr.Linkname)
 				if targ == ".." || strings.HasPrefix(targ, "../") {
 					targ = ""
 				}
-				fsys.CreateSymlink(cleanPath, targ, fs.FileMode(hdr.Mode), hdr.ModTime, hdr)
+				fsys.CreateSymlink(cleanPath, targ, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
 			}
 
 			gnuLongLink, gnuLongName, paxHdrs = "", "", nil
@@ -315,19 +315,19 @@ func parsePAX(r io.Reader) (map[string]string, error) {
 // header in case further processing is required.
 //
 // The err will be set to io.EOF if the block is zero or the file ends
-func readHeader(blk *block) (*Header, error) {
+func readHeader(blk *block) (Header, error) {
 	if bytes.Equal(blk[:], zeroBlock[:]) {
-		return nil, io.EOF
+		return Header{}, io.EOF
 	}
 
 	// Verify the header matches a known format.
 	format := blk.getFormat()
 	if format == FormatUnknown {
-		return nil, ErrHeader
+		return Header{}, ErrHeader
 	}
 
 	var p parser
-	hdr := new(Header)
+	var hdr Header
 
 	// Unpack the V7 header.
 	v7 := blk.toV7()
