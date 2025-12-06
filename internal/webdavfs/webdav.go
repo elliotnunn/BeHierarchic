@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -91,6 +92,9 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	if err != nil {
 		return status, err
 	}
+	if path.Base(reqPath) == "besearch" {
+		return h.searchPage(w, r)
+	}
 	f, err := h.FS.Open(reqPath)
 	if err != nil {
 		return http.StatusNotFound, err
@@ -101,7 +105,7 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 		return http.StatusNotFound, err
 	}
 	if fi.IsDir() {
-		return dirList(w, f.(fs.ReadDirFile))
+		return dirList(w, f.(fs.ReadDirFile), reqPath)
 	}
 	if _, ok := f.(io.ReadSeeker); !ok {
 		slog.Error("neitherDirNorSeekReader", "type", reflect.TypeOf(f), "path", reqPath)
@@ -117,7 +121,65 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	return 0, nil
 }
 
-func dirList(w http.ResponseWriter, d fs.ReadDirFile) (status int, err error) {
+func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) (status int, err error) {
+	reqPath, _, _ := pathConvert(r.URL.Path)
+	reqPath = path.Dir(reqPath)
+	pattern := r.URL.Query()
+	glob := pattern.Get("q")
+	if glob == "" {
+		return http.StatusBadRequest, errors.New("no query")
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<!doctype html>\n")
+	fmt.Fprintf(w, "<meta name=\"viewport\" content=\"width=device-width\">\n")
+	fmt.Fprint(w, "<h1>BeHierarchic Search</h1>")
+	fmt.Fprint(w, "<h2>")
+	breadcrumb(w, reqPath)
+	fmt.Fprint(w, "</h2>")
+	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" value="%s"><button type="submit">Search</button></form>`,
+		urlenc(path.Join(reqPath, "besearch")), htmlReplacer.Replace(glob))
+	fmt.Fprintf(w, "<pre>\n")
+
+	err = fs.WalkDir(h.FS, reqPath, func(name string, d fs.DirEntry, err error) error {
+		ok, err := path.Match(glob, path.Base(name))
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return nil
+		}
+		if d.IsDir() {
+			name += "/"
+		}
+
+		name = name[len(reqPath)+1:]
+
+		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", urlenc(name), htmlReplacer.Replace(name))
+		return nil
+	})
+	if err != nil {
+		return http.StatusBadRequest, err // bad glob
+	}
+	fmt.Fprintf(w, "</pre>\n")
+	return 0, nil
+}
+
+func breadcrumb(w io.Writer, path string) {
+	println("breadcrumbs for", path)
+	steps := strings.Split(path, "/")
+	for i := range steps {
+		url := strings.Join(steps[:i+1], "/")
+		fmt.Fprintf(w, "<a href=\"/%s\">%s</a>/", urlenc(url), htmlReplacer.Replace(steps[i]))
+	}
+}
+
+func urlenc(s string) string {
+	url := url.URL{Path: s}
+	return url.String()
+}
+
+func dirList(w http.ResponseWriter, d fs.ReadDirFile, pathname string) (status int, err error) {
 	list, err := d.ReadDir(-1)
 	if err != nil {
 		return http.StatusInternalServerError, err
@@ -128,6 +190,12 @@ func dirList(w http.ResponseWriter, d fs.ReadDirFile) (status int, err error) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, "<!doctype html>\n")
 	fmt.Fprintf(w, "<meta name=\"viewport\" content=\"width=device-width\">\n")
+	fmt.Fprint(w, "<h1>BeHierarchic</h1>")
+	fmt.Fprint(w, "<h2>")
+	breadcrumb(w, pathname)
+	fmt.Fprint(w, "</h2>")
+	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q"><button type="submit">Search</button></form>`,
+		urlenc(path.Join(pathname, "besearch")))
 	fmt.Fprintf(w, "<pre>\n")
 	for _, de := range list {
 		name := de.Name()
@@ -137,8 +205,7 @@ func dirList(w http.ResponseWriter, d fs.ReadDirFile) (status int, err error) {
 		// name may contain '?' or '#', which must be escaped to remain
 		// part of the URL path, and not indicate the start of a query
 		// string or fragment.
-		url := url.URL{Path: name}
-		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", url.String(), htmlReplacer.Replace(name))
+		fmt.Fprintf(w, "<a href=\"/%s\">%s</a>\n", urlenc(path.Join(pathname, name)), htmlReplacer.Replace(name))
 	}
 	fmt.Fprintf(w, "</pre>\n")
 	return 0, nil
