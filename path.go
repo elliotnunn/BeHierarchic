@@ -53,11 +53,8 @@ func (fsys *FS) path(name string) (path, error) {
 	p := path{fsys, fsys.root, internpath.New(".")}
 	for _, el := range warps[:len(warps)-1] {
 		var isar bool
-		var err error
-		isar, p, err = p.ShallowJoin(el).getArchive(true)
-		if err != nil {
-			return path{}, err
-		} else if !isar {
+		isar, p = p.ShallowJoin(el).getArchive(true)
+		if !isar {
 			return path{}, fs.ErrNotExist
 		}
 	}

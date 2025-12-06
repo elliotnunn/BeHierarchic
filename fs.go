@@ -5,6 +5,7 @@ package main
 
 import (
 	"io/fs"
+	"log/slog"
 	gopath "path"
 	"strings"
 	"sync"
@@ -17,8 +18,8 @@ import (
 const Special = "◆"
 
 type FS struct {
-	bMu     sync.RWMutex
-	burrows map[path]*b
+	mMu    sync.RWMutex
+	mounts map[path]*mount // nonexistent or nil or pointer
 
 	rMu     sync.RWMutex
 	reverse map[fs.FS]path
@@ -34,24 +35,27 @@ type FS struct {
 	rapool *spinner.Pool
 }
 
-type b struct {
-	// nil          = not sure yet
-	// notAnArchive = not an archive
-	// func()       = archive creator-function
-	// fs.FS        = FS
+// if not present in the map, the file has not yet been scanned
+// if nil pointer, the file has been scanned and is not an archive (common)
+// if non-nil pointer, meaning depends on data as below...
+type mount struct {
 	lock sync.Mutex
 	data any
+	// nil          = not sure yet (temporary state)
+	// func()       = archive creator-function
+	// fs.FS        = FS
 }
 
-type notAnArchive struct{}
 type fsysGenerator func() (fs.FS, error)
+
+func fsysGeneratorNop() (fs.FS, error) { return nil, nil }
 
 func Wrapper(fsys fs.FS, cachePath string) *FS {
 	const blockShift = 12 // 4 kb -- must match the AppleDouble resourcefork padding!
 
 	fsys2 := &FS{
 		root:    fsys,
-		burrows: make(map[path]*b),
+		mounts:  make(map[path]*mount),
 		reverse: make(map[fs.FS]path),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
@@ -59,23 +63,54 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 	return fsys2
 }
 
-func (o path) getArchive(needFS bool) (bool, path, error) {
+func (o path) getArchive(needFS bool) (bool, path) {
 	// Do not probe resources in a resource fork: expensive and unproductive
 	o.container.rMu.RLock()
 	inResourceFork := strings.HasPrefix(o.container.reverse[o.fsys].name.Base(), "._")
 	o.container.rMu.RUnlock()
 	if inResourceFork {
-		return false, path{}, nil
+		return false, path{}
 	}
 
 	if o.fsys == o.container.root { // Undercooked files, do not touch
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
-			return false, path{}, nil
+			return false, path{}
 		}
 	}
 
-	b := o.getB()
+	locksets := [...]struct{ lock, unlock func() }{
+		{o.container.mMu.RLock, o.container.mMu.RUnlock},
+		{o.container.mMu.Lock, o.container.mMu.Unlock},
+	}
+
+	var b *mount
+
+lockloop:
+	for i, mu := range locksets {
+		mu.lock()
+		var ok bool
+		b, ok = o.container.mounts[o]
+		mu.unlock()
+		switch {
+		case !ok && i == 0:
+			// Unknown file, but we lack write access, so try again
+			continue
+		case !ok && i == 1:
+			// Unknown file, create a blank mount struct
+			b = new(mount)
+			break lockloop
+		case ok && b == nil:
+			// Known NOT to be a mount
+			mu.unlock()
+			return false, path{}
+		case ok && b != nil:
+			// Either a suspected mount, or a certain mount
+			b = b
+			break lockloop
+		}
+	}
+
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -84,26 +119,26 @@ again:
 	default: // not yet decided
 		gen, err := o.probeArchive()
 		if err != nil {
-			return false, path{}, err
+			slog.Warn("archiveProbeError", "path", o, "err", err)
 		}
-		if gen == nil {
-			b.data = notAnArchive{}
-		} else {
-			b.data = gen
+		if err != nil || gen == nil {
+			goto notAnArchive
 		}
+		b.data = gen
 		goto again
-	case notAnArchive:
-		return false, path{}, nil
 	case fs.FS:
-		return true, path{o.container, t, internpath.New(".")}, nil
+		return true, path{o.container, t, internpath.New(".")}
 	case fsysGenerator:
 		if !needFS {
-			return true, path{}, nil
+			return true, path{}
 		}
 
 		fsys2, err := t()
 		if err != nil {
-			return false, path{}, err
+			slog.Warn("archiveInstantiateError", "path", o, "err", err)
+		}
+		if err != nil || fsys2 == nil {
+			goto notAnArchive
 		}
 
 		o.container.rMu.Lock()
@@ -112,24 +147,12 @@ again:
 		b.data = fsys2
 		goto again
 	}
-}
 
-func (o path) getB() *b {
-	o.container.bMu.RLock()
-	x, ok := o.container.burrows[o]
-	o.container.bMu.RUnlock()
-
-	if ok {
-		return x
-	}
-
-	o.container.bMu.Lock()
-	x, ok = o.container.burrows[o]
-	if !ok { // recheck because we relinquished the lock
-		x = new(b)
-		o.container.burrows[o] = x
-	}
-	o.container.bMu.Unlock()
-
-	return x
+notAnArchive:
+	o.container.mMu.Lock()
+	o.container.mounts[o] = nil
+	o.container.mMu.Unlock()
+	// small chance that another instance of this function raced to get this mount structure
+	b.data = fsysGeneratorNop
+	return false, path{}
 }

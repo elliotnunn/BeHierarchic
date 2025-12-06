@@ -49,7 +49,7 @@ func (o path) cookedReadDir() ([]fs.DirEntry, error) {
 
 		go func() {
 			outer := o.ShallowJoin(l.Name())
-			isar, _, _ := outer.getArchive(false)
+			isar, _ := outer.getArchive(false)
 			if isar {
 				answers <- &mountpointDirEntry{outer: outer}
 			} else {
@@ -113,10 +113,8 @@ func (de mountpointDirEntry) Type() fs.FileMode { return fs.ModeDir }
 func (de mountpointDirEntry) IsDir() bool       { return true }
 
 func (de mountpointDirEntry) Info() (fs.FileInfo, error) {
-	isAr, inner, err := de.outer.getArchive(true)
-	if err != nil {
-		return nil, err
-	} else if !isAr {
+	isAr, inner := de.outer.getArchive(true)
+	if !isAr {
 		return nil, fs.ErrInvalid // vanishingly unlikely
 	}
 	return inner.cookedStat()

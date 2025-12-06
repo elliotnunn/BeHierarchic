@@ -300,11 +300,8 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 				}
 
 				timer := time.AfterFunc(time.Second, func() { slog.Info("takingLongTime", "path", o) })
-				isar, fsys, err := o.getArchive(true)
+				isar, fsys := o.getArchive(true)
 				timer.Stop()
-				if err != nil {
-					slog.Error("getArchiveError", "err", err, "path", o)
-				}
 				if isar && !strings.HasPrefix(o.name.Base(), "._") { // no use probing resource forks!
 					fsys.prefetchThisFS(1, nil)
 				}
