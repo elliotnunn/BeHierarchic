@@ -20,6 +20,8 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 type Handler struct {
@@ -137,27 +139,23 @@ func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) (status int
 	fmt.Fprint(w, "<h2>")
 	breadcrumb(w, reqPath)
 	fmt.Fprint(w, "</h2>")
-	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" value="%s"><button type="submit">Search</button></form>`,
+	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" value="%s" size="50" placeholder="Glob pattern e.g. **/*.sit"><button type="submit">Search</button></form>`,
 		urlenc(path.Join(reqPath, "besearch")), htmlReplacer.Replace(glob))
 	fmt.Fprintf(w, "<pre>\n")
 
-	err = fs.WalkDir(h.FS, reqPath, func(name string, d fs.DirEntry, err error) error {
-		ok, err := path.Match(glob, path.Base(name))
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		if d.IsDir() {
-			name += "/"
-		}
+	sub, err := fs.Sub(h.FS, reqPath)
+	if err != nil {
+		return http.StatusBadRequest, err
+	}
 
-		name = name[len(reqPath)+1:]
-
-		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", urlenc(name), htmlReplacer.Replace(name))
+	err = doublestar.GlobWalk(sub, glob, func(pathname string, d fs.DirEntry) error {
+		if d == nil || d.IsDir() {
+			pathname += "/"
+		}
+		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", urlenc(pathname), htmlReplacer.Replace(pathname))
 		return nil
-	})
+
+	}, doublestar.WithCaseInsensitive())
 	if err != nil {
 		return http.StatusBadRequest, err // bad glob
 	}
@@ -166,11 +164,13 @@ func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) (status int
 }
 
 func breadcrumb(w io.Writer, path string) {
-	println("breadcrumbs for", path)
-	steps := strings.Split(path, "/")
-	for i := range steps {
-		url := strings.Join(steps[:i+1], "/")
-		fmt.Fprintf(w, "<a href=\"/%s\">%s</a>/", urlenc(url), htmlReplacer.Replace(steps[i]))
+	fmt.Fprint(w, `<a href="/">/</a>`)
+	if path != "." {
+		steps := strings.Split(path, "/")
+		for i := range steps {
+			url := strings.Join(steps[:i+1], "/")
+			fmt.Fprintf(w, "<a href=\"/%s\">%s</a>/", urlenc(url), htmlReplacer.Replace(steps[i]))
+		}
 	}
 }
 
@@ -194,7 +194,7 @@ func dirList(w http.ResponseWriter, d fs.ReadDirFile, pathname string) (status i
 	fmt.Fprint(w, "<h2>")
 	breadcrumb(w, pathname)
 	fmt.Fprint(w, "</h2>")
-	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q"><button type="submit">Search</button></form>`,
+	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" size="50" placeholder="Glob pattern e.g. **/*.sit"><button type="submit">Search</button></form>`,
 		urlenc(path.Join(pathname, "besearch")))
 	fmt.Fprintf(w, "<pre>\n")
 	for _, de := range list {
