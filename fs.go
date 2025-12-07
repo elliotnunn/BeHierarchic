@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"log/slog"
 	gopath "path"
@@ -120,7 +121,12 @@ again:
 	switch t := b.data.(type) {
 	default: // not yet decided
 		gen, err := o.probeArchive()
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			o.container.mMu.Lock()
+			delete(o.container.mounts, o.Thin())
+			o.container.mMu.Unlock()
+			goto notEvenAFile
+		} else if err != nil {
 			slog.Warn("archiveProbeError", "path", o, "err", err)
 		}
 		if err != nil || gen == nil {
@@ -154,6 +160,7 @@ notAnArchive:
 	o.container.mMu.Lock()
 	o.container.mounts[o.Thin()] = nil
 	o.container.mMu.Unlock()
+notEvenAFile:
 	// small chance that another instance of this function raced to get this mount structure
 	b.data = fsysGeneratorNop
 	return false, path{}
