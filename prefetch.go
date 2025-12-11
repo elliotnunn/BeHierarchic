@@ -245,7 +245,6 @@ func (fsys *FS) Prefetch() {
 					"stackBytes", mem.StackInuse,
 					"ramArchiveRatio", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 4, 64),
 				)
-				log.Printf("pebbleStats\n%+v", fsys.db.Metrics())
 			case <-stopTick:
 				return
 			}
