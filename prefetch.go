@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"io"
 	"io/fs"
 	"iter"
@@ -29,7 +28,6 @@ const (
 	// meant to be eye-catching, and must never be <= 8 (see appendint)
 	offsetByte = 0xcc // appended to a dbkey ~ "offset follows, value is data"
 	sizeByte   = 0x55 // appended to a dbkey ~ "value is a size"
-	eofByte    = 0xee // appended twice to a dbvalue ~ EOF
 )
 
 func (fsys *FS) setupDB(dsn string) {
@@ -53,38 +51,45 @@ func (fsys *FS) dumpDB() {
 	}
 	defer iter.Close()
 	for iter.First(); iter.Valid(); iter.Next() {
-		p, err := unmarshalBufErr(iter.Value())
 		slog.Info("dbDump",
 			"key", hex.EncodeToString(iter.Key()),
-			"len", len(p),
-			"data", hex.EncodeToString(p),
-			"err", err)
+			"len", len(iter.Value()),
+			"data", hex.EncodeToString(iter.Value()))
 	}
 }
 
 func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	if f.isCaching() {
-		n, err = f.getCache(p, off)
-		if err != errNotFound {
-			atomic.AddInt64(&f.path.container.scoreGood, int64(n))
-			return
+		n = f.getCache(p, off)
+		atomic.AddInt64(&f.path.container.scoreGood, int64(n))
+		if n == len(p) {
+			return n, nil
 		}
 	}
 
-	n, err = f.randomAccessFile.ReadAt(p, off)
+	more, err := f.randomAccessFile.ReadAt(p[n:], off+int64(n))
+	n += more
 
-	if f.isCaching() {
+	if f.isCaching() && more > 0 {
 		atomic.AddInt64(&f.path.container.scoreBad, int64(n))
-		f.setCache(p[:n], off, err)
+		f.setCache(p[:n], off)
 
 		// if n > 0 {
 		// 	p2 := make([]byte, len(p))
-		// 	n2, err2 := f.getCache(p2, off)
-		// 	if n2 != n || err2 != err || !bytes.Equal(p2[:n2], p[:n]) {
-		// 		slog.Error("expected", "key", hex.EncodeToString(dbkey(f.path)), "path", f.path, "off", off, "len", len(p), "n", n, "err", err, "data", hex.EncodeToString(p[:n]))
-		// 		slog.Error("got", "off", off, "len", len(p), "n", n2, "err", err2, "data", hex.EncodeToString(p2[:n2]))
+		// 	n2 := f.getCache(p2, off)
+		// 	if n2 != n || !bytes.Equal(p2[:n2], p[:n]) {
+		// 		slog.Error("cacheMismatch",
+		// 			"key", hex.EncodeToString(dbkey(f.path)),
+		// 			"path", f.path,
+		// 			"off", off,
+		// 			"len", len(p))
+		// 		slog.Error("cacheMismatchExpect",
+		// 			"n", n,
+		// 			"data", hex.EncodeToString(p[:n]))
+		// 		slog.Error("cacheMismatchGot",
+		// 			"n", n2,
+		// 			"data", hex.EncodeToString(p2[:n2]))
 		// 		f.path.container.dumpDB()
-		// 		panic("dread mismatch")
 		// 	}
 		// }
 	}
@@ -92,9 +97,9 @@ func (f *cachingFile) ReadAt(p []byte, off int64) (n int, err error) {
 	return
 }
 
-func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
+func (f *cachingFile) getCache(p []byte, off int64) (n int) {
 	if f.path.container.db == nil {
-		return 0, errNotFound
+		return 0
 	}
 
 	idPrefix := append(dbkey(f.path), offsetByte)
@@ -104,36 +109,35 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int, err error) {
 		LowerBound: id,
 	})
 	if dberr != nil {
-		panic(err)
+		panic(dberr)
 	}
 	defer iter.Close()
 
 	if !iter.First() {
-		return 0, errNotFound
+		return 0
 	}
 
 	xid := iter.Key()
 	if !bytes.HasPrefix(xid, idPrefix) {
-		return 0, errNotFound
+		return 0
 	}
 
-	dbbuf, dberr := iter.ValueAndErr()
+	xp, dberr := iter.ValueAndErr()
 	if dberr != nil {
 		slog.Error("pebbleIteratorValueErr", "err", dberr)
-		return 0, errNotFound
+		return 0
 	}
-	xp, xerr := unmarshalBufErr(dbbuf)
 
 	xbufend, ok := read1int(xid[len(idPrefix):])
 	if !ok {
-		return 0, errNotFound
+		return 0
 	}
 	xoff := bufStart(xp, xbufend)
 
-	return subRead(p, off, xp, xoff, xerr)
+	return subRead(p, off, xp, xoff)
 }
 
-func (f *cachingFile) setCache(p []byte, off int64, err error) {
+func (f *cachingFile) setCache(p []byte, off int64) {
 	if f.path.container.db == nil || len(p) == 0 {
 		return
 	}
@@ -162,11 +166,10 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 		}
 		xid = slices.Clone(xid)
 
-		dbbuf, dberr := iter.ValueAndErr()
+		xp, dberr := iter.ValueAndErr()
 		if dberr != nil {
 			panic(dberr)
 		}
-		xp, xerr := unmarshalBufErr(dbbuf)
 		xp = slices.Clone(xp) // a copy that we own
 
 		xbufend, ok := read1int(xid[len(idPrefix):])
@@ -176,17 +179,12 @@ func (f *cachingFile) setCache(p []byte, off int64, err error) {
 		xoff := bufStart(xp, xbufend)
 
 		if bufJoin(&p, &off, xp, xoff) {
-			if xerr != nil {
-				err = xerr
-			}
 			batch.Delete(xid, &pebble.WriteOptions{})
 		} else {
 			break
 		}
 	}
-	batch.Set(appendint(idPrefix, bufEnd(p, off)),
-		marshalBufErr(p, err),
-		&pebble.WriteOptions{})
+	batch.Set(appendint(idPrefix, bufEnd(p, off)), p, &pebble.WriteOptions{})
 	dberr = batch.Commit(&pebble.WriteOptions{})
 	if dberr != nil {
 		panic(dberr)
@@ -472,40 +470,17 @@ func dbkey(o path) []byte {
 	return accum
 }
 
-var errNotFound = errors.New("internal incompleteness error")
-
-func subRead(p []byte, off int64, srcP []byte, srcOff int64, srcErr error) (int, error) {
-	end, srcEnd := bufEnd(p, off), bufEnd(srcP, srcOff)
+func subRead(p []byte, off int64, srcP []byte, srcOff int64) (n int) {
 	if srcOff > off {
-		// src:   []
-		// dst: []
-		return 0, errNotFound
-	} else if srcEnd <= off {
-		// src: []
-		// dst:   []
-		if srcErr == nil {
-			return 0, errNotFound
-		} else {
-			return 0, srcErr
-		}
-	} else if srcEnd < end {
-		// src: []
-		// dst: [  ]
-		n := copy(p, srcP[off-srcOff:])
-		if srcErr == nil {
-			return n, errNotFound
-		} else {
-			return n, srcErr
-		}
+		// src:   [
+		// dst: [
+		return 0
+	} else if bufEnd(srcP, srcOff) <= off {
+		// src: ]
+		// dst:   [
+		return 0
 	} else {
-		// src: [  ]
-		// dst: []
-		n := copy(p, srcP[off-srcOff:])
-		if srcEnd == end {
-			return n, srcErr
-		} else {
-			return n, nil
-		}
+		return copy(p, srcP[off-srcOff:])
 	}
 }
 
@@ -527,34 +502,3 @@ func bufJoin(p1 *[]byte, off1 *int64, p2 []byte, off2 int64) bool {
 
 func bufEnd(p []byte, off int64) int64   { return off + int64(len(p)) }
 func bufStart(p []byte, end int64) int64 { return end - int64(len(p)) }
-
-// marshalBufErr makes the buffer end with {eofByte, eofByte} IFF it is EOF
-func marshalBufErr(p []byte, err error) []byte {
-	p = p[:len(p):len(p)] // append could be catastrophic
-	if len(p) > 0 && p[len(p)-1] == eofByte {
-		// less desirable case: need to lengthen by 2 bytes
-		if err == io.EOF {
-			return append(p, eofByte, eofByte)
-		} else {
-			return append(p, 0, eofByte)
-		}
-	} else {
-		if err == io.EOF {
-			return append(p, eofByte, eofByte)
-		} else {
-			return p // common case
-		}
-	}
-}
-
-// unmarshalBufErr trickily undoes the work of marshalBufErr
-func unmarshalBufErr(buf []byte) (p []byte, err error) {
-	if len(buf) >= 2 && buf[len(buf)-1] == eofByte {
-		if buf[len(buf)-2] == eofByte {
-			return buf[:len(buf)-2], io.EOF
-		} else {
-			return buf[:len(buf)-2], nil
-		}
-	}
-	return buf, nil
-}
