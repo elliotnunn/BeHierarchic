@@ -1,6 +1,6 @@
 # BeHierarchic
 
-![BeHierarchic artwork in Apple Platinum style](artwork.webp)
+<img src="artwork.webp" width="288" height="164" alt="BeHierarchic artwork in Apple Platinum style">
 
 **The Retrocomputing Archivist's File Server**
 
