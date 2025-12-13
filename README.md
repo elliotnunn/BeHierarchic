@@ -1,5 +1,7 @@
 # BeHierarchic
 
+<img src="artwork.webp" width="288" height="164" alt="BeHierarchic artwork in Apple Platinum style">
+
 **The Retrocomputing Archivist's File Server**
 
 BeHierarchic exposes the inside of several Apple-adjacent archive types as a plain directory, like so:
