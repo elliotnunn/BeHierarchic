@@ -1,6 +1,6 @@
 # BeHierarchic
 
-<img src="artwork.png" width="288" height="164" alt="BeHierarchic artwork in Apple Platinum style" style="image-rendering: pixelated;">
+![BeHierarchic artwork in Apple Platinum style](artwork.webp)
 
 **The Retrocomputing Archivist's File Server**
 
