@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log"
 	"log/slog"
 	"math/bits"
 	"runtime"
@@ -20,7 +19,6 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
-	"github.com/elliotnunn/BeHierarchic/internal/walk"
 )
 
 const (
@@ -268,20 +266,32 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 		panic("this should be a filesystem!!")
 	}
 
-	waysort, files := walk.FilesInDiskOrder(o.fsys)
-	slog.Info("prefetchDir", "path", o, "sortorder", waysort)
+	type encounter struct {
+		kind fs.FileMode
+		name string
+	}
+	ch := make(chan encounter)
+
+	slog.Info("prefetchDir", "path", o)
+	go func() {
+		for name, kind := range Walk(o.fsys, true) {
+			ch <- encounter{kind, name}
+		}
+		close(ch)
+	}()
 
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Go(func() {
-			for p := range files {
-				o := o.ShallowJoin(p)
+			for e := range ch {
+				kind, name := e.kind, e.name
+				if kind != 0 { // regular files only
+					continue
+				}
+				o := o.ShallowJoin(name)
 
 				rawstat, rawerr := o.rawStat()
 				if rawerr != nil {
-					continue
-				}
-				if !rawstat.Mode().IsRegular() {
 					continue
 				}
 
@@ -427,8 +437,8 @@ func onekey(buf []byte, o path) []byte {
 	}
 
 	if s, err := o.rawStat(); err == nil {
-		if s, ok := s.(interface{ Order() int64 }); ok {
-			buf = appendint(buf, s.Order())
+		if s, ok := s.(interface{ ID() int64 }); ok {
+			buf = appendint(buf, s.ID())
 			return buf
 		}
 

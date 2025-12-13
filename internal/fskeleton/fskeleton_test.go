@@ -5,10 +5,13 @@ package fskeleton
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"strconv"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -30,20 +33,34 @@ func TestBlockedLstat(t *testing.T) {
 }
 func TestOpenDir(t *testing.T) {
 	fsys := New()
-	fsys.CreateDir("dirThatExists", 0, time.Time{}, nil)
+	fsys.Mkdir("dirThatExists", 0, 0, time.Time{})
 	mustNotBlock(t, func() {
 		_, err := fsys.Open("dirThatExists")
 		expectErr(t, nil, err)
 	})
 }
+func TestInvalidPath(t *testing.T) {
+	fsys := New()
+	expectErr(t, fs.ErrInvalid, fsys.Symlink("..", 0, "dangling", 0, time.Time{}))
+	expectErr(t, fs.ErrInvalid, fsys.Symlink("symlink", 0, "..", 0, time.Time{}))
+	expectErr(t, fs.ErrInvalid, fsys.Symlink("", 0, "hmm", 0, time.Time{}))
+	_, err := fsys.Open("")
+	expectErr(t, fs.ErrInvalid, err)
+}
+func TestTooLate(t *testing.T) {
+	fsys := New()
+	fsys.NoMore()
+	expectErr(t, fs.ErrClosed, fsys.Mkdir("a", 0, 0, time.Time{}))
+	expectErr(t, fs.ErrClosed, fsys.CreateReader("b", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, fs.ErrClosed, fsys.Symlink("c", 0, ".", 0, time.Time{}))
+}
 func TestIncompleteDir(t *testing.T) {
 	fsys := New()
-	fsys.createFile("a/b/c", 0, emptyFile, 0, 0, time.Time{}, nil)
+	fsys.CreateReader("a/b/c", 0, emptyFile, 0, 0, time.Time{})
 	expectStr(t, "c...", listDir(fsys, "a/b"))
-	fsys.NoMoreChildren("a/b")
-	expectStr(t, "c", listDir(fsys, "a/b"))
 	expectStr(t, "b...", listDir(fsys, "a"))
 	fsys.NoMore()
+	expectStr(t, "c", listDir(fsys, "a/b"))
 	expectStr(t, "b", listDir(fsys, "a"))
 }
 func TestIncompleteRootInfo(t *testing.T) {
@@ -51,9 +68,9 @@ func TestIncompleteRootInfo(t *testing.T) {
 	stat, err := fs.Stat(fsys, ".")
 	expectErr(t, nil, err)
 	mustBlock(t, func() { stat.ModTime() })
-	fsys.createFile(".", 0, emptyFile, 0, 0, time.Time{}, nil)
+	fsys.CreateReader(".", 0, emptyFile, 0, 0, time.Time{})
 	mustBlock(t, func() { stat.ModTime() })
-	fsys.CreateDir(".", 0, time.Time{}, nil)
+	fsys.Mkdir(".", 0, 0, time.Time{})
 	mustNotBlock(t, func() { stat.ModTime() })
 }
 func TestRootInfoWithNoMoreChildren(t *testing.T) {
@@ -61,10 +78,8 @@ func TestRootInfoWithNoMoreChildren(t *testing.T) {
 	stat, err := fs.Stat(fsys, ".")
 	expectErr(t, nil, err)
 	mustBlock(t, func() { stat.ModTime() })
-	fsys.NoMoreChildren(".")
-	mustBlock(t, func() { stat.ModTime() })
-	fsys.NoMoreChildren("..")
-	mustNotBlock(t, func() { stat.ModTime() })
+	fsys.NoMore()
+	mustNotBlock(t, func() {})
 }
 func TestRootInfoWithNoMore(t *testing.T) {
 	fsys := New()
@@ -76,7 +91,7 @@ func TestRootInfoWithNoMore(t *testing.T) {
 }
 func TestIncompleteDirInfo(t *testing.T) {
 	fsys := New()
-	err := fsys.createFile("d/f", 0, emptyFile, 0, 0, time.Time{}, nil)
+	err := fsys.CreateReader("d/f", 0, emptyFile, 0, 0, time.Time{})
 	expectErr(t, nil, err)
 	fstat, err := fs.Stat(fsys, "d/f")
 	expectErr(t, nil, err)
@@ -84,22 +99,28 @@ func TestIncompleteDirInfo(t *testing.T) {
 	expectErr(t, nil, err)
 	mustNotBlock(t, func() { fstat.ModTime() })
 	mustBlock(t, func() { dstat.ModTime() })
-	err = fsys.CreateDir("d", 0, time.Time{}, nil)
+	err = fsys.Mkdir("d", 0, 0, time.Time{})
 	expectErr(t, nil, err)
 	mustNotBlock(t, func() { dstat.ModTime() })
 }
 func TestDirCreation(t *testing.T) {
 	fsys := New()
-	expectErr(t, nil, fsys.CreateDir("implicit/explicit", 0, time.Time{}, nil))
-	expectErr(t, fs.ErrExist, fsys.CreateDir("implicit/explicit", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateDir("implicit", 0, time.Time{}, nil))
-	expectErr(t, fs.ErrExist, fsys.CreateDir("implicit", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateDir(".", 0, time.Time{}, nil))
-	expectErr(t, fs.ErrExist, fsys.CreateDir(".", 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateReader("notadir", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Symlink("alsonotadir", 0, "dangling", 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.CreateReader("notadir", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.CreateReader("alsonotadir", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.CreateReader("notadir/yet/it/contains/something", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.CreateReader("alsonotadir/yet/it/contains/something", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Mkdir("implicit/explicit", 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.Mkdir("implicit/explicit", 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Mkdir("implicit", 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.Mkdir("implicit", 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Mkdir(".", 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.Mkdir(".", 0, 0, time.Time{}))
 }
 func TestFullyNonblocking(t *testing.T) {
 	fsys := New()
-	expectErr(t, nil, fsys.createFile("imp/exp", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.CreateReader("imp/exp", 0, emptyFile, 0, 0, time.Time{}))
 	fsys.NoMore()
 	fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		mustNotBlock(t, func() { s, _ := fsys.Stat(name); s.Sys() })
@@ -109,14 +130,14 @@ func TestFullyNonblocking(t *testing.T) {
 }
 func TestSymlink(t *testing.T) {
 	fsys := New()
-	expectErr(t, nil, fsys.CreateSymlink("symlink1", "file1", 0, time.Time{}, nil)) // dangling symlink
-	expectErr(t, nil, fsys.CreateSymlink("symlink2", "file2", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateSymlink("symlink3", "dir3", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateSymlink("symlink4", "symlink3/file5", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.CreateSymlink("symlink6", "symlink6", 0, time.Time{}, nil)) // circular
-	expectErr(t, nil, fsys.CreateDir("dir3", 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.createFile("file2", 0, emptyFile, 0, 0, time.Time{}, nil))
-	expectErr(t, nil, fsys.createFile("dir3/file5", 0, emptyFile, 0, 0, time.Time{}, nil))
+	expectErr(t, nil, fsys.Symlink("symlink1", 0, "file1", 0, time.Time{})) // dangling symlink
+	expectErr(t, nil, fsys.Symlink("symlink2", 0, "file2", 0, time.Time{}))
+	expectErr(t, nil, fsys.Symlink("symlink3", 0, "dir3", 0, time.Time{}))
+	expectErr(t, nil, fsys.Symlink("symlink4", 0, "symlink3/file5", 0, time.Time{}))
+	expectErr(t, nil, fsys.Symlink("symlink6", 0, "symlink6", 0, time.Time{})) // circular
+	expectErr(t, nil, fsys.Mkdir("dir3", 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.CreateReader("file2", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.CreateReader("dir3/file5", 0, emptyFile, 0, 0, time.Time{}))
 
 	mustBlock(t, func() { fsys.Open("symlink1") })
 	fsys.NoMore()
@@ -134,6 +155,8 @@ func TestSymlink(t *testing.T) {
 	s, err = fsys.Lstat("symlink2") // good symlink
 	expectErr(t, nil, err)
 	expectStr(t, s.Mode().String(), fs.ModeSymlink.String())
+	_, err = fsys.Open("symlink2")
+	expectErr(t, nil, err)
 	s, err = fsys.Stat("symlink2")
 	expectErr(t, nil, err)
 	expectStr(t, s.Mode().String(), fs.FileMode(0).String())
@@ -170,7 +193,7 @@ func TestTime(t *testing.T) {
 	}
 	fsys := New()
 	for i, time := range times {
-		fsys.CreateErrorFile(strconv.Itoa(i), int64(i), io.EOF, 0, 0, time, nil)
+		fsys.CreateError(strconv.Itoa(i), int64(i), io.EOF, 0, 0, time)
 	}
 	for i, time := range times {
 		inf, _ := fs.Stat(fsys, strconv.Itoa(i))
@@ -179,6 +202,61 @@ func TestTime(t *testing.T) {
 			t.Errorf("expected %s, got %s", time, gottime)
 		}
 	}
+}
+func TestList(t *testing.T) {
+	fsys := New()
+	expectStr(t, ".(d)...", listFS(fsys, true))
+	expectStr(t, ".(d)", listFS(fsys, false))
+	expectErr(t, nil, fsys.CreateReader("ddd/aaa", 0, emptyFile, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Mkdir("bbb", 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Symlink("ccc", 0, "ddd/aaa", 0, time.Time{}))
+	expectStr(t, ".(d) ddd(d) ddd/aaa(f) bbb(d) ccc(l)...", listFS(fsys, true))
+	expectStr(t, ".(d) ddd(d) ddd/aaa(f) bbb(d) ccc(l)", listFS(fsys, false))
+	fsys.NoMore()
+	expectStr(t, ".(d) ddd(d) ddd/aaa(f) bbb(d) ccc(l)", listFS(fsys, true))
+	expectStr(t, ".(d) ddd(d) ddd/aaa(f) bbb(d) ccc(l)", listFS(fsys, false))
+}
+func TestRead(t *testing.T) {
+	const lips = "lorem ipsum"
+	fsys := New()
+	readerAtFunc := func() (io.Reader, error) { return strings.NewReader(lips), nil }
+	expectErr(t, nil, fsys.CreateReader("Reader", int64(len(lips)), readerAtFunc, 0, 0, time.Time{}))
+	readCloserAtFunc := func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(lips)), nil }
+	expectErr(t, nil, fsys.CreateReadCloser("ReadCloser", int64(len(lips)), readCloserAtFunc, 0, 0, time.Time{}))
+	readerAt := strings.NewReader(lips)
+	expectErr(t, nil, fsys.CreateReaderAt("ReaderAt", int64(len(lips)), readerAt, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.CreateError("EmptyFile", 0, io.EOF, 0, 0, time.Time{}))
+	fsys.NoMore()
+	err := fstest.TestFS(fsys, "Reader", "ReadCloser", "ReaderAt", "EmptyFile")
+	if err != nil {
+		t.Error(err)
+	}
+}
+func TestID(t *testing.T) {
+	type IDer interface {
+		ID() int64
+	}
+	fsys := New()
+	fsys.Mkdir("implicitDir/realDir", 123, 0, time.Time{})
+	fsys.CreateReader("emptyFile", 456, emptyFile, 0, 0, time.Time{})
+	fsys.Symlink("link", 789, "implicitDir", 0, time.Time{})
+	stat1, _ := fs.Stat(fsys, "implicitDir")
+	stat2, _ := fs.Stat(fsys, "implicitDir/realDir")
+	stat3, _ := fs.Stat(fsys, "emptyFile")
+	stat4, _ := fs.Stat(fsys, "link")
+	stat5, _ := fs.Lstat(fsys, "link")
+	mustBlock(t, func() { stat1.(IDer).ID() })
+	mustNotBlock(t, func() { stat2.(IDer).ID() })
+	mustNotBlock(t, func() { stat3.(IDer).ID() })
+	mustBlock(t, func() { stat4.(IDer).ID() })
+	mustNotBlock(t, func() { stat5.(IDer).ID() })
+	expectStr(t, "123 456 789", fmt.Sprint(stat2.(IDer).ID(), stat3.(IDer).ID(), stat5.(IDer).ID()))
+}
+func TestCreateRoot(t *testing.T) {
+	fsys := New()
+	expectErr(t, fs.ErrExist, fsys.CreateError(".", 0, nil, 0, 0, time.Time{}))
+	expectErr(t, nil, fsys.Mkdir(".", 0, 0, time.Time{}))
+	expectErr(t, fs.ErrExist, fsys.Mkdir(".", 0, 0, time.Time{}))
 }
 
 func mustBlock(t *testing.T, f func()) {
@@ -207,7 +285,7 @@ func mustNotBlock(t *testing.T, f func()) {
 	}
 }
 
-func emptyFile(f fs.File) (fs.File, error) { return f, nil }
+var emptyFile = func() (io.Reader, error) { return strings.NewReader(""), nil }
 
 func expectErr(t *testing.T, want, got error) {
 	if !errors.Is(got, want) {
@@ -263,6 +341,46 @@ func listDir(fsys *FS, name string) string {
 			} else {
 				return s + "!" + err.Error()
 			}
+		}
+	}
+}
+
+func listFS(fsys *FS, waitFull bool) string {
+	ch1, ch2 := make(chan string), make(chan fs.FileMode)
+	go func() {
+		for name, mode := range fsys.Walk(waitFull) {
+			ch1 <- name
+			ch2 <- mode
+		}
+		close(ch1)
+		close(ch2)
+	}()
+
+	var b strings.Builder
+	for {
+		select {
+		case <-time.After(time.Millisecond * 100):
+			return b.String() + "..."
+		case name, ok := <-ch1:
+			if !ok {
+				return b.String()
+			}
+			mode := <-ch2
+			kind := ""
+			switch mode {
+			case 0:
+				kind = "f"
+			case fs.ModeDir:
+				kind = "d"
+			case fs.ModeSymlink:
+				kind = "l"
+			default:
+				kind = mode.String()
+			}
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			fmt.Fprintf(&b, "%s(%s)", name, kind)
 		}
 	}
 }

@@ -129,60 +129,55 @@ func addToFS(fsys *fskeleton.FS, f file, dataReader io.ReaderAt, known map[int64
 	meta.LoadFInfo(&macstuff.FinderInfo)
 
 	if f.Common.IsDir() {
-		fsys.CreateDir(name, 0, meta.ModTime, nil)
+		fsys.Mkdir(name, fileID(f.Offset, false), 0, meta.ModTime)
 		adfile, adlen := meta.ForDir()
-		fsys.CreateReaderFile(appledouble.Sidecar(name), f.Offset, adfile, adlen, 0, meta.ModTime, nil)
+		fsys.CreateReader(appledouble.Sidecar(name), fileID(f.Offset, true), adfile, adlen, 0, meta.ModTime)
 	} else { // file
 		rOffset := f.HeaderEnd
-		rOrder := rOffset
-		if macstuff.Rsrc.Unpacked == 0 {
-			rOrder = -2*f.Offset - 1
-		}
 		if macstuff.Rsrc.Algo == 0 && f.RCrypt == "" {
 			adfile, adsize := meta.WithResourceFork(
 				sectionreader.Section(dataReader, rOffset, int64(macstuff.Rsrc.Unpacked)),
 				int64(macstuff.Rsrc.Unpacked))
-			fsys.CreateReaderAtFile(appledouble.Sidecar(name),
-				rOrder,
-				adfile,               // reader
-				adsize,               // size
-				0, meta.ModTime, nil) // mode, mtime, sys
+			fsys.CreateReaderAt(appledouble.Sidecar(name),
+				fileID(f.Offset, true),
+				adfile, adsize, 0, meta.ModTime)
 		} else {
 			adfile, adsize := meta.WithSequentialResourceFork(func() (io.ReadCloser, error) {
 				return readerFor(macstuff.Rsrc.Algo, f.RCrypt, macstuff.Rsrc.Unpacked, macstuff.Rsrc.CRC,
 					io.NewSectionReader(dataReader, rOffset, int64(macstuff.Rsrc.Packed)))
 			}, int64(macstuff.Rsrc.Unpacked))
-			fsys.CreateReadCloserFile(appledouble.Sidecar(name),
-				rOrder,
-				adfile,               // reader
-				adsize,               // size
-				0, meta.ModTime, nil) // mode, mtime, sys
+			fsys.CreateReadCloser(appledouble.Sidecar(name),
+				fileID(f.Offset, true),
+				adfile, adsize, 0, meta.ModTime)
 		}
 
 		dOffset := f.HeaderEnd + int64(macstuff.Rsrc.Packed)
-		dOrder := dOffset
-		if f.Common.Data.Unpacked == 0 {
-			rOrder = -2 * f.Offset
-		}
 		if f.Common.Data.Algo == 0 && f.DCrypt == "" {
-			fsys.CreateReaderAtFile(name,
-				dOrder,
+			fsys.CreateReaderAt(name,
+				fileID(f.Offset, false),
 				sectionreader.Section(dataReader, dOffset, int64(f.Common.Data.Unpacked)), // readerAt
-				int64(f.Common.Data.Unpacked), // size
-				0, meta.ModTime, nil)          // mode, mtime, sys
+				int64(f.Common.Data.Unpacked), 0, meta.ModTime)
 		} else {
-			fsys.CreateReadCloserFile(name,
-				dOrder,
+			fsys.CreateReadCloser(name,
+				fileID(f.Offset, false),
 				func() (io.ReadCloser, error) {
 					return readerFor(f.Common.Data.Algo, f.DCrypt, f.Common.Data.Unpacked, f.Common.Data.CRC,
 						io.NewSectionReader(dataReader, dOffset, int64(f.Common.Data.Packed)))
 				}, // reader
-				int64(f.Common.Data.Unpacked), // size
-				0, meta.ModTime, nil)          // mode, mtime, sys
+				int64(f.Common.Data.Unpacked), 0, meta.ModTime)
 		}
 	}
 
 	return true
+}
+
+// fileID returns a durable identifier
+func fileID(headerOffset int64, isAppleDouble bool) int64 {
+	n := headerOffset << 1
+	if !isAppleDouble {
+		n |= 1 // because resource forks come before data forks
+	}
+	return n
 }
 
 // Tricky and delicate task to read this variable-sized data structure

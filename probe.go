@@ -98,7 +98,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return gzip.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReadCloserFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReadCloser(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -110,7 +110,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64)), nil
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReaderFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReader(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -121,7 +121,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return xz.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64), xz.DefaultDictMax)
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReaderFile(innerName, 0, opener, sizeUnknown, 0, info.ModTime(), nil)
+			fsys.CreateReader(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil

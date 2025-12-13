@@ -90,8 +90,8 @@ func New(disk io.ReaderAt) (fs.FS, error) {
 
 		pstart, plen := int64(mapEntryStep)*int64(pmPyPartStart), int64(mapEntryStep)*int64(pmPartBlkCnt)
 
-		fsys.CreateReaderAtFile(name, pstart,
-			sectionreader.Section(disk, pstart, plen), plen, 0, time.Time{}, nil)
+		fsys.CreateReaderAt(name, pstart,
+			sectionreader.Section(disk, pstart, plen), plen, 0, time.Time{})
 	}
 	return fsys, nil
 }

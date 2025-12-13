@@ -4,79 +4,35 @@
 package fskeleton
 
 import (
-	"cmp"
+	"io/fs"
 	"iter"
-	"slices"
-	"sync"
-
-	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
-type walkstuff struct {
-	sync.Mutex
-	list       []keyval
-	sorted     bool
-	full       bool
-	stragglers []chan<- string
-}
-
-type keyval struct {
-	key int64
-	val internpath.Path
-}
-
-func (w *walkstuff) init() {}
-
-func (w *walkstuff) put(name string, order int64) {
-	w.Lock()
-	defer w.Unlock()
-
-	w.list = append(w.list, keyval{order, internpath.New(name)})
-	w.sorted = false
-	for _, ch := range w.stragglers {
-		ch <- name
-	}
-}
-
-func (w *walkstuff) done() {
-	w.Lock()
-	defer w.Unlock()
-
-	w.full = true
-	for _, ch := range w.stragglers {
-		close(ch)
-	}
-	w.stragglers = nil
-}
-
-func (w *walkstuff) WalkFiles() iter.Seq[string] {
-	return func(yield func(string) bool) {
-		w.Lock()
-
-		if w.full {
-			slices.SortStableFunc(w.list, func(a, b keyval) int { return cmp.Compare(a.key, b.key) })
-			w.sorted = true
-		}
-		for _, kv := range w.list {
-			if !yield(kv.val.String()) {
-				w.Unlock()
+// Walk iterates through all the paths in the filesystem, in the order they were created.
+// This implies that directories are listed before their contents.
+//
+// It is optional to block until a call to [FS.NoMore].
+func (fsys *FS) Walk(waitFull bool) iter.Seq2[string, fs.FileMode] {
+	return func(yield func(string, fs.FileMode) bool) {
+		i := 0
+		fsys.mu.Lock()
+		for {
+			switch {
+			case i < len(fsys.files):
+				f := fsys.files[i]
+				i++
+				fsys.mu.Unlock()
+				if !yield(f.name.String(), f.mode.Type()) {
+					return
+				}
+				fsys.mu.Lock()
+				continue
+			case !waitFull || fsys.done:
+				fsys.mu.Unlock()
 				return
-			}
-		}
-		if w.full {
-			w.Unlock()
-			return
-		}
-
-		ch := make(chan string)
-		w.stragglers = append(w.stragglers, ch)
-		w.Unlock()
-
-		for s := range ch {
-			if !yield(s) {
-				for range ch {
-				} // waste the remainder
-				return
+			default:
+				fsys.cond.Wait()
+				continue
 			}
 		}
 	}

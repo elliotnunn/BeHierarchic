@@ -123,7 +123,7 @@ func TestComplex(t *testing.T) {
 		}
 
 		// The test image zeroes out every fork except the last byte
-		cnid := stat.Sys().(interface{ Inode() uint64 }).Inode()
+		cnid := uint32(stat.(interface{ ID() int64 }).ID())
 		expectLastByte := byte(cnid) // Last byte of fork = low byte of CNID
 		if strings.Contains("/"+p, "/._") {
 			data = appleDoubleResFork(data)

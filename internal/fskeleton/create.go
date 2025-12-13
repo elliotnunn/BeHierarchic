@@ -1,9 +1,8 @@
 // Copyright (c) Elliot Nunn
 // Licensed under the MIT license
 
-// Package fskeleton attempts to factor out the common and error-prone code in different [io.FS] implementations.
-// Notably, it is only useful for static filesystems where
-// the whole directory tree and all metadata is known in advance.
+// Package fskeleton attempts to factor out the common code needed to implement [fs.FS].
+// It is optimised for small memory usage at rest.
 package fskeleton
 
 import (
@@ -15,145 +14,222 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
+var root = internpath.New(".")
+
 func New() *FS {
-	fsys := FS{root: newDir()}
-	fsys.root.name = internpath.New(".")
-	fsys.walkstuff.init()
+	var fsys FS
+	fsys.cond.L = &fsys.mu
+	fsys.files = []f{{
+		name: internpath.New("."),
+		mode: implicitDir,
+	}}
+	fsys.lists = map[internpath.Path]uint32{
+		internpath.New("."): 0,
+	}
 	return &fsys
 }
 
-type FS struct {
-	root *dirent
-	walkstuff
+func (fsys *FS) put(parentIdx uint32, f f) uint32 {
+	fsys.sanityCheck()
+	childIdx := uint32(len(fsys.files))
+	fsys.files = append(fsys.files, f)
+	fsys.lists[f.name] = childIdx
+	if fsys.files[parentIdx].n1 == 0 { // only child
+		fsys.files[parentIdx].n1 = childIdx // first child
+		fsys.files[parentIdx].n2 = childIdx // last child
+	} else { // not only child
+		fsys.files[fsys.files[parentIdx].n2].sibling = childIdx // sibling
+		fsys.files[parentIdx].n2 = childIdx                     // last child
+	}
+	fsys.sanityCheck()
+	return childIdx
 }
 
-type OpenFunc func(fs.File) (fs.File, error)
-
-// CreateDir creates a directory at the specified path.
+// ensureParentsExist makes certain that every containing directory exists,
+// returning the index of the immediate parent.
 //
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateDir(name string, mode fs.FileMode, mtime time.Time, sys any) error {
-	if !fs.ValidPath(name) {
-		return fs.ErrInvalid
+// The lock must be held! Can return ErrExist if there is a non-directory in the tree
+func (fsys *FS) ensureParentsExist(name internpath.Path) (uint32, error) {
+	if name == root {
+		panic("this does not apply to root")
 	}
-	nu := newDir()
-	nu.name, nu.mode, nu.modtime, nu.sys = internpath.New(name), mode&^fs.ModeType, timeFromStdlib(mtime), sys
-	return fsys.create(nu)
+
+	tomake := make([]internpath.Path, 0, 16)
+	var parentIdx uint32
+	for {
+		name = name.Dir()
+		var ok bool
+		parentIdx, ok = fsys.lists[name]
+		if ok {
+			if !fsys.files[parentIdx].mode.IsDir() {
+				return 0xffffffff, fs.ErrExist
+			}
+			break
+		} else {
+			tomake = append(tomake, name)
+		}
+	}
+
+	for _, name := range slices.Backward(tomake) {
+		parentIdx = fsys.put(parentIdx, f{
+			name: name,
+			mode: implicitDir,
+		})
+	}
+	return parentIdx, nil
 }
 
-// createFile validates everything for one of the exported Create*() functions
-func (fsys *FS) createFile(name string, order int64, data any, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	if !fs.ValidPath(name) {
-		return fs.ErrInvalid
+// Mkdir creates a directory at the specified path.
+//
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
+func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) error {
+	iname := internpath.New(name)
+	fsys.mu.Lock()
+	defer fsys.mu.Unlock()
+	if fsys.done {
+		return &fs.PathError{Op: "mkdir", Path: name, Err: fs.ErrClosed}
 	}
-	nu := &fileent{name: internpath.New(name),
-		order:   order,
-		size:    size,
-		mode:    mode &^ fs.ModeType,
-		modtime: timeFromStdlib(mtime),
-		sys:     sys,
-		data:    data,
+
+	mode = mode&^fs.ModeType | fs.ModeDir
+
+	if idx, exist := fsys.lists[iname]; exist {
+		if fsys.files[idx].mode != implicitDir {
+			return &fs.PathError{Op: "mkdir", Path: name, Err: fs.ErrExist}
+		}
+		fsys.files[idx].mode = mode
+		fsys.files[idx].time = timeFromStdlib(mtime)
+		fsys.files[idx].id = id
+		fsys.cond.Broadcast()
+		return nil
+	} else {
+		parentIdx, err := fsys.ensureParentsExist(iname)
+		if err != nil {
+			return &fs.PathError{Op: "mkdir", Path: name, Err: err}
+		}
+		fsys.put(parentIdx, f{
+			name: iname,
+			time: timeFromStdlib(mtime),
+			mode: mode,
+			id:   id,
+		})
+		fsys.cond.Broadcast()
+		return nil
 	}
-	err := fsys.create(nu)
+}
+
+// CreateError creates a regular file at the specified path.
+//
+// When opened, the file will always returns the specified error from [fs.File.Read]. [fs.File.Close] will have no effect.
+//
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
+func (fsys *FS) CreateError(name string, id int64, err error, size int64, mode fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, err, size, mode, mtime)
+}
+
+// CreateReader creates a regular file at the specified path.
+//
+// When opened, the file will implement the bare minimum of [fs.File]. [fs.File.Close] will have no effect.
+//
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
+func (fsys *FS) CreateReader(name string, id int64, r func() (io.Reader, error), size int64, mode fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+}
+
+// CreateReadCloser creates a regular file at the specified path.
+//
+// When opened, the file will implement the bare minimum of [fs.File].
+//
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
+func (fsys *FS) CreateReadCloser(name string, id int64, r func() (io.ReadCloser, error), size int64, mode fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+}
+
+// CreateReadCloser creates a regular file at the specified path.
+//
+// When opened, the file will satisfy [io.ReaderAt] and [io.ReadSeeker].
+//
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
+func (fsys *FS) CreateReaderAt(name string, id int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+}
+
+func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size int64, mode fs.FileMode, mtime time.Time) error {
+	if data == nil {
+		if size != 0 {
+			return &fs.PathError{Op: "create", Path: name, Err: fs.ErrInvalid}
+		}
+		data = io.EOF
+	}
+
+	iname := internpath.New(name)
+	fsys.mu.Lock()
+	defer fsys.mu.Unlock()
+	if fsys.done {
+		return &fs.PathError{Op: "create", Path: name, Err: fs.ErrClosed}
+	}
+
+	if _, exist := fsys.lists[iname]; exist {
+		return &fs.PathError{Op: "create", Path: name, Err: fs.ErrExist}
+	}
+
+	parentIdx, err := fsys.ensureParentsExist(iname)
 	if err != nil {
-		return err
+		return &fs.PathError{Op: "create", Path: name, Err: err}
 	}
-	fsys.walkstuff.put(name, order)
+
+	fsys.put(parentIdx, f{
+		name: iname,
+		time: timeFromStdlib(mtime),
+		mode: mode &^ fs.ModeType,
+		id:   id,
+		n1:   uint32(size),
+		n2:   uint32(size >> 32),
+		data: data,
+	})
+	fsys.cond.Broadcast()
 	return nil
 }
 
-// CreateErrorFile creates a regular file at the specified path,
-// which always returns the error of your choice on Read (but not on Close).
+// Symlink creates a symbolic link at the specified path.
 //
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateErrorFile(name string, order int64, err error, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	fn := func() (io.Reader, error) { return nil, err }
-	return fsys.createFile(name, order, fn, size, mode, mtime, sys)
-}
-
-// CreateReaderFile creates a regular file at the specified path, which implements the bare minimum of [fs.File],
-// with the Close() method stubbed out.
-//
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateReaderFile(name string, order int64, r func() (io.Reader, error), size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	return fsys.createFile(name, order, r, size, mode, mtime, sys)
-}
-
-// CreateReadCloserFile creates a regular file at the specified path, which implements the bare minimum of [fs.File].
-//
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateReadCloserFile(name string, order int64, r func() (io.ReadCloser, error), size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	return fsys.createFile(name, order, r, size, mode, mtime, sys)
-}
-
-// CreateReadCloserFile creates a regular file at the specified path, which additionally implements [io.ReaderAt].
-//
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-func (fsys *FS) CreateReaderAtFile(name string, order int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time, sys any) error {
-	return fsys.createFile(name, order, r, size, mode, mtime, sys)
-}
-
-// CreateSymlink creates a symbolic link at the specified path.
-//
-// In common with the other Create*() functions, any missing parent directories will be created implicitly.
-// Implicit directories can later be made explicit (only once) with [FS.CreateDir].
+// In common with the other new-file methods, any missing parent directories will be created implicitly.
+// Implicit directories can later be made explicit (only once) with [FS.Mkdir].
 //
 // The target argument must be an absolute path satisfying [fs.ValidPath].
-//
-// mode, mtime and sys are returned by the corresponding methods of [fs.FileInfo].
-// There is no need to set the the [fs.ModeSymlink] bit.
-func (fsys *FS) CreateSymlink(name, target string, mode fs.FileMode, mtime time.Time, sys any) error {
+func (fsys *FS) Symlink(name string, id int64, target string, mode fs.FileMode, mtime time.Time) error {
 	if !fs.ValidPath(name) || !fs.ValidPath(target) {
 		return fs.ErrInvalid
 	}
-	nu := &linkent{name: internpath.New(name),
-		target: internpath.New(target), mode: mode &^ fs.ModeType, modtime: timeFromStdlib(mtime), sys: sys}
-	return fsys.create(nu)
-}
 
-// NoMoreChildren prevents future Create*() calls from adding immediate children to the specified directory.
-// Future Create*() calls on this directory will fail with an error wrapping [fs.ErrPermission].
-//
-// NoMoreChildren unblocks any blocked [fs.ReadDirFile.ReadDir] calls on the specified directory.
-//
-// As a special case, if ".." is specified, then CreateDir on the root "." will be ignored.
-func (fsys *FS) NoMoreChildren(name string) error {
-	if name == ".." {
-		fsys.root.mu.Lock()
-		fsys.root.makeExplicit()
-		fsys.root.cond.Broadcast()
-		fsys.root.mu.Unlock()
-		return nil
+	iname := internpath.New(name)
+	fsys.mu.Lock()
+	defer fsys.mu.Unlock()
+	if fsys.done {
+		return &fs.PathError{Op: "link", Path: name, Err: fs.ErrClosed}
 	}
 
-	if !fs.ValidPath(name) {
-		return fs.ErrInvalid
+	if _, exist := fsys.lists[iname]; exist {
+		return &fs.PathError{Op: "link", Path: name, Err: fs.ErrExist}
 	}
 
-	at := fsys.root
-	for _, c := range components(internpath.New(name)) {
-		var err error
-		at, err = at.implicitSubdir(c)
-		if err != nil {
-			return err
-		}
+	parentIdx, err := fsys.ensureParentsExist(iname)
+	if err != nil {
+		return &fs.PathError{Op: "link", Path: name, Err: err}
 	}
-	at.noMore(false)
+
+	fsys.put(parentIdx, f{
+		name: iname,
+		time: timeFromStdlib(mtime),
+		mode: mode&^fs.ModeType | fs.ModeSymlink,
+		id:   id,
+		data: internpath.New(target),
+	})
+	fsys.cond.Broadcast()
 	return nil
 }
 
@@ -161,48 +237,8 @@ func (fsys *FS) NoMoreChildren(name string) error {
 //
 // NoMore unblocks any blocked [fs.ReadDirFile.ReadDir] calls.
 func (fsys *FS) NoMore() {
-	fsys.walkstuff.done()
-	fsys.root.mu.Lock()
-	fsys.root.makeExplicit()
-	fsys.root.cond.Broadcast()
-	fsys.root.mu.Unlock()
-	fsys.root.noMore(true)
-}
-
-type node interface {
-	fs.DirEntry
-	fs.FileInfo
-	pathname() internpath.Path
-	open() (fs.File, error)
-}
-
-func (fsys *FS) create(node node) error {
-	comps := components(node.pathname())
-	if len(comps) == 0 {
-		if dir, ok := node.(*dirent); ok {
-			return fsys.root.replace(dir)
-		} else {
-			return fs.ErrExist
-		}
-	}
-
-	at := fsys.root
-	for _, c := range comps[:len(comps)-1] {
-		var err error
-		at, err = at.implicitSubdir(c)
-		if err != nil {
-			return err
-		}
-	}
-	return at.put(node)
-}
-
-func components(name internpath.Path) []internpath.Path {
-	var c []internpath.Path
-	root := internpath.New(".")
-	for cur := name; cur != root; cur = cur.Dir() {
-		c = append(c, cur)
-	}
-	slices.Reverse(c)
-	return c
+	fsys.mu.Lock()
+	fsys.done = true
+	fsys.cond.Broadcast()
+	fsys.mu.Unlock()
 }

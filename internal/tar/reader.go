@@ -131,15 +131,15 @@ func populate(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt) error {
 			reader, logisize := readerFromSparseHoles(dataReader, off, hdr.Size, sph)
 			switch hdr.Typeflag {
 			case TypeReg, TypeGNUSparse:
-				fsys.CreateReaderAtFile(cleanPath, off, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
+				fsys.CreateReaderAt(cleanPath, off, reader, logisize, fs.FileMode(hdr.Mode), hdr.ModTime)
 			case TypeDir:
-				fsys.CreateDir(cleanPath, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
+				fsys.Mkdir(cleanPath, off, fs.FileMode(hdr.Mode), hdr.ModTime)
 			case TypeSymlink:
 				targ := path.Join(cleanPath, "..", hdr.Linkname)
 				if targ == ".." || strings.HasPrefix(targ, "../") {
 					targ = ""
 				}
-				fsys.CreateSymlink(cleanPath, targ, fs.FileMode(hdr.Mode), hdr.ModTime, nil)
+				fsys.Symlink(cleanPath, off, targ, fs.FileMode(hdr.Mode), hdr.ModTime)
 			}
 
 			gnuLongLink, gnuLongName, paxHdrs = "", "", nil

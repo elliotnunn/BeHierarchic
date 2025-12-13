@@ -116,12 +116,9 @@ func New2(headerReader, dataReader io.ReaderAt) (fs.FS, error) {
 			path3 = path1 + "/named/" + filenameFrom(r.ne[1:][:nlen])
 		}
 
-		fsys.CreateReaderAtFile(path2, r.offset, sectionreader.Section(dataReader, r.offset, size), size, 0, time.Time{}, nil)
-		type a struct {
-			f io.SectionReader
-		}
+		fsys.CreateReaderAt(path2, r.offset, sectionreader.Section(dataReader, r.offset, size), size, 0, time.Time{})
 		if path3 != "" {
-			fsys.CreateSymlink(path3, path2, 0, time.Time{}, nil)
+			fsys.Symlink(path3, 0, path2, 0, time.Time{})
 		}
 	}
 	return fsys, nil

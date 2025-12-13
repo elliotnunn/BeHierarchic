@@ -119,6 +119,7 @@ func New2(headerReader, dataReader io.ReaderAt, size int64) (fs.FS, error) {
 	var tasks []task
 
 	for len(dir) >= 0 {
+		thisDirEntryOffset := eocdOffset - int64(len(dir))
 		if len(dir) < 46 || string(dir[:4]) != "PK\x01\x02" {
 			break
 		}
@@ -207,30 +208,30 @@ func New2(headerReader, dataReader io.ReaderAt, size int64) (fs.FS, error) {
 			if !fs.ValidPath(targ) {
 				targ = "."
 			}
-			fsys.CreateSymlink(name, targ, mode, mtime, nil)
+			fsys.Symlink(name, baseCorrection+loc, targ, mode, mtime)
 		} else if isdir {
-			fsys.CreateDir(name, mode, mtime, nil)
+			fsys.Mkdir(name, thisDirEntryOffset, mode, mtime)
 		} else {
 			tasks = append(tasks, task{loc, func() {
 				packedReader := &localHeaderReader{r: dataReader, offset: baseCorrection + loc, size: packed}
 				switch method {
 				case 0:
 					r := newChecksumReaderAt(packedReader, unpacked, crc32)
-					fsys.CreateReaderAtFile(name, loc+30, r, unpacked, mode, mtime, nil)
+					fsys.CreateReaderAt(name, baseCorrection+loc, r, unpacked, mode, mtime)
 				case 8:
 					readerFunc := func() (io.ReadCloser, error) {
 						r := flate.NewReader(io.NewSectionReader(packedReader, 0, packed))
 						return newChecksumReader(r, unpacked, crc32), nil
 					}
-					fsys.CreateReadCloserFile(name, loc+30, readerFunc, unpacked, mode, mtime, nil)
+					fsys.CreateReadCloser(name, baseCorrection+loc, readerFunc, unpacked, mode, mtime)
 				case 12:
 					readerFunc := func() (io.Reader, error) {
 						r := bzip2.NewReader(io.NewSectionReader(packedReader, 0, packed))
 						return newChecksumReader(r, unpacked, crc32), nil
 					}
-					fsys.CreateReaderFile(name, loc+30, readerFunc, unpacked, mode, mtime, nil)
+					fsys.CreateReader(name, baseCorrection+loc, readerFunc, unpacked, mode, mtime)
 				default:
-					fsys.CreateErrorFile(name, loc+30, fmt.Errorf("%w: %d", ErrAlgorithm, method), unpacked, mode, mtime, nil)
+					fsys.CreateError(name, baseCorrection+loc, fmt.Errorf("%w: %d", ErrAlgorithm, method), unpacked, mode, mtime)
 				}
 			}})
 		}

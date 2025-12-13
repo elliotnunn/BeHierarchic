@@ -98,8 +98,8 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 			meta.Locked = val[3]&1 != 0
 			adRead, adSize := meta.ForDir()
 
-			fsys.CreateDir(dirs[cnid], fs.FileMode(0), meta.ModTime, ino(cnid))
-			fsys.CreateReaderFile(dirs[cnid], -2*int64(cnid) /*unorderable*/, adRead, adSize, 0, meta.ModTime, ino(cnid))
+			fsys.Mkdir(dirs[cnid], fileID(0, 0, false, cnid), 0, meta.ModTime)
+			fsys.CreateReader(dirs[cnid], fileID(0, 0, true, cnid), adRead, adSize, 0, meta.ModTime)
 
 		case 2: // file
 			cnid := binary.BigEndian.Uint32(val[0x14:])
@@ -125,20 +125,11 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 
 			adReader, adSize := meta.WithResourceFork(rfReader, rfSize)
 
-			dfLoc, rfLoc := -2*int64(cnid)-1, -2*int64(cnid) // unorderable
-			if len(dfExtents) > 0 {
-				dfLoc = dfExtents[0]
-			}
-			if len(rfExtents) > 0 {
-				rfLoc = rfExtents[0]
-			}
+			dfID := fileID(binary.BigEndian.Uint16(val[0x4a:]), dfSize, false, cnid)
+			rfID := fileID(binary.BigEndian.Uint16(val[0x56:]), dfSize, true, cnid)
 
-			deferred[dfLoc] = func() {
-				fsys.CreateReaderAtFile(name, dfLoc, dfReader, dfSize, 0, meta.ModTime, ino(cnid))
-			}
-			deferred[rfLoc] = func() {
-				fsys.CreateReaderAtFile(appledouble.Sidecar(name), rfLoc, adReader, adSize, 0, meta.ModTime, ino(cnid))
-			}
+			deferred[dfID] = func() { fsys.CreateReaderAt(name, dfID, dfReader, dfSize, 0, meta.ModTime) }
+			deferred[rfID] = func() { fsys.CreateReaderAt(appledouble.Sidecar(name), rfID, adReader, adSize, 0, meta.ModTime) }
 		}
 	}
 
@@ -146,6 +137,20 @@ func New2(headerReader, dataReader io.ReaderAt) (retfs fs.FS, reterr error) {
 		deferred[offset]()
 	}
 	return fsys, nil
+}
+
+// fileID makes a durable 64-bit ID for fskeleton:
+// high [15b x zero] [16b x firstalloc/zero] [1b x isAppleDouble] [32b x CNID] low
+func fileID(firstBlock uint16, size int64, isAppleDouble bool, cnid uint32) int64 {
+	if size == 0 {
+		firstBlock = 0
+	}
+	n := int64(firstBlock) << 33
+	if isAppleDouble {
+		n |= 1 << 32
+	}
+	n |= int64(cnid)
+	return n
 }
 
 // For chasing through the extents overflow file

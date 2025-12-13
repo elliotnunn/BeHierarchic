@@ -81,56 +81,42 @@ func oldFormat(fsys *fskeleton.FS, headerReader, dataReader io.ReaderAt, offset,
 		meta.Flags = binary.BigEndian.Uint16(hdr.FinderInfo[8:])
 
 		if hdr.RAlgo.isDirStart() {
-			fsys.CreateDir(name, 0, meta.ModTime, nil)
+			fsys.Mkdir(name, fileID(offset, false), 0, meta.ModTime)
 			adfile, adlen := meta.ForDir()
-			fsys.CreateReaderFile(appledouble.Sidecar(name), offset, adfile, adlen, 0, meta.ModTime, nil)
+			fsys.CreateReader(appledouble.Sidecar(name), fileID(offset, true), adfile, adlen, 0, meta.ModTime)
 		} else { // file
 			copy(meta.Type[:], hdr.FinderInfo[:])
 			copy(meta.Creator[:], hdr.FinderInfo[4:])
 			rOffset := int64(offset + 112)
-			rOrder := rOffset
-			if hdr.RUnpackLen == 0 {
-				rOrder = -2*offset - 1
-			}
 			if hdr.RAlgo == 0 {
 				adfile, adsize := meta.WithResourceFork(io.NewSectionReader(dataReader, rOffset, int64(hdr.RUnpackLen)), int64(hdr.RUnpackLen))
-				fsys.CreateReaderAtFile(appledouble.Sidecar(name),
-					rOrder,
-					adfile,               // reader
-					adsize,               // size
-					0, meta.ModTime, nil) // mode, mtime, sys
+				fsys.CreateReaderAt(appledouble.Sidecar(name),
+					fileID(offset, true),
+					adfile, adsize, 0, meta.ModTime)
 			} else {
 				adfile, adsize := meta.WithSequentialResourceFork(func() (io.ReadCloser, error) {
 					raw := io.NewSectionReader(dataReader, rOffset, int64(hdr.RPackLen))
 					return readerFor(hdr.RAlgo, "", hdr.RUnpackLen, hdr.RCRC, raw)
 				}, int64(hdr.RUnpackLen))
-				fsys.CreateReadCloserFile(appledouble.Sidecar(name),
-					rOrder,
-					adfile,               // reader
-					adsize,               // size
-					0, meta.ModTime, nil) // mode, mtime, sys
+				fsys.CreateReadCloser(appledouble.Sidecar(name),
+					fileID(offset, true),
+					adfile, adsize, 0, meta.ModTime)
 			}
 
 			dOffset := offset + 112 + int64(hdr.RPackLen)
-			dOrder := dOffset
-			if hdr.DUnpackLen == 0 {
-				dOrder = -2 * offset
-			}
 			if hdr.DAlgo == 0 {
-				fsys.CreateReaderAtFile(name,
-					dOrder,
+				fsys.CreateReaderAt(name,
+					fileID(offset, false),
 					sectionreader.Section(dataReader, dOffset, int64(hdr.DUnpackLen)), // readerAt
-					int64(hdr.DUnpackLen), // size
-					0, meta.ModTime, nil)  // mode, mtime, sys
+					int64(hdr.DUnpackLen), 0, meta.ModTime)
 			} else {
-				fsys.CreateReadCloserFile(name,
-					dOrder,
+				fsys.CreateReadCloser(name,
+					fileID(offset, false),
 					func() (io.ReadCloser, error) {
 						raw := io.NewSectionReader(dataReader, dOffset, int64(hdr.DPackLen))
 						return readerFor(hdr.DAlgo, "", hdr.DUnpackLen, hdr.DCRC, raw)
 					}, // reader
-					int64(hdr.DUnpackLen), // size
-					0, meta.ModTime, nil)  // mode, mtime, sys
+					int64(hdr.DUnpackLen), 0, meta.ModTime)
 			}
 		}
 	}
