@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
 	"io/fs"
+	"iter"
 	"log/slog"
 	"math/bits"
 	"runtime"
@@ -18,16 +20,16 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/elliotnunn/BeHierarchic/internal/fileid"
+	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
 const (
 	// meant to be eye-catching, and must never be <= 8 (see appendint)
-	offsetByte  = 0xcc // appended to a dbkey ~ "offset follows, value is data"
-	sizeByte    = 0x55 // appended to a dbkey ~ "value is a size"
-	inodeByte   = 0xfe // precedes a onekey ~ "inode + namehash follows"
-	unicodeByte = 0xff // flanks onekey, never part of valid UTF-8 ~ "filename"
-	eofByte     = 0xee // appended twice to a dbvalue ~ EOF
+	offsetByte = 0xcc // appended to a dbkey ~ "offset follows, value is data"
+	sizeByte   = 0x55 // appended to a dbkey ~ "value is a size"
+	eofByte    = 0xee // appended twice to a dbvalue ~ EOF
 )
 
 func (fsys *FS) setupDB(dsn string) {
@@ -261,34 +263,53 @@ func (fsys *FS) Prefetch() {
 	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1), &progress)
 }
 
+type selfWalking interface {
+	Walk(waitFull bool) iter.Seq2[string, fs.FileMode]
+}
+
 func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 	if o.name != internpath.New(".") {
 		panic("this should be a filesystem!!")
 	}
 
-	type encounter struct {
-		kind fs.FileMode
-		name string
-	}
-	ch := make(chan encounter)
-
 	slog.Info("prefetchDir", "path", o)
+
+	ch := make(chan internpath.Path)
 	go func() {
-		for name, kind := range Walk(o.fsys, true) {
-			ch <- encounter{kind, name}
+		defer close(ch)
+		// prepare a list of files using a method that depends on the kind of filesystem
+		if selfWalking, ok := o.fsys.(selfWalking); ok {
+			for pathname, kind := range selfWalking.Walk(true /*exhaustive*/) {
+				if kind.IsRegular() {
+					ch <- internpath.New(pathname)
+				}
+			}
+		} else {
+			var list []internpath.Path
+			fs.WalkDir(o.fsys, ".", func(pathname string, d fs.DirEntry, err error) error {
+				if d.Type().IsRegular() {
+					list = append(list, internpath.New(pathname))
+				}
+				return nil
+			})
+			slices.SortStableFunc(list, func(a, b internpath.Path) int {
+				ao, bo := o, o
+				ao.name, bo.name = a, b
+				apos, bpos := ao.identify(), bo.identify()
+				return bytes.Compare(apos[:], bpos[:])
+			})
+			for _, p := range list {
+				ch <- p
+			}
 		}
-		close(ch)
 	}()
 
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Go(func() {
-			for e := range ch {
-				kind, name := e.kind, e.name
-				if kind != 0 { // regular files only
-					continue
-				}
-				o := o.ShallowJoin(name)
+			for name := range ch {
+				o := o
+				o.name = name
 
 				rawstat, rawerr := o.rawStat()
 				if rawerr != nil {
@@ -382,6 +403,46 @@ func read1int(buf []byte) (int64, bool) {
 	return n, true
 }
 
+func (o path) identify() (ret fileid.ID) {
+	var id fileid.ID
+
+	if fsk, ok := o.fsys.(*fskeleton.FS); ok {
+		stat, err := fsk.Lstat(o.name.String())
+		if err == nil {
+			idnum := uint64(stat.(fskeleton.FileInfo).ID())
+			binary.BigEndian.PutUint64(id[len(id)-8:], idnum)
+			return id
+		}
+	}
+
+	if o.fsys == o.container.root {
+		o.container.iMu.RLock()
+		var ok bool
+		id, ok = o.container.idCache[o.name]
+		o.container.iMu.RUnlock()
+		if ok {
+			return id
+		}
+		id, _ = fileid.Get(o.fsys, o.name.String())
+	}
+
+	// Fall back on hashing the filename
+	if id == *new(fileid.ID) {
+		var h xxhash.Digest
+		// could optimise by adding a WriteTo method to internpath.Path
+		h.WriteString(o.name.String())
+		binary.BigEndian.PutUint64(id[len(id)-8:], h.Sum64())
+	}
+
+	if o.fsys == o.container.root {
+		o.container.iMu.Lock()
+		o.container.idCache[o.name] = id
+		o.container.iMu.Unlock()
+	}
+
+	return id
+}
+
 // dbkey creates a key for a file using a series of [onekey] calls
 // - remember to append offsetByte or sizeByte
 // - durable across appends
@@ -400,62 +461,15 @@ func dbkey(o path) []byte {
 
 	var accum []byte
 	for _, o := range warps {
-		accum = onekey(accum, o)
+		id := o.identify()
+		slice := id[:]
+		for len(slice) > 0 && slice[0] == 0 {
+			slice = slice[1:]
+		}
+		accum = append(accum, byte(len(slice)))
+		accum = append(accum, slice...)
 	}
 	return accum
-}
-
-// onekey appends bytes identifying one path-within-a-filesystem
-// - must be unique among paths in that filesystem
-// - must not start with byte(offsetByte), or it will clash with other data
-// - should sort in an order somewhat corresponding to the expected tree walk order
-// - should be as short as possible
-func onekey(buf []byte, o path) []byte {
-	bypath := func() []byte {
-		buf = append(buf, unicodeByte) // never used in UTF-8
-		buf = append(buf, o.name.String()...)
-		buf = append(buf, unicodeByte)
-		return buf
-	}
-
-	byinode := func(i uint64) []byte {
-		buf = append(buf, inodeByte)
-		buf = appendint(buf, int64(i))
-		var hash xxhash.Digest // salt k with hashed name to avoid inode number collisions
-		hash.WriteString(o.name.String())
-		buf = appendint(buf, int64(hash.Sum64()&0xffffffff))
-		return buf
-	}
-
-	if o.fsys == o.container.root {
-		o.container.iMu.RLock()
-		ino, ok := o.container.ino[o.name]
-		o.container.iMu.RUnlock()
-		if ok {
-			return byinode(ino)
-		}
-	}
-
-	if s, err := o.rawStat(); err == nil {
-		if s, ok := s.(interface{ ID() int64 }); ok {
-			buf = appendint(buf, s.ID())
-			return buf
-		}
-
-		if o.fsys == o.container.root {
-			if ino, ok := inodeNum(s); ok {
-				o.container.iMu.Lock()
-				if o.container.ino == nil {
-					o.container.ino = make(map[internpath.Path]uint64)
-				}
-				o.container.ino[o.name] = ino
-				o.container.iMu.Unlock()
-				return byinode(ino)
-			}
-		}
-	}
-
-	return bypath()
 }
 
 var errNotFound = errors.New("internal incompleteness error")

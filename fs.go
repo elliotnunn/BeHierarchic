@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/elliotnunn/BeHierarchic/internal/fileid"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
@@ -27,8 +28,8 @@ type FS struct {
 
 	db *pebble.DB
 
-	iMu sync.RWMutex
-	ino map[internpath.Path]uint64
+	iMu     sync.RWMutex
+	idCache map[internpath.Path]fileid.ID
 
 	scoreGood, scoreBad int64
 
@@ -58,6 +59,7 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 		root:    fsys,
 		mounts:  make(map[thinPath]*mount),
 		reverse: make(map[fs.FS]thinPath),
+		idCache: make(map[internpath.Path]fileid.ID),
 		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 	fsys2.setupDB(cachePath)
