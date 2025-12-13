@@ -30,7 +30,6 @@ func New() *FS {
 }
 
 func (fsys *FS) put(parentIdx uint32, f f) uint32 {
-	fsys.sanityCheck()
 	childIdx := uint32(len(fsys.files))
 	fsys.files = append(fsys.files, f)
 	fsys.lists[f.name] = childIdx
@@ -41,7 +40,6 @@ func (fsys *FS) put(parentIdx uint32, f f) uint32 {
 		fsys.files[fsys.files[parentIdx].n2].sibling = childIdx // sibling
 		fsys.files[parentIdx].n2 = childIdx                     // last child
 	}
-	fsys.sanityCheck()
 	return childIdx
 }
 
