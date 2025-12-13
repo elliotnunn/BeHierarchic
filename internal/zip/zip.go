@@ -249,9 +249,6 @@ type localHeaderReader struct {
 	size   int64
 	once   sync.Once
 	err    error
-	crcMu  sync.Mutex
-	crc32  uint32
-	crcof  int64
 }
 
 func (g *localHeaderReader) ReadAt(p []byte, off int64) (int, error) {
