@@ -6,7 +6,11 @@
 
 package manual
 
-import "unsafe"
+import (
+	"math/bits"
+	"sync"
+	"unsafe"
+)
 
 // Provides versions of New and Free when cgo is not available (e.g. cross
 // compilation).
@@ -17,9 +21,8 @@ func New(purpose Purpose, n uintptr) Buf {
 		return Buf{}
 	}
 	recordAlloc(purpose, n)
-	slice := make([]byte, n)
 	return Buf{
-		data: unsafe.Pointer(unsafe.SliceData(slice)),
+		data: pools[sizeClass(n)].Get().(unsafe.Pointer),
 		n:    n,
 	}
 }
@@ -27,5 +30,33 @@ func New(purpose Purpose, n uintptr) Buf {
 // Free frees the specified slice. It has to be exactly the slice that was
 // returned by New.
 func Free(purpose Purpose, b Buf) {
+	if b.data == nil {
+		return
+	}
+
+	// Clear the block for consistency with the cgo implementation (which uses calloc)
+	clear(unsafe.Slice((*byte)(b.data), b.n))
+
 	recordFree(purpose, b.n)
+	pools[sizeClass(b.n)].Put(b.data)
+}
+
+var pools [bits.UintSize]sync.Pool // pools[n] is for allocs of size 1 << n
+
+func init() {
+	for i := range pools {
+		allocSize := 1 << i
+		pools[i].New = func() any {
+			// Boxing an unsafe.Pointer into an interface does not require an allocation
+			return unsafe.Pointer(unsafe.SliceData(make([]byte, allocSize)))
+		}
+	}
+}
+
+// sizeClass determines the smallest n such that 1 << n >= size
+func sizeClass(size uintptr) int {
+	if size == 0 {
+		panic("zero size should never get through New")
+	}
+	return bits.Len(uint(size - 1))
 }
