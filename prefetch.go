@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/pebble/v2"
@@ -226,39 +227,46 @@ func (fsys *FS) Prefetch() {
 
 	t := time.Now()
 	var progress atomic.Int64
+	printProgress := func() {
+		var mem runtime.MemStats
+		runtime.ReadMemStats(&mem)
+		ram := mem.HeapInuse + mem.StackInuse
+		disk := progress.Load()
+		fsys.rMu.RLock()
+		mounts := len(fsys.reverse)
+		fsys.rMu.RUnlock()
+		slog.Info("prefetchProgress",
+			"t", time.Since(t).Truncate(time.Second).String(),
+			"mounts", thouSep(int64(mounts)),
+			"archiveBytes", thouSep(disk),
+			"ramPerArchive", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 3, 64),
+			"cacheHitBytes", thouSep(atomic.LoadInt64(&fsys.scoreGood)),
+			"cacheMissBytes", thouSep(atomic.LoadInt64(&fsys.scoreBad)),
+		)
+	}
+
 	stopTick := make(chan struct{})
 	go func() {
 		tick := time.Tick(time.Second * 5)
-		var mem runtime.MemStats
 		for {
 			select {
 			case <-tick:
-				runtime.ReadMemStats(&mem)
-				ram := mem.HeapInuse + mem.StackInuse
-				disk := progress.Load()
-				slog.Info("prefetchProgress",
-					"archiveBytes", disk,
-					"archiveBytesPerSec", disk/int64(time.Since(t)/time.Second),
-					"heapBytes", mem.HeapInuse,
-					"stackBytes", mem.StackInuse,
-					"ramArchiveRatio", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 4, 64),
-				)
+				printProgress()
 			case <-stopTick:
 				return
 			}
 		}
 	}()
 
-	defer func() {
-		close(stopTick)
-		if fsys.db != nil {
-			fsys.db.Flush()
-		}
-		slog.Info("prefetchStop", "duration", time.Since(t).Truncate(time.Second).String())
-		slog.Info("prefetchSummary", "cachedBytes", atomic.LoadInt64(&fsys.scoreGood), "uncachedBytes", atomic.LoadInt64(&fsys.scoreBad))
-	}()
-
+	// the time consuming part
 	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1), &progress)
+
+	close(stopTick)
+	if fsys.db != nil {
+		fsys.db.Flush()
+	}
+	printProgress()
+	slog.Info("prefetchStop")
 }
 
 type selfWalking interface {
@@ -502,3 +510,15 @@ func bufJoin(p1 *[]byte, off1 *int64, p2 []byte, off2 int64) bool {
 
 func bufEnd(p []byte, off int64) int64   { return off + int64(len(p)) }
 func bufStart(p []byte, end int64) int64 { return end - int64(len(p)) }
+
+func thouSep(n int64) string {
+	var s []byte
+	s = strconv.AppendInt(s, n, 10)
+	nsep := (len(bytes.TrimLeft(s, "-")) - 1) / 3
+	s = append(s, make([]byte, nsep)...)
+	for i, from, to := 0, len(s)-nsep-3, len(s)-3; i < nsep; i, from, to = i+1, from-3, to-4 {
+		copy(s[to:][:3], s[from:])
+		s[to-1] = '_'
+	}
+	return unsafe.String(&s[0], len(s))
+}
