@@ -15,13 +15,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
-
-	"github.com/bmatcuk/doublestar/v4"
 )
 
 type Handler struct {
@@ -94,9 +90,6 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	if err != nil {
 		return status, err
 	}
-	if path.Base(reqPath) == "besearch" {
-		return h.searchPage(w, r)
-	}
 	f, err := h.FS.Open(reqPath)
 	if err != nil {
 		return http.StatusNotFound, err
@@ -107,7 +100,8 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 		return http.StatusNotFound, err
 	}
 	if fi.IsDir() {
-		return dirList(w, f.(fs.ReadDirFile), reqPath)
+		http.Redirect(w, r, r.URL.Path+"/", http.StatusSeeOther)
+		return 0, nil
 	}
 	if _, ok := f.(io.ReadSeeker); !ok {
 		slog.Error("neitherDirNorSeekReader", "type", reflect.TypeOf(f), "path", reqPath)
@@ -122,104 +116,6 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	http.ServeContent(w, r, "", fi.ModTime(), f.(io.ReadSeeker))
 	return 0, nil
 }
-
-func (h *Handler) searchPage(w http.ResponseWriter, r *http.Request) (status int, err error) {
-	reqPath, _, _ := pathConvert(r.URL.Path)
-	reqPath = path.Dir(reqPath)
-	pattern := r.URL.Query()
-	glob := pattern.Get("q")
-	if glob == "" {
-		return http.StatusBadRequest, errors.New("no query")
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, "<!doctype html>\n")
-	fmt.Fprintf(w, "<meta name=\"viewport\" content=\"width=device-width\">\n")
-	fmt.Fprint(w, "<h1>BeHierarchic Search</h1>")
-	fmt.Fprint(w, "<h2>")
-	breadcrumb(w, reqPath)
-	fmt.Fprint(w, "</h2>")
-	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" value="%s" size="50" placeholder="Glob pattern e.g. **/*.sit"><button type="submit">Search</button></form>`,
-		urlenc(path.Join(reqPath, "besearch")), htmlReplacer.Replace(glob))
-	fmt.Fprintf(w, "<pre>\n")
-
-	sub, err := fs.Sub(h.FS, reqPath)
-	if err != nil {
-		return http.StatusBadRequest, err
-	}
-
-	err = doublestar.GlobWalk(sub, glob, func(pathname string, d fs.DirEntry) error {
-		if d == nil || d.IsDir() {
-			pathname += "/"
-		}
-		fmt.Fprintf(w, "<a href=\"%s\">%s</a>\n", urlenc(pathname), htmlReplacer.Replace(pathname))
-		return nil
-
-	}, doublestar.WithCaseInsensitive())
-	if err != nil {
-		return http.StatusBadRequest, err // bad glob
-	}
-	fmt.Fprintf(w, "</pre>\n")
-	return 0, nil
-}
-
-func breadcrumb(w io.Writer, path string) {
-	fmt.Fprint(w, `<a href="/">/</a>`)
-	if path != "." {
-		steps := strings.Split(path, "/")
-		for i := range steps {
-			url := strings.Join(steps[:i+1], "/")
-			fmt.Fprintf(w, "<a href=\"/%s\">%s</a>/", urlenc(url), htmlReplacer.Replace(steps[i]))
-		}
-	}
-}
-
-func urlenc(s string) string {
-	url := url.URL{Path: s}
-	return url.String()
-}
-
-func dirList(w http.ResponseWriter, d fs.ReadDirFile, pathname string) (status int, err error) {
-	list, err := d.ReadDir(-1)
-	if err != nil {
-		return http.StatusInternalServerError, err
-	}
-
-	slices.SortFunc(list, func(i, j fs.DirEntry) int { return strings.Compare(i.Name(), j.Name()) })
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, "<!doctype html>\n")
-	fmt.Fprintf(w, "<meta name=\"viewport\" content=\"width=device-width\">\n")
-	fmt.Fprint(w, "<h1>BeHierarchic</h1>")
-	fmt.Fprint(w, "<h2>")
-	breadcrumb(w, pathname)
-	fmt.Fprint(w, "</h2>")
-	fmt.Fprintf(w, `<form action="/%s" method="GET"><input type="text" name="q" size="50" placeholder="Glob pattern e.g. **/*.sit"><button type="submit">Search</button></form>`,
-		urlenc(path.Join(pathname, "besearch")))
-	fmt.Fprintf(w, "<pre>\n")
-	for _, de := range list {
-		name := de.Name()
-		if de.IsDir() {
-			name += "/"
-		}
-		// name may contain '?' or '#', which must be escaped to remain
-		// part of the URL path, and not indicate the start of a query
-		// string or fragment.
-		fmt.Fprintf(w, "<a href=\"/%s\">%s</a>\n", urlenc(path.Join(pathname, name)), htmlReplacer.Replace(name))
-	}
-	fmt.Fprintf(w, "</pre>\n")
-	return 0, nil
-}
-
-var htmlReplacer = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	// "&#34;" is shorter than "&quot;".
-	`"`, "&#34;",
-	// "&#39;" is shorter than "&apos;" and apos was not in HTML until HTML5.
-	"'", "&#39;",
-)
 
 func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) (status int, err error) {
 	reqPath, status, err := pathConvert(r.URL.Path)
