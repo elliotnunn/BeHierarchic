@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"log/slog"
 	gopath "path"
-	"strings"
 	"sync"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -68,10 +67,7 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 
 func (o path) getArchive(needKnow, needFS bool) (bool, path) {
 	// Do not probe resources in a resource fork: expensive and unproductive
-	o.container.rMu.RLock()
-	inResourceFork := strings.HasPrefix(o.container.reverse[o.fsys].name.Base(), "._")
-	o.container.rMu.RUnlock()
-	if inResourceFork {
+	if o.isInResourceForkFS() {
 		return false, path{}
 	}
 
@@ -182,4 +178,14 @@ notEvenAFile:
 	// small chance that another instance of this function raced to get this mount structure
 	b.data = fsysGeneratorNop
 	return false, path{}
+}
+
+func (o path) isInResourceForkFS() bool {
+	// this code is optimised to avoid an allocation from internpath.Path.Base
+	o.container.rMu.RLock()
+	tainer := o.container.reverse[o.fsys].name
+	o.container.rMu.RUnlock()
+	var tbuf [128]byte
+	tainer.PutBase(tbuf[:])
+	return string(tbuf[:2]) == "._"
 }
