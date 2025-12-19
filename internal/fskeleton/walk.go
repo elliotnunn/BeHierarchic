@@ -4,6 +4,7 @@
 package fskeleton
 
 import (
+	"fmt"
 	"io/fs"
 	"iter"
 )
@@ -12,8 +13,8 @@ import (
 // This implies that directories are listed before their contents.
 //
 // It is optional to block until a call to [FS.NoMore].
-func (fsys *FS) Walk(waitFull bool) iter.Seq2[string, fs.FileMode] {
-	return func(yield func(string, fs.FileMode) bool) {
+func (fsys *FS) Walk(waitFull bool) iter.Seq2[fmt.Stringer, fs.FileMode] {
+	return func(yield func(fmt.Stringer, fs.FileMode) bool) {
 		i := 0
 		fsys.mu.Lock()
 		for {
@@ -22,7 +23,7 @@ func (fsys *FS) Walk(waitFull bool) iter.Seq2[string, fs.FileMode] {
 				f := fsys.files[i]
 				i++
 				fsys.mu.Unlock()
-				if !yield(f.name.String(), f.mode.Type()) {
+				if !yield(f.name, f.mode.Type()) {
 					return
 				}
 				fsys.mu.Lock()

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"io"
 	"io/fs"
-	"iter"
 	"log/slog"
 	"math/bits"
 	"runtime"
@@ -269,10 +268,6 @@ func (fsys *FS) Prefetch() {
 	slog.Info("prefetchStop")
 }
 
-type selfWalking interface {
-	Walk(waitFull bool) iter.Seq2[string, fs.FileMode]
-}
-
 func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 	if o.name != internpath.New(".") {
 		panic("this should be a filesystem!!")
@@ -287,7 +282,7 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 		if selfWalking, ok := o.fsys.(selfWalking); ok {
 			for pathname, kind := range selfWalking.Walk(true /*exhaustive*/) {
 				if kind.IsRegular() {
-					ch <- internpath.New(pathname)
+					ch <- pathname.(internpath.Path)
 				}
 			}
 		} else {

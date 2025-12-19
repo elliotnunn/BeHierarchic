@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"io/fs"
 	"iter"
@@ -92,17 +93,20 @@ func (o path) deepWalk() iter.Seq2[path, fs.FileMode] {
 	}
 }
 
+type selfWalking interface {
+	Walk(waitFull bool) iter.Seq2[fmt.Stringer, fs.FileMode]
+}
+
 func (o path) flatWalk() iter.Seq2[path, fs.FileMode] {
 	return func(yield func(path, fs.FileMode) bool) {
 		if selfWalking, ok := o.fsys.(selfWalking); ok {
-			prefix := o.name.String()
-			for pathname, kind := range selfWalking.Walk(false /*not exhaustive*/) {
-				if rel(pathname, prefix) == "" {
-					continue
-				}
-				ok := yield(path{o.container, o.fsys, internpath.New(pathname)}, kind)
-				if !ok {
-					return
+			for stringer, kind := range selfWalking.Walk(false /*not exhaustive*/) {
+				pathname := stringer.(internpath.Path)
+				if pathname.IsWithin(o.name) {
+					ok := yield(path{o.container, o.fsys, pathname}, kind)
+					if !ok {
+						return
+					}
 				}
 			}
 		} else {

@@ -124,6 +124,21 @@ func (p Path) Dir() Path {
 	return New(".")
 }
 
+func (p Path) IsWithin(parent Path) bool {
+	if isnil(p.handle) {
+		return true
+	}
+	for {
+		if p == parent {
+			return true
+		} else if isnil(p.handle) {
+			return false
+		} else {
+			p = p.Dir()
+		}
+	}
+}
+
 // some special cases to save yet more RAM
 var (
 	hasDotUnderscorePrefix unique.Handle[string]
