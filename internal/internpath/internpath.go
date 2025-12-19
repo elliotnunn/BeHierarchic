@@ -72,6 +72,52 @@ func (p Path) String() string {
 	return b.String()
 }
 
+// PutBase copies the filename into the supplied buffer and returns the length,
+// or 0 if the buffer was too small.
+func (p Path) PutBase(buf []byte) int {
+	var (
+		handle                              = p.handle
+		prependDotUnderscore, appendSpecial bool
+	)
+
+	for !isnil(handle) {
+		structure := handle.Value()
+		switch structure.base {
+		case hasDotUnderscorePrefix:
+			prependDotUnderscore = true
+			handle = structure.dir
+			continue
+		case hasSpecialSuffix:
+			appendSpecial = true
+			handle = structure.dir
+			continue
+		}
+
+		main := structure.base.Value()
+
+		n := len(main)
+		if prependDotUnderscore {
+			n += len("._")
+		}
+		if appendSpecial {
+			n += len("◆")
+		}
+		if n > len(buf) {
+			return 0
+		}
+
+		if prependDotUnderscore {
+			buf = buf[copy(buf, "._"):]
+		}
+		buf = buf[copy(buf, main):]
+		if appendSpecial {
+			copy(buf, "◆")
+		}
+		return n
+	}
+	return copy(buf, ".")
+}
+
 // Base returns the filename, a performant shortcut for path.Base(p.String())
 func (p Path) Base() string {
 	var (

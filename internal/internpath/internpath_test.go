@@ -29,6 +29,12 @@ func TestRoundTrip(t *testing.T) {
 				t.Errorf("New(%q).String(): wanted %q, got %q", want, want, got)
 			}
 
+			gotbuf := make([]byte, 128)
+			n := New(want).PutBase(gotbuf)
+			if string(gotbuf[:n]) != New(want).Base() {
+				t.Errorf("New(%q).Append(...): wanted %q, got %q", want, New(want).Base(), string(gotbuf[:n]))
+			}
+
 			gotbase := New(want).Base()
 			wantbase := gopath.Base(got)
 			if gotbase != wantbase {
