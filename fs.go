@@ -66,7 +66,7 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 	return fsys2
 }
 
-func (o path) getArchive(needFS bool) (bool, path) {
+func (o path) getArchive(needKnow, needFS bool) (bool, path) {
 	// Do not probe resources in a resource fork: expensive and unproductive
 	o.container.rMu.RLock()
 	inResourceFork := strings.HasPrefix(o.container.reverse[o.fsys].name.Base(), "._")
@@ -80,6 +80,22 @@ func (o path) getArchive(needFS bool) (bool, path) {
 		case ".crdownload", ".part":
 			return false, path{}
 		}
+	}
+
+	if !needKnow {
+		o.container.mMu.RLock()
+		b, ok := o.container.mounts[o.Thin()]
+		o.container.mMu.RUnlock()
+		if !ok || b == nil {
+			return false, path{}
+		}
+		b.lock.Lock()
+		fsys, ok := b.data.(fs.FS)
+		b.lock.Unlock()
+		if !ok {
+			return false, path{}
+		}
+		return true, path{o.container, fsys, internpath.New(".")}
 	}
 
 	locksets := [...]struct{ lock, unlock func() }{
