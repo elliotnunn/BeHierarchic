@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unsafe"
 
 	_ "net/http/pprof"
 
@@ -114,31 +116,18 @@ func dirPage(fsys *FS, w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func rel(child, parent string) string {
-	if parent == child {
-		return "."
-	} else if parent == "." {
-		return child
-	} else if len(child) > len(parent) && child[:len(parent)] == parent && child[len(parent)] == '/' {
-		return child[len(parent)+1:]
-	} else {
-		return ""
-	}
-}
-
 func searchPage(fsys *FS, w http.ResponseWriter, r *http.Request) {
-	searchroot := strings.TrimSuffix(r.URL.Path, "/.glob.html")
-	searchroot = strings.TrimPrefix(searchroot, "/")
-	if searchroot == "" {
-		searchroot = "."
-	}
-
 	pattern := r.URL.Query().Get("q")
 	if !doublestar.ValidatePattern(pattern) {
 		http.Error(w, "not a valid glob pattern", http.StatusNotFound)
 		return
 	}
 
+	searchroot := strings.TrimSuffix(r.URL.Path, "/.glob.html")
+	searchroot = strings.TrimPrefix(searchroot, "/")
+	if searchroot == "" {
+		searchroot = "."
+	}
 	o, err := fsys.path(searchroot)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -160,34 +149,31 @@ func searchPage(fsys *FS, w http.ResponseWriter, r *http.Request) {
 
 	n := 0
 	t := time.Now()
-	for o, kind := range o.deepWalk() {
-		pathname := o.String()
-		relpath := rel(pathname, searchroot)
-		if relpath == "" || relpath == "." {
-			continue
-		}
-		matches := doublestar.MatchUnvalidated(pattern, relpath)
-		if !matches && kind.IsDir() {
-			matches = doublestar.MatchUnvalidated(pattern, relpath+"/")
-		}
-		if !matches {
-			continue
-		}
-		if kind.IsDir() {
-			relpath += "/"
-		}
 
-		fmt.Fprintf(w, `<a href="/%s">%s</a>`+"\n",
-			urlenc(pathname),
-			htmlReplacer.Replace(relpath))
+	// cutleft := len(searchroot) + 1
+	// if searchroot == "." {
+	// 	cutleft = 0
+	// }
 
+	bw := bufio.NewWriter(w)
+	defer bw.Flush()
+	for buf := range o.glob(pattern) {
+		bw.WriteString(`<a href="/`)
+		httpEscapePath(bw, buf)
+		bw.WriteString(`">`)
+		htmlReplacer.WriteString(bw, unsafeString(buf))
+		bw.WriteString(`</a>` + "\n")
 		n++
 		if n == 2000 {
-			fmt.Fprintln(w, "Limited results")
+			fmt.Fprintln(bw, "Limited results")
 			break
 		}
 	}
-	fmt.Fprintf(w, "%d results in %s", n, time.Since(t))
+	fmt.Fprintf(bw, "%d results in %s", n, time.Since(t))
+}
+
+func unsafeString(s []byte) string {
+	return unsafe.String(&s[0], len(s))
 }
 
 func breadcrumb(w io.Writer, path string) {
@@ -197,6 +183,20 @@ func breadcrumb(w io.Writer, path string) {
 		for i := range steps {
 			url := strings.Join(steps[:i+1], "/")
 			fmt.Fprintf(w, "<a href=\"/%s\">%s</a>/", urlenc(url), htmlReplacer.Replace(steps[i]))
+		}
+	}
+}
+
+func httpEscapePath(w io.ByteWriter, s []byte) {
+	for _, c := range s {
+		switch {
+		case 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' ||
+			c == '-' || c == '_' || c == '.' || c == '~' || c == '/':
+			w.WriteByte(c)
+		default:
+			w.WriteByte('%')
+			w.WriteByte("0123456789ABCDEF"[c/16])
+			w.WriteByte("0123456789ABCDEF"[c%16])
 		}
 	}
 }

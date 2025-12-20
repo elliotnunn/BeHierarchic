@@ -6,9 +6,13 @@ import (
 	"io/fs"
 	"iter"
 	gopath "path"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
+	"unsafe"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
@@ -248,3 +252,120 @@ func (fsys *FS) path(name string) (path, error) {
 }
 
 func (fsys *FS) rootPath() path { return path{fsys, fsys.root, internpath.New(".")} }
+
+// glob searches for paths matching a doublestar glob pattern.
+// Patterns ending with `/` match only directories, other patterns match files and directories.
+//
+// Returned buffers are only valid until the next iteration.
+// Effort is made to return results in a deterministic order.
+// Effort is made to be fast, although with questionable success.
+func (o path) glob(pattern string) iter.Seq[[]byte] {
+	return func(yield func([]byte) bool) {
+		ignorePrefix := 0
+		if str := o.String(); str != "." {
+			ignorePrefix = len(str) + 1
+		}
+		pattern, dironly := strings.CutSuffix(pattern, "/")
+
+		// Set up channels
+		const batch = 128 // tuned
+		nworker := runtime.GOMAXPROCS(-1)
+		cancel := make(chan struct{}) // channel sends should also wait on this channel
+
+		// The first goroutine sends batches of paths on these channels in a round-robin
+		pathChan := make([]chan [batch]path, nworker)
+		for i := range pathChan {
+			pathChan[i] = make(chan [batch]path, nworker)
+		}
+
+		// The second goroutine shares the yield() function in a round-robin
+		robinChan := make([]chan func([]byte) bool, nworker)
+		for i := range robinChan {
+			robinChan[i] = make(chan func([]byte) bool, 1)
+		}
+		robinChan[0] <- yield // start it out
+
+		// Acquire paths and batch them into generous work units
+		go func() {
+			pull, _ := iter.Pull2(o.deepWalk())
+
+			defer func() {
+				for wkr := range nworker {
+					close(pathChan[wkr])
+				}
+			}()
+
+			for {
+				for wkr := range nworker {
+					var batch [batch]path
+					for i := range len(batch) {
+						o, mode, ok := pull()
+						for ok && !mode.IsDir() && dironly {
+							o, mode, ok = pull()
+						}
+						if !ok {
+							select {
+							case <-cancel:
+								return
+							case pathChan[wkr] <- batch:
+								return
+							}
+						}
+						batch[i] = o
+					}
+					select {
+					case <-cancel:
+						return
+					case pathChan[wkr] <- batch:
+					}
+				}
+			}
+		}()
+
+		// Then make a buncha workers to... do the work
+		var wg sync.WaitGroup
+		for wkr := range nworker {
+			wg.Go(func() {
+				robinRecv, robinSend := robinChan[wkr], robinChan[(wkr+1)%nworker]
+				var renderers [batch]pathRenderer
+				for paths := range pathChan[wkr] {
+					var bufs [batch][]byte
+					for i, o := range paths {
+						if o.container == nil {
+							break
+						}
+
+						buf := renderers[i].Render(o)
+						if len(buf) <= ignorePrefix {
+							continue
+						}
+
+						relpath := buf[ignorePrefix:]
+						unsafeString := unsafe.String(&relpath[0], len(relpath))
+						if doublestar.MatchUnvalidated(pattern, unsafeString) {
+							bufs[i] = buf
+						}
+					}
+
+					yfunc, ok := <-robinRecv
+					if !ok { // one of our sibling workers has met an end condition
+						close(robinSend)
+						return
+					}
+					for _, buf := range bufs {
+						if buf == nil {
+							continue
+						}
+						if !yfunc(buf) {
+							close(cancel)
+							close(robinSend)
+							return
+						}
+					}
+					robinSend <- yfunc
+				}
+			})
+		}
+		wg.Wait()
+	}
+}
