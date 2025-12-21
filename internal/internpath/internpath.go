@@ -1,183 +1,187 @@
 // Package internpath provides facilities for canonicalizing ("interning") paths.
-// It pays special attention to saving memory when certain common filename prefix/suffixes are used.
+// The tradeoff for memory compactness is that paths, once created, are never freed.
 package internpath
 
 import (
+	"fmt"
+	"math/bits"
 	"strings"
-	"unique"
+	"sync"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
+
+/*
+Internal Note
+the structure of an entry in the large array is
+    (my offset) - (offset of parent) : le128
+    stringsize                       : le128
+	basename                         : ascii
+*/
 
 // The canonical representation of a path.
 // Satisfies the "comparable" interface, i.e. can be used as a map key or compared with "!=".
-type Path struct {
-	handle unique.Handle[path]
+type Path struct{ offAndFlag uint32 }
+
+func (p Path) offset() uint32 { return p.offAndFlag & (areaSize - 1) }
+func (p Path) isZero() bool   { return p.offAndFlag == 0 }
+func (p Path) vitals() (parent uint32, name string, ok bool) {
+	if p.offset() == 0 {
+		return 0, "", false
+	}
+	a := array[p.offset():]
+	a, parent = get[uint32](a)
+	a, length := get[int](a)
+	parent = p.offset() - parent
+	name = unsafe.String(&a[0], length)
+	return parent, name, true
 }
 
-type path struct {
-	dir  unique.Handle[path]
-	base unique.Handle[string]
+func (p *Path) setOffset(off uint32) { p.offAndFlag = p.offAndFlag&^(areaSize-1) | off&(areaSize-1) }
+func (p *Path) setFlag(flag uint32, to bool) {
+	p.offAndFlag &^= flag
+	if to {
+		p.offAndFlag |= flag
+	}
 }
 
-// Intern a path. It must satisfy [io/fs.ValidPath] or incorrect values will be returned by [Path.String] et al.
+var Root = Path{}
+
+const (
+	areaSize = 1 << 31
+	// prependFlag    = 1 << 31
+	// prependSpecial = "._"
+)
+
+var (
+	mu    sync.RWMutex
+	bump  uint32
+	array *[areaSize]byte
+)
+
+func Stats() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return fmt.Sprintf("%dMiB (blob=%d htab=%d htabFree=%d)",
+		(int(bump)+4*len(htab))>>20,
+		bump, 4*occupied, 4*(len(htab)-int(occupied)))
+}
+
+func MemoryUnknownToRuntime() int {
+	return int(bump)
+}
+
+func init() { // make a large mapping to hide the enormous allocation from the Go runtime
+	data, err := unix.Mmap(-1, 0, // fd and offset for an anonymous map
+		areaSize,
+		unix.PROT_READ|unix.PROT_WRITE,
+		unix.MAP_PRIVATE|unix.MAP_ANON)
+	if err != nil {
+		panic("mmap failed: " + err.Error())
+	}
+	array = (*[areaSize]byte)(data)
+
+	// root entry
+	putg(0) // offset
+	putg(1) // len
+	bump += uint32(copy(array[bump:], "."))
+}
+
+// New interns a path. It must satisfy [io/fs.ValidPath] or incorrect values will be returned by [Path.String] et al.
 func New(name string) Path {
-	var ret Path
-	return ret.Join(name)
+	path := Root
+	path, _ = path.join(name, true)
+	return path
 }
 
-// String returns the path that was passed to [New]
-func (p Path) String() string {
-	var (
-		strs                                []string
-		length                              int
-		handle                              = p.handle
-		prependDotUnderscore, appendSpecial bool
-	)
-
-	for !isnil(handle) {
-		structure := handle.Value()
-		switch structure.base {
-		case hasDotUnderscorePrefix:
-			prependDotUnderscore = true
-			handle = structure.dir
-			continue
-		case hasSpecialSuffix:
-			appendSpecial = true
-			handle = structure.dir
-			continue
-		}
-
-		s := structure.base.Value()
-		if prependDotUnderscore {
-			s = "._" + s
-		}
-		if appendSpecial {
-			s += "◆"
-		}
-		strs = append(strs, s)
-		length += len(s)
-		handle = structure.dir
-		prependDotUnderscore, appendSpecial = false, false
-	}
-	if len(strs) == 0 {
-		return "."
-	}
-	var b strings.Builder
-	b.Grow(length + max(0, len(strs)-1))
-	for i := len(strs) - 1; i >= 0; i-- {
-		b.WriteString(strs[i])
-		if i != 0 {
-			b.WriteByte('/')
-		}
-	}
-	return b.String()
+// Get finds a path that has already been interned with [New].
+func Get(name string) (path Path, ok bool) {
+	path = Root
+	return path.join(name, false)
 }
 
 // PutBase copies the filename into the supplied buffer and returns the length,
 // or 0 if the buffer was too small.
 func (p Path) PutBase(buf []byte) int {
-	var (
-		handle                              = p.handle
-		prependDotUnderscore, appendSpecial bool
-	)
-
-	for !isnil(handle) {
-		structure := handle.Value()
-		switch structure.base {
-		case hasDotUnderscorePrefix:
-			prependDotUnderscore = true
-			handle = structure.dir
-			continue
-		case hasSpecialSuffix:
-			appendSpecial = true
-			handle = structure.dir
-			continue
-		}
-
-		main := structure.base.Value()
-
-		n := len(main)
-		if prependDotUnderscore {
-			n += len("._")
-		}
-		if appendSpecial {
-			n += len("◆")
-		}
-		if n > len(buf) {
-			return 0
-		}
-
-		if prependDotUnderscore {
-			buf = buf[copy(buf, "._"):]
-		}
-		buf = buf[copy(buf, main):]
-		if appendSpecial {
-			copy(buf, "◆")
-		}
-		return n
+	a := array[p.offset():]
+	a, _ = get[uint64](a) // skip the offset field
+	a, l := get[int](a)
+	if l > len(buf) {
+		return 0
 	}
-	return copy(buf, ".")
+	return copy(buf, a[:l])
+}
+
+// PutBase copies the filename into the end of the supplied buffer and returns the length,
+// or 0 if the buffer was too small.
+func (p Path) PutBaseRight(buf []byte) int {
+	a := array[p.offset():]
+	a, _ = get[uint64](a) // skip the offset field
+	a, l := get[int](a)
+	if l > len(buf) {
+		return 0
+	}
+	return copy(buf[len(buf)-l:], a[:l])
+}
+
+// PutBase copies the filename into the end of the supplied buffer and returns the length,
+// or 0 if the buffer was too small.
+func (p Path) BaseLen() int {
+	a := array[p.offset():]
+	a, _ = get[uint64](a) // skip the offset field
+	_, l := get[int](a)
+	return l
 }
 
 // Base returns the filename, a performant shortcut for path.Base(p.String())
 func (p Path) Base() string {
-	var (
-		handle                              = p.handle
-		prependDotUnderscore, appendSpecial bool
-	)
+	a := array[p.offset():]
+	a, _ = get[uint64](a) // skip the offset field
+	a, l := get[int](a)
+	return unsafe.String(&a[0], l)
+}
 
-	for !isnil(handle) {
-		structure := handle.Value()
-		switch structure.base {
-		case hasDotUnderscorePrefix:
-			prependDotUnderscore = true
-			handle = structure.dir
-			continue
-		case hasSpecialSuffix:
-			appendSpecial = true
-			handle = structure.dir
-			continue
-		}
-
-		s := structure.base.Value()
-		if prependDotUnderscore {
-			s = "._" + s
-		}
-		if appendSpecial {
-			s += "◆"
-		}
-		return s
+// Base returns the filename, a performant shortcut for path.Base(p.String())
+func (p Path) String() string {
+	if p == Root {
+		return "."
 	}
-	return "."
+	accum := make([]byte, 16)
+	n := 0
+	slash := ""
+	for comp := p; comp != Root; comp = comp.Dir() {
+		shortfall := comp.BaseLen() + len(slash) + n - len(accum)
+		if shortfall > 0 {
+			newSize := max(16, 1<<bits.Len(uint(len(accum)+shortfall-1)))
+			accum2 := make([]byte, newSize)
+			copy(accum2[len(accum2)-n:], accum[len(accum)-n:])
+			accum = accum2
+		}
+		n += copy(accum[len(accum)-n-len(slash):], slash)
+		n += comp.PutBase(accum[len(accum)-n-comp.BaseLen():])
+		slash = "/"
+	}
+	return unsafe.String(&accum[len(accum)-n], n)
 }
 
 // Dir returns the containing directory
+//
+// Taking the Dir of root will return root.
 func (p Path) Dir() Path {
-	var (
-		handle = p.handle
-	)
-
-	for !isnil(handle) {
-		structure := handle.Value()
-		handle = structure.dir
-		switch structure.base {
-		case hasDotUnderscorePrefix:
-			continue
-		case hasSpecialSuffix:
-			continue
-		}
-		return Path{handle}
-	}
-	return New(".")
+	_, offoff := get[uint32](array[p.offset():])
+	p.setOffset(p.offset() - offoff)
+	return p
 }
 
 func (p Path) IsWithin(parent Path) bool {
-	if isnil(p.handle) {
+	if parent == Root {
 		return true
 	}
 	for {
 		if p == parent {
 			return true
-		} else if isnil(p.handle) {
+		} else if p == Root {
 			return false
 		} else {
 			p = p.Dir()
@@ -185,41 +189,36 @@ func (p Path) IsWithin(parent Path) bool {
 	}
 }
 
-// some special cases to save yet more RAM
-var (
-	hasDotUnderscorePrefix unique.Handle[string]
-	hasSpecialSuffix       = unique.Make("/")
-)
-
-func isnil[T comparable](h unique.Handle[T]) bool {
-	var zeroed unique.Handle[T]
-	return h == zeroed
-}
-
 // Join adds more components to a path, a performant shortcut for New(path.Join(p.String(), name))
 func (p Path) Join(name string) Path {
-	if name == "." || name == "" {
-		return p
-	}
-	for component := range strings.SplitSeq(name, "/") {
-		if component == ".." {
-			p = p.Dir()
-			continue
-		} else if component == "." {
-			continue
-		}
-
-		var prependDotUnderscore, appendSpecial bool
-
-		component, prependDotUnderscore = strings.CutPrefix(component, "._")
-		component, appendSpecial = strings.CutSuffix(component, "◆")
-		p = Path{unique.Make(path{dir: p.handle, base: unique.Make(component)})}
-		if prependDotUnderscore {
-			p = Path{unique.Make(path{dir: p.handle, base: hasDotUnderscorePrefix})}
-		}
-		if appendSpecial {
-			p = Path{unique.Make(path{dir: p.handle, base: hasSpecialSuffix})}
-		}
-	}
+	p, _ = p.join(name, true)
 	return p
+}
+
+func (p Path) join(name string, must bool) (Path, bool) {
+	mu.RLock()
+	haveWriteLock := false
+	defer func() {
+		if haveWriteLock {
+			mu.Unlock()
+		} else {
+			mu.RUnlock()
+		}
+	}()
+
+	for component := range strings.SplitSeq(name, "/") {
+		switch component {
+		case "..":
+			p = p.Dir()
+		case "", ".":
+			// go nowhere
+		default:
+			var ok bool
+			p, ok = singleTableOp(p.offset(), component, &haveWriteLock, must)
+			if !ok {
+				return Path{}, false
+			}
+		}
+	}
+	return p, true
 }

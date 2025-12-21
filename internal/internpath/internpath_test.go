@@ -1,6 +1,9 @@
 package internpath
 
 import (
+	"fmt"
+	"math/rand/v2"
+	"path"
 	gopath "path"
 	"strings"
 	"testing"
@@ -50,6 +53,38 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUnique(t *testing.T) {
+	cases := []string{
+		".",
+		"a/b",
+		"a/b/c",
+		"a◆/b",
+		"a/b◆",
+		"a◆/b◆",
+		"._a/b",
+		"a/._b",
+		"._a/._b",
+		"._a◆/b",
+		"a/._b◆",
+		"._a/b◆",
+	}
+
+	var firsttry []Path
+	for _, p := range cases {
+		firsttry = append(firsttry, New(p))
+	}
+
+	for i, p := range cases {
+		t.Run(p, func(t *testing.T) {
+			wantobj := firsttry[i]
+			gotobj := New(p)
+			if wantobj != gotobj {
+				t.Errorf("%s != %s", wantobj, gotobj)
+			}
+		})
+	}
+}
+
 func TestJoin(t *testing.T) {
 	cases := []string{
 		".+.",
@@ -71,4 +106,63 @@ func TestJoin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPara(t *testing.T) {
+	fnames := []string{
+		"a/b/c/d/e/f",
+		"a/b/c/d/e/ff",
+		"a/b/c/9999",
+		"a/b/c/d/e/f",
+		"a/b/c/d/e/ff",
+		"a/b/c/9999",
+		"a/b/c/d/e/f",
+		"a/b/c/d/e/ff",
+		"a/b/c/9999",
+		"a/b/c/d/e/f",
+		"a/b/c/d/e/ff",
+		"a/b/c/9999",
+	}
+	for range 100 {
+		for _, n := range fnames {
+			t.Run(n, func(t *testing.T) {
+				t.Parallel()
+				_ = New(n)
+			})
+		}
+	}
+}
+
+func TestLarge(t *testing.T) {
+	var paths []string
+	rnd := rand.NewPCG('e', 'n')
+	for range 1000000 {
+		s := fmt.Sprintf("%016x%016x", rnd.Uint64(), rnd.Uint64())
+		s = strings.ReplaceAll(s, "5", "/")
+		for strings.Contains(s, "//") {
+			s = strings.ReplaceAll(s, "//", "/")
+		}
+		s = strings.Trim(s, "/")
+		for ; s != "."; s = path.Dir(s) {
+			paths = append(paths, s)
+		}
+	}
+
+	vals := make(map[string]Path)
+	for _, s := range paths {
+		nu := New(s)
+		prev, ok := vals[s]
+		if ok && prev != nu {
+			t.Errorf("multiple pathobjects for %q: offset=%#x offset=%#x", s, nu.offset(), prev.offset())
+		}
+		vals[s] = nu
+	}
+
+	for s, v := range vals {
+		nu := New(s)
+		if nu != v {
+			t.Errorf("failed to reproduce the same pathobject for %s: got %v want %v", s, nu, v)
+		}
+	}
+	t.Log(Stats())
 }

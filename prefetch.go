@@ -229,7 +229,7 @@ func (fsys *FS) Prefetch() {
 	printProgress := func() {
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
-		ram := mem.HeapInuse + mem.StackInuse
+		ram := mem.HeapInuse + mem.StackInuse + uint64(internpath.MemoryUnknownToRuntime())
 		disk := progress.Load()
 		fsys.rMu.RLock()
 		mounts := len(fsys.reverse)
@@ -238,6 +238,7 @@ func (fsys *FS) Prefetch() {
 			"t", time.Since(t).Truncate(time.Second).String(),
 			"mounts", thouSep(int64(mounts)),
 			"archiveBytes", thouSep(disk),
+			"internpath", internpath.Stats(),
 			"ramPerArchive", strconv.FormatFloat(float64(ram)/float64(disk), 'f', 3, 64),
 			"cacheHitBytes", thouSep(atomic.LoadInt64(&fsys.scoreGood)),
 			"cacheMissBytes", thouSep(atomic.LoadInt64(&fsys.scoreBad)),
