@@ -1,7 +1,6 @@
 package internpath
 
 import (
-	"encoding/binary"
 	"fmt"
 	"hash/maphash"
 	"unsafe"
@@ -92,7 +91,10 @@ var mh = maphash.MakeSeed()
 func hashof(parent uint32, name string) uint64 {
 	var hasher maphash.Hash
 	hasher.SetSeed(mh)
-	binary.Write(&hasher, binary.BigEndian, parent)
+	for range 4 {
+		hasher.WriteByte(byte(parent))
+		parent >>= 8
+	}
 	hasher.WriteString(name)
 	return hasher.Sum64()
 }
