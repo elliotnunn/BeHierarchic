@@ -10,7 +10,7 @@ var htab = make([]Path, 1<<0)
 var occupied uint32 = 0
 
 // Upon entry, we are guaranteed to have either the read or the write lock
-func singleTableOp(parent uint32, name string, haveWriteLock *bool, must bool) (Path, bool) {
+func singleTableOp(parent uint32, name string, lockState *byte, must bool) (Path, bool) {
 	h := hashof(parent, name)
 reProbeFromStart:
 	for probe := uint32(h) & uint32(len(htab)-1); ; probe = (probe + 1) & uint32(len(htab)-1) {
@@ -21,11 +21,11 @@ reProbeFromStart:
 			if !must {
 				return Root, false
 			}
-			if !*haveWriteLock {
+			if *lockState == 'r' {
 				oldTableSize := len(htab)
 				mu.RUnlock()
 				mu.Lock()
-				*haveWriteLock = true
+				*lockState = 'w'
 				if len(htab) != oldTableSize {
 					goto reProbeFromStart // table grew
 				}

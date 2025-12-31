@@ -196,13 +196,13 @@ func (p Path) Join(name string) Path {
 }
 
 func (p Path) join(name string, must bool) (Path, bool) {
-	mu.RLock()
-	haveWriteLock := false
+	lockState := byte(0)
 	defer func() {
-		if haveWriteLock {
-			mu.Unlock()
-		} else {
+		switch lockState {
+		case 'r':
 			mu.RUnlock()
+		case 'w':
+			mu.Unlock()
 		}
 	}()
 
@@ -213,8 +213,13 @@ func (p Path) join(name string, must bool) (Path, bool) {
 		case "", ".":
 			// go nowhere
 		default:
+			if lockState == 0 {
+				mu.RLock()
+				lockState = 'r'
+			}
+
 			var ok bool
-			p, ok = singleTableOp(p.offset(), component, &haveWriteLock, must)
+			p, ok = singleTableOp(p.offset(), component, &lockState, must)
 			if !ok {
 				return Path{}, false
 			}
