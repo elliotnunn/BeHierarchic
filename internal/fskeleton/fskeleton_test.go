@@ -349,7 +349,7 @@ func listFS(fsys *FS, waitFull bool) string {
 	ch1, ch2 := make(chan string), make(chan fs.FileMode)
 	go func() {
 		for name, mode := range fsys.Walk(waitFull) {
-			ch1 <- name
+			ch1 <- name.String()
 			ch2 <- mode
 		}
 		close(ch1)

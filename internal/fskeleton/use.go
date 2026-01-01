@@ -111,10 +111,7 @@ func (fsys *FS) lookup(name string, waitForever, followLastLink bool) (uint32, e
 
 	symlinkLoopDetect := make(map[uint32]struct{})
 
-	iname, ok := internpath.Get(name)
-	if !ok {
-		return 0, fs.ErrNotExist
-	}
+	iname := internpath.New(name)
 retry:
 	for {
 		// Peel components off the end of the path until we find one that exists
