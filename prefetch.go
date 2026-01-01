@@ -104,6 +104,7 @@ func (f *cachingFile) getCache(p []byte, off int64) (n int) {
 
 	idPrefix := append(dbkey(f.path), offsetByte)
 	id := appendint(idPrefix, off)
+	defer discardkey(id)
 
 	iter, dberr := f.path.container.db.NewIter(&pebble.IterOptions{
 		LowerBound: id,
@@ -146,8 +147,8 @@ func (f *cachingFile) setCache(p []byte, off int64) {
 	p = p[:len(p):len(p)]
 
 	idPrefix := append(dbkey(f.path), offsetByte)
-	idPrefix = idPrefix[:len(idPrefix):len(idPrefix)] // clashing append
 	id := appendint(idPrefix, off)
+	defer discardkey(id)
 
 	batch := f.path.container.db.NewBatch()
 
@@ -184,6 +185,7 @@ func (f *cachingFile) setCache(p []byte, off int64) {
 			break
 		}
 	}
+	// Now that we are done with the iter, we can append to idPrefix, even though it will clobber id
 	batch.Set(appendint(idPrefix, bufEnd(p, off)), p, &pebble.WriteOptions{})
 	dberr = batch.Commit(&pebble.WriteOptions{})
 	if dberr != nil {
@@ -196,6 +198,7 @@ func (o path) getCacheSize() (int64, bool) {
 		return 0, false
 	}
 	id := append(dbkey(o), sizeByte)
+	defer discardkey(id)
 	val, closer, err := o.container.db.Get(id)
 	if err == pebble.ErrNotFound {
 		return 0, false
@@ -212,6 +215,7 @@ func (o path) setCacheSize(s int64) {
 		return
 	}
 	id := append(dbkey(o), sizeByte)
+	defer discardkey(id)
 	val := appendint([]byte(nil), s)
 	err := o.container.db.Set(id, val, &pebble.WriteOptions{})
 	if err != nil {
@@ -452,7 +456,7 @@ func (o path) identify() (ret fileid.ID) {
 // - likely to have capacity to append -- be careful of clashing appends
 func dbkey(o path) []byte {
 	o.container.rMu.RLock()
-	warps := []path{o}
+	warps := append(make([]path, 0, 64), o)
 	for o.fsys != o.container.root {
 		o = o.container.reverse[o.fsys].Thick(o.container)
 		warps = append(warps, o)
@@ -461,7 +465,7 @@ func dbkey(o path) []byte {
 
 	slices.Reverse(warps)
 
-	var accum []byte
+	accum := emptykey()
 	for _, o := range warps {
 		id := o.identify()
 		slice := id[:]
@@ -472,6 +476,17 @@ func dbkey(o path) []byte {
 		accum = append(accum, slice...)
 	}
 	return accum
+}
+
+const keycap = 128
+
+var keypool = sync.Pool{New: func() any { return new([keycap]byte) }}
+
+func emptykey() []byte { return keypool.Get().(*[keycap]byte)[:0] }
+func discardkey(k []byte) {
+	if cap(k) == keycap {
+		keypool.Put((*[keycap]byte)(k[:keycap]))
+	}
 }
 
 func subRead(p []byte, off int64, srcP []byte, srcOff int64) (n int) {
