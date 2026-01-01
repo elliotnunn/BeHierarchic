@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,11 +58,34 @@ func TestTooLate(t *testing.T) {
 func TestIncompleteDir(t *testing.T) {
 	fsys := New()
 	fsys.CreateReader("a/b/c", 0, emptyFile, 0, 0, time.Time{})
-	expectStr(t, "c...", listDir(fsys, "a/b"))
-	expectStr(t, "b...", listDir(fsys, "a"))
+	fsys.CreateReader("a/bb", 0, emptyFile, 0, 0, time.Time{})
+	expectStr(t, "...", listDir(fsys, "a/b"))
+	expectStr(t, "...", listDir(fsys, "a"))
 	fsys.NoMore()
 	expectStr(t, "c", listDir(fsys, "a/b"))
-	expectStr(t, "b", listDir(fsys, "a"))
+	expectStr(t, "b,bb", listDir(fsys, "a"))
+}
+func TestReRead(t *testing.T) {
+	fsys := New()
+	fsys.CreateReader("a/b", 0, emptyFile, 0, 0, time.Time{})
+	fsys.CreateReader("a/c", 0, emptyFile, 0, 0, time.Time{})
+	fsys.CreateReader("a/d", 0, emptyFile, 0, 0, time.Time{})
+	fsys.CreateReader("a/e", 0, emptyFile, 0, 0, time.Time{})
+	fsys.NoMore()
+	f, _ := fsys.Open("a")
+	d := f.(fs.ReadDirFile)
+	s, err := d.ReadDir(1)
+	if len(s) != 1 || err != nil {
+		t.Error("tried to read 1, got", s, err)
+	}
+	s, err = d.ReadDir(2)
+	if len(s) != 2 || err != nil {
+		t.Error("tried to read 2, got", s, err)
+	}
+	s, err = d.ReadDir(2)
+	if len(s) != 1 || err != io.EOF {
+		t.Error("tried to read 1 at end, got", s, err)
+	}
 }
 func TestIncompleteRootInfo(t *testing.T) {
 	fsys := New()
@@ -257,6 +281,25 @@ func TestCreateRoot(t *testing.T) {
 	expectErr(t, fs.ErrExist, fsys.CreateError(".", 0, nil, 0, 0, time.Time{}))
 	expectErr(t, nil, fsys.Mkdir(".", 0, 0, time.Time{}))
 	expectErr(t, fs.ErrExist, fsys.Mkdir(".", 0, 0, time.Time{}))
+}
+func TestSizes(t *testing.T) {
+	cc := []int64{math.MinInt64,
+		packSzBtm - 1, packSzBtm, packSzBtm + 1,
+		-1, 0, 1, 2,
+		packSzTop - 1, packSzTop, packSzTop + 1,
+		math.MaxInt64,
+	}
+	fsys := New()
+	for _, size := range cc {
+		fsys.CreateError(fmt.Sprint(size), 0, io.ErrUnexpectedEOF, size, 0o755, time.Time{})
+	}
+	fsys.NoMore()
+	for _, size := range cc {
+		s, _ := fs.Stat(fsys, fmt.Sprint(size))
+		if s.Size() != size {
+			t.Errorf("created file with size %d, got back %d", size, s.Size())
+		}
+	}
 }
 
 func mustBlock(t *testing.T, f func()) {

@@ -28,7 +28,7 @@ func (fsys *FS) Open(name string) (f fs.File, err error) {
 
 	fileID := fileID{fsys, idx}
 	if fsys.files[idx].mode.IsDir() {
-		return &dir{ent: fileID, listIndex: idx}, nil
+		return &dir{ent: fileID, idx: idx}, nil
 	} else {
 		switch d := fsys.files[idx].data.(type) {
 		case io.ReaderAt:

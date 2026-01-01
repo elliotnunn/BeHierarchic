@@ -33,12 +33,14 @@ func (fsys *FS) put(parentIdx uint32, f f) uint32 {
 	childIdx := uint32(len(fsys.files))
 	fsys.files = append(fsys.files, f)
 	fsys.lists[f.name] = childIdx
-	if fsys.files[parentIdx].n1 == 0 { // only child
-		fsys.files[parentIdx].n1 = childIdx // first child
-		fsys.files[parentIdx].n2 = childIdx // last child
+	if fsys.files[parentIdx].lastChild == 0 { // only child
+		fsys.files[childIdx].sibling = childIdx // circular linked list
+		fsys.files[parentIdx].lastChild = childIdx
 	} else { // not only child
-		fsys.files[fsys.files[parentIdx].n2].sibling = childIdx // sibling
-		fsys.files[parentIdx].n2 = childIdx                     // last child
+		preceding := fsys.files[parentIdx].lastChild
+		fsys.files[childIdx].sibling = fsys.files[preceding].sibling
+		fsys.files[preceding].sibling = childIdx
+		fsys.files[parentIdx].lastChild = childIdx
 	}
 	return childIdx
 }
@@ -181,13 +183,12 @@ func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size in
 	}
 
 	fsys.put(parentIdx, f{
-		name: iname,
-		time: timeFromStdlib(mtime),
-		mode: mode &^ fs.ModeType,
-		id:   id,
-		n1:   uint32(size),
-		n2:   uint32(size >> 32),
-		data: data,
+		name:      iname,
+		time:      timeFromStdlib(mtime),
+		mode:      mode &^ fs.ModeType,
+		id:        id,
+		lastChild: packFileSize(size), // overloaded field
+		data:      data,
 	})
 	fsys.cond.Broadcast()
 	return nil

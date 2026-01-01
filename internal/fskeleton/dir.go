@@ -10,42 +10,50 @@ import (
 
 // An Open()ed directory
 type dir struct {
-	ent       fileID
-	listIndex uint32
+	ent  fileID
+	idx  uint32
+	next uint32
+	last uint32
 }
 
 func (d *dir) ReadDir(count int) (slice []fs.DirEntry, err error) {
+	fsys := d.ent.fsys
+	fsys.mu.Lock()
+	defer fsys.mu.Unlock()
+	for !fsys.done { // wait for the dir to be completed before returning anything at all
+		fsys.cond.Wait()
+	}
+
 	errAtEnd := io.EOF
 	if count <= 0 { // "read to end and don't give me EOF"
 		errAtEnd = nil
 	}
 
-	fsys := d.ent.fsys
-	fsys.mu.Lock()
-	defer fsys.mu.Unlock()
+	if d.next == 0xffffffff {
+		return nil, errAtEnd // reached end of directory
+	}
 
-	for {
-		next := fsys.files[d.listIndex].n1 // first file in the dir
-		if d.listIndex != d.ent.index {    // or subsequent file
-			next = fsys.files[d.listIndex].sibling
+	if d.next == 0 {
+		d.last = fsys.files[d.idx].lastChild
+		d.next = fsys.files[d.last].sibling
+		if d.next == 0 {
+			d.next = 0xffffffff
+			return nil, errAtEnd // empty directory
 		}
+	}
 
-		if next == 0 { // no file
-			if fsys.done { // and never will be
-				return slice, errAtEnd
-			} else if len(slice) == 0 || count <= 0 { // block until there is more
-				fsys.cond.Wait()
-				continue
-			} else { // just return progress and let caller come back for more
-				return slice, nil
-			}
+	for len(slice) != count {
+		slice = append(slice, &fileID{fsys, d.next})
+		if d.next == d.last {
+			d.next = 0xffffffff
+			break
 		}
-
-		d.listIndex = next
-		slice = append(slice, &fileID{fsys, next})
-		if len(slice) == count {
-			return slice, nil
-		}
+		d.next = fsys.files[d.next].sibling
+	}
+	if len(slice) == count {
+		return slice, nil
+	} else {
+		return slice, errAtEnd
 	}
 }
 

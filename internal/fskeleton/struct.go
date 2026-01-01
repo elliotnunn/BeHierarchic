@@ -5,6 +5,7 @@ package fskeleton
 
 import (
 	"io/fs"
+	"log/slog"
 	"sync"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -22,24 +23,54 @@ type FS struct {
 }
 
 type f struct {
-	name    internpath.Path
-	time    int64
-	mode    fs.FileMode
-	sibling uint32
-	id      int64
-
-	// directories: index of first and last child
-	// files: packed size
-	n1, n2 uint32
+	id   int64
+	time int64
 
 	data any // io.ReaderAt
 	// or func() (io.Reader, error)
 	// or func() (io.ReadCloser, error)
 	// or error
 	// or internpath.Path // symlink target
+
+	name      internpath.Path
+	mode      fs.FileMode
+	lastChild uint32 // overloaded for regular files: contains the size
+	sibling   uint32 // circular linked list
 }
 
-func (f *f) fileSize() int64 { return int64(f.n1) | int64(f.n2)<<32 }
+// Store extremely large file sizes elsewhere
+var (
+	lgsizeMu sync.RWMutex
+	lgsize   []int64
+)
+
+const (
+	packSzBtm   = -0x78000000
+	packSzTop   = 0x78000000
+	packSzWidth = packSzTop - packSzBtm
+)
+
+func packFileSize(size int64) uint32 {
+	if size < packSzBtm || size >= packSzTop {
+		lgsizeMu.Lock()
+		packSize := packSzWidth + uint32(len(lgsize))
+		slog.Info("superLargeSize", "size", size, "idx", len(lgsize))
+		lgsize = append(lgsize, size)
+		lgsizeMu.Unlock()
+		return packSize
+	}
+	return uint32(size - packSzBtm)
+}
+
+func (f *f) fileSize() int64 {
+	packSize := f.lastChild
+	if packSize >= packSzWidth {
+		lgsizeMu.RLock()
+		defer lgsizeMu.RUnlock()
+		return lgsize[packSize-packSzWidth]
+	}
+	return int64(packSize) + packSzBtm
+}
 
 func (fsys *FS) sanityCheck() {
 	if len(fsys.lists) != len(fsys.files) {
@@ -50,37 +81,20 @@ func (fsys *FS) sanityCheck() {
 			panic("name mismatch")
 		}
 	}
-	for i, f := range fsys.files {
-		if i != 0 && f.sibling == uint32(i) {
-			panic("its own sibling!")
-		}
-		if f.sibling != 0 {
-			sib := fsys.files[f.sibling]
-			if f.name.Dir() != sib.name.Dir() {
-				panic("not really a sibling")
+	for _, f := range fsys.files {
+		if f.mode.IsDir() && f.lastChild != 0 {
+			idx := f.lastChild
+			circ := make(map[uint32]bool)
+			for {
+				idx = fsys.files[idx].sibling
+				if idx == f.lastChild {
+					break // reached an appropriate circle
+				}
+				if circ[idx] {
+					panic("circular siblings")
+				}
+				circ[idx] = true
 			}
 		}
-		if f.mode.IsDir() {
-			if (f.n1 == 0) != (f.n2 == 0) {
-				panic("mismatched have-child-ness")
-			}
-			if f.n1 != 0 { // has a child
-				if fsys.files[f.n1].name.Dir() != f.name {
-					panic("first child does not have child name")
-				}
-				if fsys.files[f.n2].name.Dir() != f.name {
-					panic("last child does not have child name")
-				}
-
-				child := f.n1
-				for fsys.files[child].sibling != 0 {
-					child = fsys.files[child].sibling
-				}
-				if child != uint32(f.n2) {
-					panic("wrong last-child")
-				}
-			}
-		}
-
 	}
 }
