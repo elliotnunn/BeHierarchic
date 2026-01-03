@@ -269,6 +269,7 @@ func (fsys *FS) Prefetch() {
 	if fsys.db != nil {
 		fsys.db.Flush()
 	}
+	runtime.GC() // make the last set of memory stats reflect the long-term memory use
 	printProgress()
 	slog.Info("prefetchStop")
 }
