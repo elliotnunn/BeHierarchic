@@ -14,17 +14,15 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
 
-var root = internpath.New(".")
-
 func New() *FS {
 	var fsys FS
 	fsys.cond.L = &fsys.mu
 	fsys.files = []f{{
-		name: internpath.New("."),
+		name: internpath.Path{},
 		mode: implicitDir,
 	}}
 	fsys.lists = map[internpath.Path]uint32{
-		internpath.New("."): 0,
+		{}: 0,
 	}
 	return &fsys
 }
@@ -50,7 +48,7 @@ func (fsys *FS) put(parentIdx uint32, f f) uint32 {
 //
 // The lock must be held! Can return ErrExist if there is a non-directory in the tree
 func (fsys *FS) ensureParentsExist(name internpath.Path) (uint32, error) {
-	if name == root {
+	if name == (internpath.Path{}) {
 		panic("this does not apply to root")
 	}
 
@@ -84,7 +82,7 @@ func (fsys *FS) ensureParentsExist(name internpath.Path) (uint32, error) {
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
 func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) error {
-	iname := internpath.New(name)
+	iname := internpath.Make(name)
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
 	if fsys.done {
@@ -166,7 +164,7 @@ func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size in
 		data = io.EOF
 	}
 
-	iname := internpath.New(name)
+	iname := internpath.Make(name)
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
 	if fsys.done {
@@ -205,7 +203,7 @@ func (fsys *FS) Symlink(name string, id int64, target string, mode fs.FileMode, 
 		return fs.ErrInvalid
 	}
 
-	iname := internpath.New(name)
+	iname := internpath.Make(name)
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
 	if fsys.done {
@@ -226,7 +224,7 @@ func (fsys *FS) Symlink(name string, id int64, target string, mode fs.FileMode, 
 		time: timeFromStdlib(mtime),
 		mode: mode&^fs.ModeType | fs.ModeSymlink,
 		id:   id,
-		data: internpath.New(target),
+		data: internpath.Make(target),
 	})
 	fsys.cond.Broadcast()
 	return nil

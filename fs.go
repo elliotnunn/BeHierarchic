@@ -91,7 +91,7 @@ func (o path) getArchive(needKnow, needFS bool) (bool, path) {
 		if !ok {
 			return false, path{}
 		}
-		return true, path{o.container, fsys, internpath.New(".")}
+		return true, path{o.container, fsys, internpath.Path{}}
 	}
 
 	locksets := [...]struct{ lock, unlock func() }{
@@ -149,7 +149,7 @@ again:
 		b.data = gen
 		goto again
 	case fs.FS:
-		return true, path{o.container, t, internpath.New(".")}
+		return true, path{o.container, t, internpath.Path{}}
 	case fsysGenerator:
 		if !needFS {
 			return true, path{}

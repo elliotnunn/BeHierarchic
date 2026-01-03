@@ -32,7 +32,7 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 	// - a mountpoint: it should not return a name of "."
 	// - a file that doesn't know its own size (e.g. a gzip)
 
-	isMountpoint := o.fsys != o.container.root && o.name == internpath.New(".")
+	isMountpoint := o.fsys != o.container.root && o.name == internpath.Path{}
 	if isMountpoint {
 		o.container.rMu.RLock()
 		diskImage := o.container.reverse[o.fsys].Thick(o.container)

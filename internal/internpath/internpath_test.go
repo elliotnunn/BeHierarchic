@@ -27,24 +27,24 @@ func TestRoundTrip(t *testing.T) {
 
 	for _, want := range cases {
 		t.Run(want, func(t *testing.T) {
-			got := New(want).String()
+			got := Make(want).String()
 			if got != want {
 				t.Errorf("New(%q).String(): wanted %q, got %q", want, want, got)
 			}
 
 			gotbuf := make([]byte, 128)
-			n := New(want).PutBase(gotbuf)
-			if string(gotbuf[:n]) != New(want).Base() {
-				t.Errorf("New(%q).Append(...): wanted %q, got %q", want, New(want).Base(), string(gotbuf[:n]))
+			n := Make(want).PutBase(gotbuf)
+			if string(gotbuf[:n]) != Make(want).Base() {
+				t.Errorf("New(%q).Append(...): wanted %q, got %q", want, Make(want).Base(), string(gotbuf[:n]))
 			}
 
-			gotbase := New(want).Base()
+			gotbase := Make(want).Base()
 			wantbase := gopath.Base(got)
 			if gotbase != wantbase {
 				t.Errorf("New(%q).Base(): wanted %q, got %q", want, wantbase, gotbase)
 			}
 
-			gotdir := New(want).Dir().String()
+			gotdir := Make(want).Dir().String()
 			wantdir := gopath.Dir(got)
 			if gotdir != wantdir {
 				t.Errorf("New(%q).Dir().String(): wanted %q, got %q", want, wantdir, gotdir)
@@ -71,13 +71,13 @@ func TestUnique(t *testing.T) {
 
 	var firsttry []Path
 	for _, p := range cases {
-		firsttry = append(firsttry, New(p))
+		firsttry = append(firsttry, Make(p))
 	}
 
 	for i, p := range cases {
 		t.Run(p, func(t *testing.T) {
 			wantobj := firsttry[i]
-			gotobj := New(p)
+			gotobj := Make(p)
 			if wantobj != gotobj {
 				t.Errorf("%s != %s", wantobj, gotobj)
 			}
@@ -99,7 +99,7 @@ func TestJoin(t *testing.T) {
 			first, last, _ := strings.Cut(tcase, "+")
 
 			want := gopath.Join(first, last)
-			got := New(first).Join(last).String()
+			got := Make(first).Join(last).String()
 
 			if got != want {
 				t.Errorf("New(%q).Join(%q).String(): wanted %q, got %q", first, last, want, got)
@@ -127,7 +127,7 @@ func TestPara(t *testing.T) {
 		for _, n := range fnames {
 			t.Run(n, func(t *testing.T) {
 				t.Parallel()
-				_ = New(n)
+				_ = Make(n)
 			})
 		}
 	}
@@ -150,7 +150,7 @@ func TestLarge(t *testing.T) {
 
 	vals := make(map[string]Path)
 	for _, s := range paths {
-		nu := New(s)
+		nu := Make(s)
 		prev, ok := vals[s]
 		if ok && prev != nu {
 			t.Errorf("multiple pathobjects for %q: offset=%#x offset=%#x", s, nu.offset(), prev.offset())
@@ -159,7 +159,7 @@ func TestLarge(t *testing.T) {
 	}
 
 	for s, v := range vals {
-		nu := New(s)
+		nu := Make(s)
 		if nu != v {
 			t.Errorf("failed to reproduce the same pathobject for %s: got %v want %v", s, nu, v)
 		}

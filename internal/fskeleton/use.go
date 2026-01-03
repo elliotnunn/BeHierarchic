@@ -113,7 +113,7 @@ func (fsys *FS) lookup(name string, followLastLink bool) (uint32, error) {
 	}
 
 	// Fast path: applies to any regular file or directory returned by [Walk]
-	if iname, ok := internpath.Get(name); ok {
+	if iname, ok := internpath.TryMake(name); ok {
 		if idx, ok := fsys.lists[iname]; ok {
 			if !followLastLink || fsys.files[idx].mode.Type() != fs.ModeSymlink {
 				return idx, nil

@@ -78,7 +78,7 @@ outerloop:
 		}
 
 		r.nupaths = append(r.nupaths, o)
-		if o.name == internpath.New(".") {
+		if o.name == (internpath.Path{}) {
 			o.container.rMu.RLock()
 			archive := o.container.reverse[o.fsys]
 			o.container.rMu.RUnlock()
@@ -220,7 +220,7 @@ func (o path) flatWalk() iter.Seq2[path, fs.FileMode] {
 			}
 		} else {
 			fs.WalkDir(o.fsys, o.name.String(), func(pathname string, d fs.DirEntry, err error) error {
-				ok := yield(path{o.container, o.fsys, internpath.New(pathname)}, d.Type())
+				ok := yield(path{o.container, o.fsys, internpath.Make(pathname)}, d.Type())
 				if !ok {
 					return io.EOF // any error is fine
 				}
@@ -251,7 +251,7 @@ func (fsys *FS) path(name string) (path, error) {
 	return p.ShallowJoin(warps[len(warps)-1]), nil
 }
 
-func (fsys *FS) rootPath() path { return path{fsys, fsys.root, internpath.New(".")} }
+func (fsys *FS) rootPath() path { return path{fsys, fsys.root, internpath.Path{}} }
 
 // glob searches for paths matching a doublestar glob pattern.
 // Patterns ending with `/` match only directories, other patterns match files and directories.

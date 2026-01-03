@@ -22,6 +22,7 @@ the structure of an entry in the large array is
 
 // The canonical representation of a path.
 // Satisfies the "comparable" interface, i.e. can be used as a map key or compared with "!=".
+// The zero value represents root (".").
 type Path struct{ offAndFlag uint32 }
 
 func (p Path) offset() uint32 { return p.offAndFlag & (areaSize - 1) }
@@ -45,8 +46,6 @@ func (p *Path) setFlag(flag uint32, to bool) {
 		p.offAndFlag |= flag
 	}
 }
-
-var Root = Path{}
 
 const (
 	areaSize = 1 << 31
@@ -88,16 +87,15 @@ func init() { // make a large mapping to hide the enormous allocation from the G
 	bump += uint32(copy(array[bump:], "."))
 }
 
-// New interns a path. It must satisfy [io/fs.ValidPath] or incorrect values will be returned by [Path.String] et al.
-func New(name string) Path {
-	path := Root
+// Make interns a path. It must satisfy [io/fs.ValidPath] or incorrect values will be returned by [Path.String] et al.
+func Make(name string) Path {
+	var path Path
 	path, _ = path.join(name, true)
 	return path
 }
 
-// Get finds a path that has already been interned with [New].
-func Get(name string) (path Path, ok bool) {
-	path = Root
+// TryMake finds a path that has already been interned.
+func TryMake(name string) (path Path, ok bool) {
 	return path.join(name, false)
 }
 
@@ -142,15 +140,15 @@ func (p Path) Base() string {
 	return unsafe.String(&a[0], l)
 }
 
-// Base returns the filename, a performant shortcut for path.Base(p.String())
+// String returns the full path
 func (p Path) String() string {
-	if p == Root {
+	if p == (Path{}) {
 		return "."
 	}
 	accum := make([]byte, 16)
 	n := 0
 	slash := ""
-	for comp := p; comp != Root; comp = comp.Dir() {
+	for comp := p; comp != (Path{}); comp = comp.Dir() {
 		shortfall := comp.BaseLen() + len(slash) + n - len(accum)
 		if shortfall > 0 {
 			newSize := max(16, 1<<bits.Len(uint(len(accum)+shortfall-1)))
@@ -175,13 +173,13 @@ func (p Path) Dir() Path {
 }
 
 func (p Path) IsWithin(parent Path) bool {
-	if parent == Root {
+	if parent == (Path{}) {
 		return true
 	}
 	for {
 		if p == parent {
 			return true
-		} else if p == Root {
+		} else if p == (Path{}) {
 			return false
 		} else {
 			p = p.Dir()
@@ -189,14 +187,14 @@ func (p Path) IsWithin(parent Path) bool {
 	}
 }
 
-// Join adds more components to a path, a performant shortcut for New(path.Join(p.String(), name))
+// Join adds more components to a path, a performant shortcut for Make(path.Join(p.String(), name))
 func (p Path) Join(name string) Path {
 	p, _ = p.join(name, true)
 	return p
 }
 
 // TryJoin finds a path that has already been interned.
-func (p Path) TryJoin(name string) (Path, bool) {
+func (p Path) TryJoin(name string) (path Path, ok bool) {
 	return p.join(name, false)
 }
 

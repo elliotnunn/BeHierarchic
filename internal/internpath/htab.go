@@ -19,7 +19,7 @@ reProbeFromStart:
 			return htab[probe], true
 		} else if htab[probe].isZero() {
 			if !must {
-				return Root, false
+				return Path{}, false
 			}
 			if *lockState == 'r' {
 				oldTableSize := len(htab)

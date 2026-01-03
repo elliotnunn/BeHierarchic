@@ -263,7 +263,7 @@ func (fsys *FS) Prefetch() {
 	}()
 
 	// the time consuming part
-	path{fsys, fsys.root, internpath.New(".")}.prefetchThisFS(runtime.GOMAXPROCS(-1), &progress)
+	path{fsys, fsys.root, internpath.Path{}}.prefetchThisFS(runtime.GOMAXPROCS(-1), &progress)
 
 	close(stopTick)
 	if fsys.db != nil {
@@ -274,7 +274,7 @@ func (fsys *FS) Prefetch() {
 }
 
 func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
-	if o.name != internpath.New(".") {
+	if o.name != (internpath.Path{}) {
 		panic("this should be a filesystem!!")
 	}
 
@@ -294,7 +294,7 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 			var list []internpath.Path
 			fs.WalkDir(o.fsys, ".", func(pathname string, d fs.DirEntry, err error) error {
 				if d.Type().IsRegular() {
-					list = append(list, internpath.New(pathname))
+					list = append(list, internpath.Make(pathname))
 				}
 				return nil
 			})
