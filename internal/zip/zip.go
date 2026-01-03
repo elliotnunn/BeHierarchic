@@ -213,19 +213,22 @@ func New2(headerReader, dataReader io.ReaderAt, size int64) (fs.FS, error) {
 			fsys.Mkdir(name, thisDirEntryOffset, mode, mtime)
 		} else {
 			tasks = append(tasks, task{loc, func() {
-				packedReader := &localHeaderReader{r: dataReader, offset: baseCorrection + loc, size: packed}
+				fileOffset := baseCorrection + loc
 				switch method {
 				case 0:
+					packedReader := &localHeaderReader{r: dataReader, offset: fileOffset, size: packed}
 					r := newChecksumReaderAt(packedReader, unpacked, crc32)
 					fsys.CreateReaderAt(name, baseCorrection+loc, r, unpacked, mode, mtime)
 				case 8:
 					readerFunc := func() (io.ReadCloser, error) {
+						packedReader := &localHeaderReader{r: dataReader, offset: fileOffset, size: packed}
 						r := flate.NewReader(io.NewSectionReader(packedReader, 0, packed))
 						return newChecksumReader(r, unpacked, crc32), nil
 					}
 					fsys.CreateReadCloser(name, baseCorrection+loc, readerFunc, unpacked, mode, mtime)
 				case 12:
 					readerFunc := func() (io.Reader, error) {
+						packedReader := &localHeaderReader{r: dataReader, offset: fileOffset, size: packed}
 						r := bzip2.NewReader(io.NewSectionReader(packedReader, 0, packed))
 						return newChecksumReader(r, unpacked, crc32), nil
 					}
