@@ -6,6 +6,7 @@ package fskeleton
 import (
 	"io"
 	"io/fs"
+	"path"
 	"strings"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -21,7 +22,7 @@ func (fsys *FS) Open(name string) (f fs.File, err error) {
 
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
-	idx, err := fsys.lookup(name, true, true)
+	idx, err := fsys.lookup(name, true)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +56,7 @@ func (fsys *FS) ReadLink(name string) (target string, err error) {
 
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
-	idx, err := fsys.lookup(name, true, false)
+	idx, err := fsys.lookup(name, false)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +79,7 @@ func (fsys *FS) Lstat(name string) (info fs.FileInfo, err error) {
 
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
-	idx, err := fsys.lookup(name, true, false)
+	idx, err := fsys.lookup(name, false)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +97,7 @@ func (fsys *FS) Stat(name string) (info fs.FileInfo, err error) {
 
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
-	idx, err := fsys.lookup(name, true, true)
+	idx, err := fsys.lookup(name, true)
 	if err != nil {
 		return nil, err
 	}
@@ -104,56 +105,62 @@ func (fsys *FS) Stat(name string) (info fs.FileInfo, err error) {
 	return &fileID{fsys, idx}, nil
 }
 
-func (fsys *FS) lookup(name string, waitForever, followLastLink bool) (uint32, error) {
+func (fsys *FS) lookup(name string, followLastLink bool) (uint32, error) {
+	// Must never call internpath.New(name) because if the name is nonexistent it will leak memory:
+	// use internpath.Get instead
 	if !fs.ValidPath(name) {
 		return 0, fs.ErrInvalid
 	}
 
-	symlinkLoopDetect := make(map[uint32]struct{})
-
-	iname := internpath.New(name)
-retry:
-	for {
-		// Peel components off the end of the path until we find one that exists
-		var idx uint32
-		stub := iname
-		for {
-			var ok bool
-			if idx, ok = fsys.lists[stub]; ok {
-				break
+	// Fast path: applies to any regular file or directory returned by [Walk]
+	if iname, ok := internpath.Get(name); ok {
+		if idx, ok := fsys.lists[iname]; ok {
+			if !followLastLink || fsys.files[idx].mode.Type() != fs.ModeSymlink {
+				return idx, nil
 			}
-			stub = stub.Dir()
 		}
-		// now the invariant is that "stub" exists and corresponds with "idx"
+	}
+	if name == "." || name == "" {
+		panic("how did an invalid/root name not get covered by the fast path?")
+	}
 
-		// Is it a symlink that should be followed?
-		if fsys.files[idx].mode.Type() == fs.ModeSymlink && (stub != iname || followLastLink) {
-			if _, bad := symlinkLoopDetect[idx]; bad {
-				return 0, fs.ErrNotExist
-			}
-			symlinkLoopDetect[idx] = struct{}{}
+	// Slow path: for the sake of great simplification, ensure the FS is "complete" before this lookup
+	for !fsys.done {
+		fsys.cond.Wait()
+	}
 
-			// Rewrite "iname" through string manipulation
-			//    Say "a/symlink" points to "b/c"
-			//    Then replace path "a/symlink/**" with "b/c/**"
-			link := stub.String()
-			remainder := iname.String()[len(link):]
-			iname = fsys.files[idx].data.(internpath.Path) // the link target
-			if len(remainder) > 0 {
-				iname = iname.Join(strings.TrimPrefix(remainder, "/"))
-			}
-			continue retry // from the top, but with a rewritten "iname"
+	var (
+		symlinkLoopDetect map[uint32]struct{}
+		key               internpath.Path // zero means root
+		idx               uint32          // zero means root
+	)
+	for name != "" {
+		component, remain, notlast := strings.Cut(name, "/")
+		name = remain
+
+		var ok bool
+		key, ok = key.TryJoin(component)
+		if !ok {
+			return 0, fs.ErrNotExist
 		}
-
-		if stub != iname {
-			// If it is possible for a future Create() call to satisfy, then wait for it
-			if waitForever && !fsys.done && fsys.files[idx].mode.IsDir() {
-				fsys.cond.Wait()
-				continue retry
-			}
+		idx, ok = fsys.lists[key]
+		if !ok {
 			return 0, fs.ErrNotExist
 		}
 
-		return idx, nil // success
+		// Is it a symlink that should be followed?
+		if fsys.files[idx].mode.Type() == fs.ModeSymlink && (notlast || followLastLink) {
+			if _, bad := symlinkLoopDetect[idx]; bad {
+				return 0, fs.ErrNotExist
+			}
+			if symlinkLoopDetect == nil {
+				symlinkLoopDetect = make(map[uint32]struct{})
+			}
+			symlinkLoopDetect[idx] = struct{}{}
+
+			key = internpath.Path{} // symlink paths are relative to root
+			name = path.Join(fsys.files[idx].data.(internpath.Path).String(), name)
+		}
 	}
+	return idx, nil
 }

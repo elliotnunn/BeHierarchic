@@ -195,6 +195,11 @@ func (p Path) Join(name string) Path {
 	return p
 }
 
+// TryJoin finds a path that has already been interned.
+func (p Path) TryJoin(name string) (Path, bool) {
+	return p.join(name, false)
+}
+
 func (p Path) join(name string, must bool) (Path, bool) {
 	lockState := byte(0)
 	defer func() {

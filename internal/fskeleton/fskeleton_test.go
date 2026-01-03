@@ -159,6 +159,7 @@ func TestSymlink(t *testing.T) {
 	expectErr(t, nil, fsys.Symlink("symlink3", 0, "dir3", 0, time.Time{}))
 	expectErr(t, nil, fsys.Symlink("symlink4", 0, "symlink3/file5", 0, time.Time{}))
 	expectErr(t, nil, fsys.Symlink("symlink6", 0, "symlink6", 0, time.Time{})) // circular
+	expectErr(t, nil, fsys.Symlink("distract-dir/symlink7", 0, "file2", 0, time.Time{}))
 	expectErr(t, nil, fsys.Mkdir("dir3", 0, 0, time.Time{}))
 	expectErr(t, nil, fsys.CreateReader("file2", 0, emptyFile, 0, 0, time.Time{}))
 	expectErr(t, nil, fsys.CreateReader("dir3/file5", 0, emptyFile, 0, 0, time.Time{}))
@@ -205,6 +206,10 @@ func TestSymlink(t *testing.T) {
 	target, err = fsys.ReadLink("symlink6")
 	expectErr(t, err, nil)
 	expectStr(t, "symlink6", target)
+
+	s, err = fsys.Stat("distract-dir/symlink7") // good symlink that points outside its containing dir
+	expectErr(t, nil, err)
+	expectStr(t, s.Mode().String(), fs.FileMode(0).String())
 }
 func TestTime(t *testing.T) {
 	times := []time.Time{
@@ -267,12 +272,12 @@ func TestID(t *testing.T) {
 	stat1, _ := fs.Stat(fsys, "implicitDir")
 	stat2, _ := fs.Stat(fsys, "implicitDir/realDir")
 	stat3, _ := fs.Stat(fsys, "emptyFile")
-	stat4, _ := fs.Stat(fsys, "link")
+	// stat4, _ := fs.Stat(fsys, "link") // this would block forever
 	stat5, _ := fs.Lstat(fsys, "link")
 	mustBlock(t, func() { stat1.(IDer).ID() })
 	mustNotBlock(t, func() { stat2.(IDer).ID() })
 	mustNotBlock(t, func() { stat3.(IDer).ID() })
-	mustBlock(t, func() { stat4.(IDer).ID() })
+	// mustBlock(t, func() { stat4.(IDer).ID() })
 	mustNotBlock(t, func() { stat5.(IDer).ID() })
 	expectStr(t, "123 456 789", fmt.Sprint(stat2.(IDer).ID(), stat3.(IDer).ID(), stat5.(IDer).ID()))
 }
