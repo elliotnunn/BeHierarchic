@@ -306,6 +306,22 @@ func TestSizes(t *testing.T) {
 		}
 	}
 }
+func TestUnixPerms(t *testing.T) {
+	bits := []fs.FileMode{
+		fs.ModeSetgid, fs.ModeSetuid, fs.ModeSticky,
+		0o400, 0o200, 0o100,
+		0o040, 0o020, 0o010,
+		0o004, 0o002, 0o001,
+	}
+	for _, bit := range bits {
+		fsys := New()
+		fsys.CreateReader("f", 0, emptyFile, 0, bit, time.Time{})
+		s, _ := fsys.Stat("f")
+		if bit != s.Mode() {
+			t.Errorf("created file with perms %s but got %s back", bit, s.Mode())
+		}
+	}
+}
 
 func mustBlock(t *testing.T, f func()) {
 	done := make(chan struct{})

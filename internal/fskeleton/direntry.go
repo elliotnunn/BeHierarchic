@@ -40,7 +40,7 @@ func (f *fileID) IsDir() bool {
 func (f *fileID) Type() fs.FileMode {
 	f.fsys.mu.Lock()
 	defer f.fsys.mu.Unlock()
-	return f.fsys.files[f.index].mode.Type()
+	return f.fsys.files[f.index].mode.StdlibType()
 }
 
 func (f *fileID) Info() (fs.FileInfo, error) { return f, nil }
@@ -48,7 +48,7 @@ func (f *fileID) Info() (fs.FileInfo, error) { return f, nil }
 func (f *fileID) Size() int64 {
 	f.fsys.mu.Lock()
 	defer f.fsys.mu.Unlock()
-	if !f.fsys.files[f.index].mode.IsRegular() {
+	if f.fsys.files[f.index].mode.Type() != typeRegular {
 		return 0
 	}
 	return f.fsys.files[f.index].fileSize()
@@ -57,20 +57,16 @@ func (f *fileID) Size() int64 {
 func (f *fileID) Mode() fs.FileMode {
 	f.fsys.mu.Lock()
 	defer f.fsys.mu.Unlock()
-	for !f.fsys.done && f.fsys.files[f.index].mode == implicitDir {
+	for !f.fsys.done && f.fsys.files[f.index].mode.Type() == typeImplicitDir {
 		f.fsys.cond.Wait()
 	}
-	m := f.fsys.files[f.index].mode
-	if m == implicitDir {
-		return fs.ModeDir
-	}
-	return m
+	return f.fsys.files[f.index].mode.Stdlib()
 }
 
 func (f *fileID) ModTime() time.Time {
 	f.fsys.mu.Lock()
 	defer f.fsys.mu.Unlock()
-	for !f.fsys.done && f.fsys.files[f.index].mode == implicitDir {
+	for !f.fsys.done && f.fsys.files[f.index].mode.Type() == typeImplicitDir {
 		f.fsys.cond.Wait()
 	}
 	return timeToStdlib(f.fsys.files[f.index].time)
@@ -81,7 +77,7 @@ func (f *fileID) Sys() any { return nil }
 func (f *fileID) ID() int64 {
 	f.fsys.mu.Lock()
 	defer f.fsys.mu.Unlock()
-	for !f.fsys.done && f.fsys.files[f.index].mode == implicitDir {
+	for !f.fsys.done && f.fsys.files[f.index].mode.Type() == typeImplicitDir {
 		f.fsys.cond.Wait()
 	}
 	return f.fsys.files[f.index].id

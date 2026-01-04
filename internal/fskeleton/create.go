@@ -19,7 +19,7 @@ func New() *FS {
 	fsys.cond.L = &fsys.mu
 	fsys.files = []f{{
 		name: internpath.Path{},
-		mode: implicitDir,
+		mode: typeImplicitDir,
 	}}
 	fsys.lists = map[internpath.Path]uint32{
 		{}: 0,
@@ -71,7 +71,7 @@ func (fsys *FS) ensureParentsExist(name internpath.Path) (uint32, error) {
 	for _, name := range slices.Backward(tomake) {
 		parentIdx = fsys.put(parentIdx, f{
 			name: name,
-			mode: implicitDir,
+			mode: typeImplicitDir,
 		})
 	}
 	return parentIdx, nil
@@ -81,7 +81,7 @@ func (fsys *FS) ensureParentsExist(name internpath.Path) (uint32, error) {
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
-func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) error {
+func (fsys *FS) Mkdir(name string, id int64, perms fs.FileMode, mtime time.Time) error {
 	iname := internpath.Make(name)
 	fsys.mu.Lock()
 	defer fsys.mu.Unlock()
@@ -89,13 +89,11 @@ func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) 
 		return &fs.PathError{Op: "mkdir", Path: name, Err: fs.ErrClosed}
 	}
 
-	mode = mode&^fs.ModeType | fs.ModeDir
-
 	if idx, exist := fsys.lists[iname]; exist {
-		if fsys.files[idx].mode != implicitDir {
+		if fsys.files[idx].mode.Type() != typeImplicitDir {
 			return &fs.PathError{Op: "mkdir", Path: name, Err: fs.ErrExist}
 		}
-		fsys.files[idx].mode = mode
+		fsys.files[idx].mode = permsFromStdlib(perms) | typeDir
 		fsys.files[idx].time = timeFromStdlib(mtime)
 		fsys.files[idx].id = id
 		fsys.cond.Broadcast()
@@ -108,7 +106,7 @@ func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) 
 		fsys.put(parentIdx, f{
 			name: iname,
 			time: timeFromStdlib(mtime),
-			mode: mode,
+			mode: permsFromStdlib(perms) | typeDir,
 			id:   id,
 		})
 		fsys.cond.Broadcast()
@@ -122,8 +120,8 @@ func (fsys *FS) Mkdir(name string, id int64, mode fs.FileMode, mtime time.Time) 
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
-func (fsys *FS) CreateError(name string, id int64, err error, size int64, mode fs.FileMode, mtime time.Time) error {
-	return fsys.createRegularFileCommon(name, id, err, size, mode, mtime)
+func (fsys *FS) CreateError(name string, id int64, err error, size int64, perms fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, err, size, perms, mtime)
 }
 
 // CreateReader creates a regular file at the specified path.
@@ -132,8 +130,8 @@ func (fsys *FS) CreateError(name string, id int64, err error, size int64, mode f
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
-func (fsys *FS) CreateReader(name string, id int64, r func() (io.Reader, error), size int64, mode fs.FileMode, mtime time.Time) error {
-	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+func (fsys *FS) CreateReader(name string, id int64, r func() (io.Reader, error), size int64, perms fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, perms, mtime)
 }
 
 // CreateReadCloser creates a regular file at the specified path.
@@ -142,8 +140,8 @@ func (fsys *FS) CreateReader(name string, id int64, r func() (io.Reader, error),
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
-func (fsys *FS) CreateReadCloser(name string, id int64, r func() (io.ReadCloser, error), size int64, mode fs.FileMode, mtime time.Time) error {
-	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+func (fsys *FS) CreateReadCloser(name string, id int64, r func() (io.ReadCloser, error), size int64, perms fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, perms, mtime)
 }
 
 // CreateReadCloser creates a regular file at the specified path.
@@ -152,11 +150,11 @@ func (fsys *FS) CreateReadCloser(name string, id int64, r func() (io.ReadCloser,
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
-func (fsys *FS) CreateReaderAt(name string, id int64, r io.ReaderAt, size int64, mode fs.FileMode, mtime time.Time) error {
-	return fsys.createRegularFileCommon(name, id, r, size, mode, mtime)
+func (fsys *FS) CreateReaderAt(name string, id int64, r io.ReaderAt, size int64, perms fs.FileMode, mtime time.Time) error {
+	return fsys.createRegularFileCommon(name, id, r, size, perms, mtime)
 }
 
-func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size int64, mode fs.FileMode, mtime time.Time) error {
+func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size int64, perms fs.FileMode, mtime time.Time) error {
 	if data == nil {
 		if size != 0 {
 			return &fs.PathError{Op: "create", Path: name, Err: fs.ErrInvalid}
@@ -183,7 +181,7 @@ func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size in
 	fsys.put(parentIdx, f{
 		name:      iname,
 		time:      timeFromStdlib(mtime),
-		mode:      mode &^ fs.ModeType,
+		mode:      permsFromStdlib(perms) | typeRegular,
 		id:        id,
 		lastChild: packFileSize(size), // overloaded field
 		data:      data,
@@ -198,7 +196,7 @@ func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size in
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
 //
 // The target argument must be an absolute path satisfying [fs.ValidPath].
-func (fsys *FS) Symlink(name string, id int64, target string, mode fs.FileMode, mtime time.Time) error {
+func (fsys *FS) Symlink(name string, id int64, target string, perms fs.FileMode, mtime time.Time) error {
 	if !fs.ValidPath(name) || !fs.ValidPath(target) {
 		return fs.ErrInvalid
 	}
@@ -222,7 +220,7 @@ func (fsys *FS) Symlink(name string, id int64, target string, mode fs.FileMode, 
 	fsys.put(parentIdx, f{
 		name: iname,
 		time: timeFromStdlib(mtime),
-		mode: mode&^fs.ModeType | fs.ModeSymlink,
+		mode: permsFromStdlib(perms) | typeLink,
 		id:   id,
 		data: internpath.Make(target),
 	})

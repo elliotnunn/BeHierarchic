@@ -23,7 +23,7 @@ func (fsys *FS) Walk(waitFull bool) iter.Seq2[fmt.Stringer, fs.FileMode] {
 				f := fsys.files[i]
 				i++
 				fsys.mu.Unlock()
-				if !yield(f.name, f.mode.Type()) {
+				if !yield(f.name, f.mode.Stdlib()) {
 					return
 				}
 				fsys.mu.Lock()

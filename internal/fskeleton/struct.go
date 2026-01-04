@@ -4,14 +4,11 @@
 package fskeleton
 
 import (
-	"io/fs"
 	"log/slog"
 	"sync"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
-
-const implicitDir fs.FileMode = ^fs.ModeType | fs.ModeDir // nonsense value but satisfies FileMode.IsDir()
 
 // FS is safe for concurrent use from multiple goroutines. It should not be copied after creation.
 type FS struct {
@@ -33,7 +30,7 @@ type f struct {
 	// or internpath.Path // symlink target
 
 	name      internpath.Path
-	mode      fs.FileMode
+	mode      mode   // packed format, different from io/fs.FileMode
 	lastChild uint32 // overloaded for regular files: contains the size
 	sibling   uint32 // circular linked list
 }

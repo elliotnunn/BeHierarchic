@@ -61,7 +61,7 @@ func (fsys *FS) ReadLink(name string) (target string, err error) {
 		return "", err
 	}
 
-	if fsys.files[idx].mode.Type() != fs.ModeSymlink {
+	if fsys.files[idx].mode.Type() != typeLink {
 		return "", fs.ErrInvalid
 	}
 
@@ -115,7 +115,7 @@ func (fsys *FS) lookup(name string, followLastLink bool) (uint32, error) {
 	// Fast path: applies to any regular file or directory returned by [Walk]
 	if iname, ok := internpath.TryMake(name); ok {
 		if idx, ok := fsys.lists[iname]; ok {
-			if !followLastLink || fsys.files[idx].mode.Type() != fs.ModeSymlink {
+			if !followLastLink || fsys.files[idx].mode.Type() != typeLink {
 				return idx, nil
 			}
 		}
@@ -149,7 +149,7 @@ func (fsys *FS) lookup(name string, followLastLink bool) (uint32, error) {
 		}
 
 		// Is it a symlink that should be followed?
-		if fsys.files[idx].mode.Type() == fs.ModeSymlink && (notlast || followLastLink) {
+		if fsys.files[idx].mode.Type() == typeLink && (notlast || followLastLink) {
 			if _, bad := symlinkLoopDetect[idx]; bad {
 				return 0, fs.ErrNotExist
 			}
