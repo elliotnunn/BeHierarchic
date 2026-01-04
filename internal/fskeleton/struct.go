@@ -30,6 +30,7 @@ type f struct {
 	// or internpath.Path // symlink target
 
 	name      internpath.Path
+	bozo      uint16
 	mode      mode   // packed format, different from io/fs.FileMode
 	lastChild uint32 // overloaded for regular files: contains the size
 	sibling   uint32 // circular linked list

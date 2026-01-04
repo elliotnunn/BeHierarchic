@@ -12,6 +12,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/elliotnunn/BeHierarchic/internal/fileid"
+	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
@@ -75,6 +76,15 @@ func (o path) getArchive(needKnow, needFS bool) (bool, path) {
 		switch gopath.Ext(o.name.Base()) {
 		case ".crdownload", ".part":
 			return false, path{}
+		}
+	}
+
+	// Low-RAM path for non-archive paths inside an fskeleton FS
+	if fskel, ok := o.fsys.(*fskeleton.FS); ok {
+		if bozo, ok := fskel.GetBozo(o.name); ok {
+			if bozo == 1 {
+				return false, path{}
+			}
 		}
 	}
 
@@ -171,9 +181,16 @@ again:
 	}
 
 notAnArchive:
-	o.container.mMu.Lock()
-	o.container.mounts[o.Thin()] = nil
-	o.container.mMu.Unlock()
+	if fskel, ok := o.fsys.(*fskeleton.FS); ok {
+		fskel.SetBozo(o.name, 1)
+		o.container.mMu.Lock()
+		delete(o.container.mounts, o.Thin()) // here is the RAM saving!
+		o.container.mMu.Unlock()
+	} else {
+		o.container.mMu.Lock()
+		o.container.mounts[o.Thin()] = nil
+		o.container.mMu.Unlock()
+	}
 notEvenAFile:
 	// small chance that another instance of this function raced to get this mount structure
 	b.data = fsysGeneratorNop
