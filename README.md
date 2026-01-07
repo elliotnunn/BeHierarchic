@@ -21,7 +21,7 @@ Apple_Developer_Discs_1989-2009/
 
 ```
 go install github.com/elliotnunn/BeHierarchic@latest
-BeHierarchic :1997 ~/mysoftwarecollection
+BeHierarchic :1997 ~/be-cache.db ~/mysoftwarecollection
 ```
 
 On a Mac: ⌘K and connect to http://127.0.0.1:1997
@@ -38,4 +38,4 @@ Supported compression/archive/image types include:
 
 ## Bugs
 
-- The automatic startup scan takes a *long* time... but you can still browse during the scan, just slower
+- The first startup scan takes a *long* time, but the on-disk cache speeds up subsequent starts.

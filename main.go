@@ -24,7 +24,7 @@ import (
 
 const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
 
-Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT`
+Usage:  BeHierarchic [INTERFACE][:PORT] CACHE SHAREPOINT`
 
 func main() {
 	err := cmdLine(os.Args)
@@ -35,13 +35,12 @@ func main() {
 }
 
 func cmdLine(args []string) error {
-	if len(args) != 3 {
+	if len(args) != 4 {
 		return errors.New(hello)
 	}
 
-	port := args[1]
+	port, cache, target := args[1], args[2], args[3]
 
-	target := args[2]
 	s, err := os.Stat(target)
 	if err != nil {
 		return err
@@ -49,7 +48,7 @@ func cmdLine(args []string) error {
 		return fmt.Errorf("%s: not a directory", target)
 	}
 
-	fsys := Wrapper(os.DirFS(target), os.Getenv("BECACHE"))
+	fsys := Wrapper(os.DirFS(target), cache)
 	go fsys.Prefetch()
 
 	webdav := webdavfs.Handler{FS: fsys}
