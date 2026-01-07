@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
+	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
 func (fsys *FS) Stat(name string) (stat fs.FileInfo, err error) {
@@ -48,7 +49,7 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 			return nil, err
 		}
 		if stat.Mode().IsRegular() && stat.Size() < 0 {
-			return sizeDeferredStat{stat, o.container.rapool.ReaderAt(o)}, nil
+			return sizeDeferredStat{stat, o}, nil
 		} else {
 			return stat, nil
 		}
@@ -61,7 +62,7 @@ func (o path) setKnownSize(s int64) {
 		return
 	}
 	if stat.Mode().IsRegular() && stat.Size() < 0 {
-		o.container.rapool.ReaderAt(o).SetSize(s)
+		spinner.SetSize(o, s)
 	}
 }
 
@@ -78,10 +79,9 @@ func (s mountpointStat) Mode() fs.FileMode {
 
 type sizeDeferredStat struct {
 	fileInfoWithoutSize
-	sizer
+	o path
 }
 
-type sizer interface{ Size() int64 }
 type fileInfoWithoutSize interface {
 	Name() string
 	Mode() fs.FileMode
@@ -89,3 +89,5 @@ type fileInfoWithoutSize interface {
 	IsDir() bool
 	Sys() any
 }
+
+func (s sizeDeferredStat) Size() int64 { return spinner.Size(s.o) }

@@ -14,7 +14,6 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fileid"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
-	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
 const Special = "◆"
@@ -33,8 +32,7 @@ type FS struct {
 
 	scoreGood, scoreBad int64
 
-	root   fs.FS
-	rapool *spinner.Pool
+	root fs.FS
 }
 
 // if not present in the map, the file has not yet been scanned
@@ -60,7 +58,6 @@ func Wrapper(fsys fs.FS, cachePath string) *FS {
 		mounts:  make(map[thinPath]*mount),
 		reverse: make(map[fs.FS]thinPath),
 		idCache: make(map[internpath.Path]fileid.ID),
-		rapool:  spinner.New(blockShift, memLimit>>blockShift, 200 /*open readers at once*/),
 	}
 	fsys2.setupDB(cachePath)
 	return fsys2

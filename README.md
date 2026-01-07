@@ -39,4 +39,3 @@ Supported compression/archive/image types include:
 ## Bugs
 
 - The automatic startup scan takes a *long* time... but you can still browse during the scan, just slower
-- Memory tuning. On a server with 32 GiB RAM these environment variables work well: `BEGB=16 GOMEMLIMIT=20GiB`

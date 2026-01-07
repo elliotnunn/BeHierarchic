@@ -22,6 +22,7 @@ import (
 	"github.com/elliotnunn/BeHierarchic/internal/fileid"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
+	"github.com/elliotnunn/BeHierarchic/internal/spinner"
 )
 
 const (
@@ -328,7 +329,7 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 				if rawstat.Size() < 0 && o.container.db != nil {
 					size, ok := o.getCacheSize()
 					if ok {
-						o.container.rapool.ReaderAt(o).SetSize(size)
+						spinner.SetSize(o, size)
 						sizeInCache = true
 					}
 				}
@@ -346,7 +347,7 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 				// if the size is a prized hard-to-calculate quantity then save it
 				// opportune to do the calc now while the reader would be well advanced into the file
 				if easysize := rawstat.Size(); easysize < 0 && !sizeInCache {
-					realsize, ok := o.container.rapool.ReaderAt(o).SizeIfPossible()
+					realsize, ok := spinner.SizeIfPossible(o)
 					if ok {
 						o.setCacheSize(realsize)
 					}

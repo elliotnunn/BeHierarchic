@@ -53,11 +53,10 @@ func (o path) cookedOpen() (fs.File, error) {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
 			f.Close()
-			ra := o.container.rapool.ReaderAt(o)
 			if size := s.Size(); size >= 0 {
-				ra.SetSize(size) // useful for the spinner to know the size
+				spinner.SetSize(o, size) // useful for the spinner to know the size
 			}
-			f = &file{path: o, rdr: ra}
+			f = &file{path: o}
 		}
 	case fs.ModeDir:
 		rd, ok := f.(fs.ReadDirFile)
@@ -101,13 +100,12 @@ func (d *dir) Read(p []byte) (int, error) { return 0, io.EOF }
 
 type file struct {
 	path path
-	rdr  spinner.ReaderAt
 	seek int64
 }
 
 func (f *file) Stat() (fs.FileInfo, error)              { return f.path.cookedStat() }
 func (f *file) Close() error                            { return nil }
-func (f *file) ReadAt(p []byte, off int64) (int, error) { return f.rdr.ReadAt(p, off) }
+func (f *file) ReadAt(p []byte, off int64) (int, error) { return spinner.ReadAt(f.path, p, off) }
 
 func (f *file) Read(p []byte) (int, error) {
 	n, err := f.ReadAt(p, f.seek)
@@ -121,7 +119,7 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		offset += f.seek
 	case io.SeekEnd:
-		offset += f.rdr.Size() // could be costly
+		offset += spinner.Size(f.path) // could be costly
 	default:
 		return 0, errWhence
 	}

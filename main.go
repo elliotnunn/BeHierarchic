@@ -24,10 +24,7 @@ import (
 
 const hello = `BeHierarchic, the Retrocomputing Archivist's File Server
 
-Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT
-
-(use the BEGB environment variable to set the RAM block-cache size in GiB,
- and the BECACHE environment variable to the on-disk cache path)`
+Usage:  BeHierarchic [INTERFACE:]PORT SHAREPOINT`
 
 func main() {
 	err := cmdLine(os.Args)
