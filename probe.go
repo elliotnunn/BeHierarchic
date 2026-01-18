@@ -22,8 +22,6 @@ import (
 	"github.com/therootcompany/xz"
 )
 
-const sizeUnknown = -1 // small negative numbers are most efficient for the disk cache
-
 // probeArchive examines the filename and file header,
 // and returns a function returning an fs.FS (which can be expensive to run).
 //
@@ -98,7 +96,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return gzip.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64))
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReadCloser(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
+			fsys.CreateReadCloser(innerName, 0, opener, fskeleton.SizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -110,7 +108,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return bzip2.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64)), nil
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReader(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
+			fsys.CreateReader(innerName, 0, opener, fskeleton.SizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil
@@ -121,7 +119,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 				return xz.NewReader(io.NewSectionReader(dataReader, 0, math.MaxInt64), xz.DefaultDictMax)
 			}
 			fsys := fskeleton.New()
-			fsys.CreateReader(innerName, 0, opener, sizeUnknown, 0, info.ModTime())
+			fsys.CreateReader(innerName, 0, opener, fskeleton.SizeUnknown, 0, info.ModTime())
 			fsys.NoMore()
 			return fsys, nil
 		}, nil

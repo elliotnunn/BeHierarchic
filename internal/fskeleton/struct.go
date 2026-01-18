@@ -4,7 +4,6 @@
 package fskeleton
 
 import (
-	"log/slog"
 	"sync"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -34,40 +33,6 @@ type f struct {
 	mode      mode   // packed format, different from io/fs.FileMode
 	lastChild uint32 // overloaded for regular files: contains the size
 	sibling   uint32 // circular linked list
-}
-
-// Store extremely large file sizes elsewhere
-var (
-	lgsizeMu sync.RWMutex
-	lgsize   []int64
-)
-
-const (
-	packSzBtm   = -0x78000000
-	packSzTop   = 0x78000000
-	packSzWidth = packSzTop - packSzBtm
-)
-
-func packFileSize(size int64) uint32 {
-	if size < packSzBtm || size >= packSzTop {
-		lgsizeMu.Lock()
-		packSize := packSzWidth + uint32(len(lgsize))
-		slog.Info("superLargeSize", "size", size, "idx", len(lgsize))
-		lgsize = append(lgsize, size)
-		lgsizeMu.Unlock()
-		return packSize
-	}
-	return uint32(size - packSzBtm)
-}
-
-func (f *f) fileSize() int64 {
-	packSize := f.lastChild
-	if packSize >= packSzWidth {
-		lgsizeMu.RLock()
-		defer lgsizeMu.RUnlock()
-		return lgsize[packSize-packSzWidth]
-	}
-	return int64(packSize) + packSzBtm
 }
 
 func (fsys *FS) sanityCheck() {

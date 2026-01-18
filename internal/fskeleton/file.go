@@ -15,6 +15,9 @@ type file struct {
 	data any
 	rd   io.Reader
 	cl   io.Closer
+
+	trackEOF bool
+	offset   int64
 }
 
 type rafile struct {
@@ -46,7 +49,19 @@ func (f *file) Read(p []byte) (n int, err error) {
 			panic("file.data is not any of our known types")
 		}
 	}
-	return f.rd.Read(p)
+	n, err = f.rd.Read(p)
+
+	if f.trackEOF {
+		f.offset += int64(n)
+		if err == io.EOF {
+			f.id.fsys.mu.Lock()
+			defer f.id.fsys.mu.Unlock()
+			if f.id.fsys.files[f.id.index].lastChild == 0xffffffff {
+				f.id.fsys.files[f.id.index].lastChild = packFileSize(f.offset)
+			}
+		}
+	}
+	return n, err
 }
 
 func (f *file) Close() error {

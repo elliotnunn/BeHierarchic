@@ -11,12 +11,14 @@ type mode uint16
 
 // More compact representation than io/fs
 const (
-	typeRegular = iota << 12
-	typeLink
-	typeDir
-	typeImplicitDir
+	bornSizeUnknown = 1 << 14
 
-	typeBits = 3 << 12
+	typeRegular     = 0 << 12
+	typeLink        = 1 << 12
+	typeDir         = 2 << 12
+	typeImplicitDir = 3 << 12
+	typeBits        = 3 << 12
+
 	permBits = 0o7777 // traditional unix bits
 )
 

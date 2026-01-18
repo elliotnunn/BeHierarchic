@@ -39,8 +39,9 @@ func (fsys *FS) Open(name string) (f fs.File, err error) {
 			}, nil
 		default:
 			return &file{
-				id:   fileID,
-				data: d,
+				id:       fileID,
+				data:     d,
+				trackEOF: fsys.files[idx].lastChild == 0xffffffff,
 			}, nil
 		}
 	}

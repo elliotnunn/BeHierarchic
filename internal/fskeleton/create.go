@@ -6,6 +6,7 @@
 package fskeleton
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"slices"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 )
+
+var errNegativeSize = errors.New("negative size")
 
 func New() *FS {
 	var fsys FS
@@ -127,6 +130,9 @@ func (fsys *FS) CreateError(name string, id int64, err error, size int64, perms 
 // CreateReader creates a regular file at the specified path.
 //
 // When opened, the file will implement the bare minimum of [fs.File]. [fs.File.Close] will have no effect.
+// If [SizeUnknown] is specified, then the file's Stat call will return [SizeUnknown]
+// until the first time the first time the underlying data source is read through to EOF,
+// after which it will return the EOF.
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
@@ -137,6 +143,9 @@ func (fsys *FS) CreateReader(name string, id int64, r func() (io.Reader, error),
 // CreateReadCloser creates a regular file at the specified path.
 //
 // When opened, the file will implement the bare minimum of [fs.File].
+// If [SizeUnknown] is specified, then the file's Stat call will return [SizeUnknown]
+// until the first time the first time the underlying data source is read through to EOF,
+// after which it will return the EOF.
 //
 // In common with the other new-file methods, any missing parent directories will be created implicitly.
 // Implicit directories can later be made explicit (only once) with [FS.Mkdir].
@@ -155,6 +164,10 @@ func (fsys *FS) CreateReaderAt(name string, id int64, r io.ReaderAt, size int64,
 }
 
 func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size int64, perms fs.FileMode, mtime time.Time) error {
+	if size < 0 && size != SizeUnknown {
+		return &fs.PathError{Op: "create", Path: name, Err: errNegativeSize}
+	}
+
 	if data == nil {
 		if size != 0 {
 			return &fs.PathError{Op: "create", Path: name, Err: fs.ErrInvalid}
@@ -178,14 +191,18 @@ func (fsys *FS) createRegularFileCommon(name string, id int64, data any, size in
 		return &fs.PathError{Op: "create", Path: name, Err: err}
 	}
 
-	fsys.put(parentIdx, f{
+	f := f{
 		name:      iname,
 		time:      timeFromStdlib(mtime),
 		mode:      permsFromStdlib(perms) | typeRegular,
 		id:        id,
 		lastChild: packFileSize(size), // overloaded field
 		data:      data,
-	})
+	}
+	if size == SizeUnknown {
+		f.mode |= bornSizeUnknown
+	}
+	fsys.put(parentIdx, f)
 	fsys.cond.Broadcast()
 	return nil
 }

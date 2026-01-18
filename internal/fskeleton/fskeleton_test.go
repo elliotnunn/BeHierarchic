@@ -288,15 +288,13 @@ func TestCreateRoot(t *testing.T) {
 	expectErr(t, fs.ErrExist, fsys.Mkdir(".", 0, 0, time.Time{}))
 }
 func TestSizes(t *testing.T) {
-	cc := []int64{math.MinInt64,
-		packSzBtm - 1, packSzBtm, packSzBtm + 1,
-		-1, 0, 1, 2,
-		packSzTop - 1, packSzTop, packSzTop + 1,
-		math.MaxInt64,
-	}
+	cc := []int64{SizeUnknown, 0, 1, 2, 0x7fffffff, 0x80000000, 0x80000001, math.MaxInt64}
 	fsys := New()
 	for _, size := range cc {
-		fsys.CreateError(fmt.Sprint(size), 0, io.ErrUnexpectedEOF, size, 0o755, time.Time{})
+		err := fsys.CreateError(fmt.Sprint(size), 0, io.ErrUnexpectedEOF, size, 0o755, time.Time{})
+		if err != nil {
+			t.Error(err)
+		}
 	}
 	fsys.NoMore()
 	for _, size := range cc {
@@ -304,6 +302,22 @@ func TestSizes(t *testing.T) {
 		if s.Size() != size {
 			t.Errorf("created file with size %d, got back %d", size, s.Size())
 		}
+	}
+}
+func TestDeferredSize(t *testing.T) {
+	fsys := New()
+	fsys.CreateReader("f", 0, func() (io.Reader, error) {
+		return strings.NewReader("string with length 21"), nil
+	}, SizeUnknown, 0o755, time.Time{})
+	fsys.NoMore()
+	s, _ := fsys.Stat("f")
+	if s.Size() != SizeUnknown {
+		t.Errorf("initial size should be SizeUnknown, is %d", s.Size())
+	}
+	fs.ReadFile(fsys, "f")
+	s, _ = fsys.Stat("f")
+	if s.Size() != 21 {
+		t.Errorf("final size should be correct, is %d", s.Size())
 	}
 }
 func TestUnixPerms(t *testing.T) {
