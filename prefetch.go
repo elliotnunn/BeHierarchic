@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math"
 	"math/bits"
 	"runtime"
 	"slices"
@@ -312,6 +313,7 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 		}
 	}()
 
+	buf1 := make([]byte, 1)
 	var wg sync.WaitGroup
 	for range concurrency {
 		wg.Go(func() {
@@ -319,37 +321,41 @@ func (o path) prefetchThisFS(concurrency int, progress *atomic.Int64) {
 				o := o
 				o.name = name
 
-				rawstat, rawerr := o.rawStat()
-				if rawerr != nil {
-					continue
-				}
-
-				// if we have a valuable size then use it
-				sizeInCache := false
-				if rawstat.Size() < 0 && o.container.db != nil {
-					size, ok := o.getCacheSize()
-					if ok {
-						spinner.SetSize(o, size)
-						sizeInCache = true
+				if progress != nil {
+					rawstat, rawerr := o.rawStat()
+					if rawerr == nil {
+						progress.Add(rawstat.Size())
 					}
 				}
-				if progress != nil {
-					progress.Add(rawstat.Size())
+
+				if fsys, ok := o.fsys.(*fskeleton.FS); ok {
+					_, err := fsys.Size(o.name)
+					if err == fskeleton.ErrSizeUnknown {
+						size, ok := o.getCacheSize()
+						if ok {
+							fsys.SetSize(o.name, size)
+						}
+					}
 				}
 
-				timer := time.AfterFunc(time.Second, func() { slog.Info("takingLongTime", "path", o) })
+				timer := time.AfterFunc(time.Second*5, func() { slog.Info("takingLongTime", "path", o) })
 				isar, fsys := o.getArchive(true, true)
 				timer.Stop()
 				if isar && !strings.HasPrefix(o.name.Base(), "._") { // no use probing resource forks!
 					fsys.prefetchThisFS(1, nil)
 				}
 
-				// if the size is a prized hard-to-calculate quantity then save it
-				// opportune to do the calc now while the reader would be well advanced into the file
-				if easysize := rawstat.Size(); easysize < 0 && !sizeInCache {
-					realsize, ok := spinner.SizeIfPossible(o)
-					if ok {
-						o.setCacheSize(realsize)
+				if fsys, ok := o.fsys.(*fskeleton.FS); ok {
+					if hardSize, err := fsys.BornSizeUnknown(o.name); err == nil && hardSize {
+						size, err := fsys.Size(o.name)
+						if err == fskeleton.ErrSizeUnknown {
+							spinner.ReadAt(o, buf1, math.MaxInt64-1)
+							size, err = fsys.Size(o.name)
+						}
+						if err != fskeleton.ErrSizeUnknown {
+							slog.Info("hardWonSize", "size", size, "path", o)
+							o.setCacheSize(size)
+						}
 					}
 				}
 			}

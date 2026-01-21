@@ -53,9 +53,6 @@ func (o path) cookedOpen() (fs.File, error) {
 	case 0: // regular file
 		if _, supportsRandomAccess := f.(io.ReaderAt); !supportsRandomAccess {
 			f.Close()
-			if size := s.Size(); size >= 0 {
-				spinner.SetSize(o, size) // useful for the spinner to know the size
-			}
 			f = &file{path: o}
 		}
 	case fs.ModeDir:
@@ -98,6 +95,7 @@ func (d *dir) Stat() (fs.FileInfo, error) { return d.path.cookedStat() }
 func (d *dir) Close() error               { return d.obj.Close() }
 func (d *dir) Read(p []byte) (int, error) { return 0, io.EOF }
 
+// a sequential-only file that needs to be handled by the spinner
 type file struct {
 	path path
 	seek int64
@@ -119,7 +117,11 @@ func (f *file) Seek(offset int64, whence int) (int64, error) {
 	case io.SeekCurrent:
 		offset += f.seek
 	case io.SeekEnd:
-		offset += spinner.Size(f.path) // could be costly
+		s, err := f.path.cookedStat()
+		if err != nil {
+			return f.seek, err
+		}
+		offset += s.Size()
 	default:
 		return 0, errWhence
 	}

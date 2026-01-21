@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"io/fs"
-	"time"
+	"math"
 
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
 	"github.com/elliotnunn/BeHierarchic/internal/spinner"
@@ -56,16 +58,6 @@ func (o path) cookedStat() (fs.FileInfo, error) {
 	}
 }
 
-func (o path) setKnownSize(s int64) {
-	stat, err := o.rawStat()
-	if err != nil {
-		return
-	}
-	if stat.Mode().IsRegular() && stat.Size() < 0 {
-		spinner.SetSize(o, s)
-	}
-}
-
 type mountpointStat struct {
 	fs.FileInfo // inner
 	name        string
@@ -78,16 +70,33 @@ func (s mountpointStat) Mode() fs.FileMode {
 }
 
 type sizeDeferredStat struct {
-	fileInfoWithoutSize
-	o path
+	fs.FileInfo // everything but Size()
+	o           path
 }
 
-type fileInfoWithoutSize interface {
-	Name() string
-	Mode() fs.FileMode
-	ModTime() time.Time
-	IsDir() bool
-	Sys() any
-}
+func (s sizeDeferredStat) Size() int64 {
+	raw, err := s.o.rawStat()
+	if err != nil {
+		panic(fmt.Sprintf("stat failed where previously stat worked: %v %s", err, s.o))
+	}
+	if s := raw.Size(); s >= 0 {
+		return s
+	}
 
-func (s sizeDeferredStat) Size() int64 { return spinner.Size(s.o) }
+	f, err := s.o.rawOpen()
+	if err != nil {
+		panic(fmt.Sprintf("open failed where previously stat worked: %v %s", err, s.o))
+	}
+
+	if _, randAccess := f.(io.ReaderAt); randAccess {
+		panic(fmt.Sprintf("random-access file has unknown size: %v %s", s.o))
+	}
+
+	spinner.ReadAt(s.o, make([]byte, 1), math.MaxInt64-1) // read to the end
+
+	raw, err = s.o.rawStat()
+	if err != nil {
+		panic(fmt.Sprintf("stat failed where previously stat worked: %v %s", err, s.o))
+	}
+	return raw.Size() // best we can do
+}
