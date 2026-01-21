@@ -38,7 +38,7 @@ func (o path) probeArchive() (fsysGenerator, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
+	if !info.Mode().IsRegular() || info.Size() >= 0 && info.Size() < 16 {
 		return nil, err
 	}
 
