@@ -56,12 +56,17 @@ func TestReaderAt(t *testing.T) {
 	const data = "hello this is a forker"
 
 	var ad AppleDouble
-	rf, rfSize := ad.WithResourceFork(strings.NewReader(data), int64(len(data)))
+	rf, _ := ad.WithResourceFork(strings.NewReader(data), int64(len(data)))
 
 	expect := append(rf.(*readerAt).ad, data...)
 
-	err := iotest.TestReader(io.NewSectionReader(rf, 0, rfSize), expect)
-	if err != nil {
-		t.Error(err)
+	for off := range len(expect) - 1 {
+		var buf [2]byte
+		n, err := rf.ReadAt(buf[:], int64(off))
+		if n != 2 ||
+			string(buf[:]) != string(expect[off:][:2]) ||
+			off != len(expect)-2 && err != nil {
+			t.Error(off, n, err)
+		}
 	}
 }

@@ -1,8 +1,9 @@
 package appledouble
 
 import (
+	"fmt"
 	"io"
-	"math"
+	"io/fs"
 	"testing/iotest"
 )
 
@@ -31,7 +32,11 @@ func (r *reader) Read(p []byte) (n int, err error) {
 				r.fork = io.NopCloser(iotest.ErrReader(err))
 			}
 		}
-		return r.fork.Read(p)
+		n, err = r.fork.Read(p)
+		if err == io.EOF {
+			fmt.Println("EOF after a read of", len(p), n)
+		}
+		return
 	}
 }
 
@@ -48,31 +53,18 @@ type readerAt struct {
 }
 
 func (r *readerAt) ReadAt(p []byte, off int64) (n int, err error) {
-	so, do, ncopy := intersect(0, int64(len(r.ad)), off, off+int64(len(p)))
-	if ncopy > 0 {
-		n += copy(p[do:], r.ad[so:])
+	if off < 0 {
+		return 0, fs.ErrInvalid
 	}
-
-	so, do, nread := intersect(int64(len(r.ad)), math.MaxInt64, off, off+int64(len(p)))
-	if nread > 0 {
-		forkread, forkerr := r.fork.ReadAt(p[do:], so)
-		n += forkread
-		err = forkerr
+	if off < int64(len(r.ad)) {
+		n = copy(p, r.ad[int(off):])
 	}
-	return
-}
-
-// Overlap two half-open intervals
-func intersect(sa, sz, da, dz int64) (so, do, n int64) {
-	if sa >= dz || da >= sz {
-		return
+	if n == len(p) {
+		return n, nil
 	}
-	// now we are sure that the ranges overlap
-	if sa < da {
-		so = da - sa
-	} else {
-		do = sa - da
-	}
-	n = min(sz-(sa+so), dz-(da+do))
-	return
+	askoff := max(0, off-int64(len(r.ad)))
+	fmt.Printf("request for %d bytes @ %d -> %d bytes at %d\n", len(p), off, len(p[n:]), askoff)
+	fn, err := r.fork.ReadAt(p[n:], askoff)
+	n += fn
+	return n, err
 }
