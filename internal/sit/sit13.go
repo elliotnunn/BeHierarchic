@@ -434,7 +434,8 @@ func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 	bitbuf >>= 8
 	i = j >> 4
 	if i > 5 {
-		panic("XADERR_ILLEGALDATA")
+		dst.CloseWithError(fmt.Errorf("StuffIt/SIT13 error: i > 5: %d", i))
+		return
 	} else if i != 0 {
 		SIT13InitInfo(&s, uint8(i))
 		i--
@@ -505,6 +506,7 @@ func sit13copy(dst *io.PipeWriter, src io.Reader, dstsize uint32) {
 					// now guaranteed 33 bits
 				} else {
 					if l == 0x140 {
+						dst.CloseWithError(fmt.Errorf("StuffIt/SIT13 error: l == 0x140"))
 						return
 					}
 					size = uint32(bitbuf & (1<<15 - 1))
