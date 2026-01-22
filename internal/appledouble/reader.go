@@ -1,7 +1,6 @@
 package appledouble
 
 import (
-	"fmt"
 	"io"
 	"io/fs"
 	"testing/iotest"
@@ -32,11 +31,7 @@ func (r *reader) Read(p []byte) (n int, err error) {
 				r.fork = io.NopCloser(iotest.ErrReader(err))
 			}
 		}
-		n, err = r.fork.Read(p)
-		if err == io.EOF {
-			fmt.Println("EOF after a read of", len(p), n)
-		}
-		return
+		return r.fork.Read(p)
 	}
 }
 
@@ -63,7 +58,6 @@ func (r *readerAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return n, nil
 	}
 	askoff := max(0, off-int64(len(r.ad)))
-	fmt.Printf("request for %d bytes @ %d -> %d bytes at %d\n", len(p), off, len(p[n:]), askoff)
 	fn, err := r.fork.ReadAt(p[n:], askoff)
 	n += fn
 	return n, err
