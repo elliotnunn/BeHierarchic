@@ -113,8 +113,21 @@ func (h *Handler) handleGetHead(w http.ResponseWriter, r *http.Request) (status 
 	}
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, "", fi.ModTime(), f.(io.ReadSeeker))
+	http.ServeContent(w, r, "", fi.ModTime(), errLogger{f.(io.ReadSeeker), reqPath})
 	return 0, nil
+}
+
+type errLogger struct {
+	io.ReadSeeker
+	path string
+}
+
+func (l errLogger) Read(p []byte) (int, error) {
+	n, err := l.ReadSeeker.Read(p)
+	if err != nil && err != io.EOF {
+		slog.Error("httpReadError", "err", err, "path", l.path)
+	}
+	return n, err
 }
 
 func (h *Handler) handlePropfind(w http.ResponseWriter, r *http.Request) (status int, err error) {
