@@ -20,6 +20,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/sstable/block"
 	"github.com/elliotnunn/BeHierarchic/internal/fileid"
 	"github.com/elliotnunn/BeHierarchic/internal/fskeleton"
 	"github.com/elliotnunn/BeHierarchic/internal/internpath"
@@ -37,7 +38,15 @@ func (fsys *FS) setupDB(dsn string) {
 		return
 	}
 
-	db, err := pebble.Open(dsn, &pebble.Options{})
+	opts := &pebble.Options{
+		CacheSize:            128 * 1024 * 1024,
+		AllocatorSizeClasses: []int{16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024, 256 * 1024},
+	}
+	opts.ApplyCompressionSettings(func() pebble.DBCompressionSettings {
+		return pebble.UniformDBCompressionSettings(block.MinLZCompression)
+	})
+
+	db, err := pebble.Open(dsn, opts)
 	if err != nil {
 		slog.Error("dbFail", "path", dsn, "err", err)
 		return
